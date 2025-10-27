@@ -1,0 +1,107 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Draft {
+  sender_number  String   @id
+  status         String
+  warehouse_data Json
+  image_urls     String[]
+  created_at     DateTime @default(now())
+}
+
+model Enquiry {
+  id           Int       @id @default(autoincrement())
+  name         String
+  phone_number String
+  email        String?
+  source       String
+  createdat    DateTime? @default(now()) @db.Timestamptz(6)
+}
+
+model MessageLog {
+  id            Int      @id @default(autoincrement())
+  received_at   DateTime @default(now())
+  sender_number String
+  message_body  String
+  status        String
+  error_message String?
+  image_url     String?
+}
+
+model VerifiedNumber {
+  id           Int      @id @default(autoincrement())
+  phone_number String   @unique
+  name         String
+  is_active    Boolean  @default(true)
+  created_at   DateTime @default(now())
+}
+
+/// This model contains an expression index which requires additional setup for migrations. Visit https://pris.ly/d/expression-indexes for more info.
+model Warehouse {
+  warehouseOwnerType  String?
+  warehouseType       String
+  address             String
+  googleLocation      String?
+  city                String
+  state               String
+  postalCode          String?
+  zone                String
+  contactPerson       String
+  contactNumber       String
+  totalSpaceSqft      Int[]
+  offeredSpaceSqft    String?
+  numberOfDocks       String?
+  clearHeightFt       String?
+  compliances         String
+  otherSpecifications String?
+  ratePerSqft         String
+  availability        String?
+  uploadedBy          String
+  isBroker            String?
+  photos              String?
+  createdAt           DateTime?      @default(now())
+  status_updated_at   DateTime?
+  id                  Int            @id @default(autoincrement())
+  WarehouseData       WarehouseData?
+
+  @@index([address(ops: raw("gin_trgm_ops"))], map: "idx_warehouse_address_trgm", type: Gin)
+  @@index([clearHeightFt], map: "idx_warehouse_clear_height")
+  @@index([id, city, state, warehouseType, ratePerSqft, address, zone, contactPerson], map: "idx_warehouse_common_fields")
+  @@index([compliances(ops: raw("gin_trgm_ops"))], map: "idx_warehouse_compliances_trgm", type: Gin)
+  @@index([ratePerSqft], map: "idx_warehouse_rate")
+  @@index([totalSpaceSqft], map: "idx_warehouse_space_gin", type: Gin)
+}
+
+model WarehouseData {
+  id                  Int                    @id @default(autoincrement())
+  latitude            Float?
+  longitude           Float?
+  embedding           Unsupported("vector")?
+  warehouseId         Int                    @unique
+  fireNocAvailable    Boolean?
+  fireSafetyMeasures  String?
+  landType            String?
+  approachRoadWidth   String?
+  dimensions          String?
+  parkingDockingSpace String?
+  pollutionZone       String?
+  powerKva            String?
+  vaastuCompliance    String?
+  Warehouse           Warehouse              @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+}
+
+model customer_request {
+  id                      BigInt    @id @default(autoincrement())
+  full_name               String
+  phone_number            String?
+  company_name            String?
+  preferred_location      String?
+  additional_requirements String?
+  created_at              DateTime? @default(now()) @db.Timestamptz(6)
+}
