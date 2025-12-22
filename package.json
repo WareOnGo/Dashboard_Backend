@@ -6,6 +6,15 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:ci": "jest --coverage --watchAll=false",
+    "docker:build": "./scripts/docker-dev.sh build",
+    "docker:run": "./scripts/docker-dev.sh run",
+    "docker:up": "./scripts/docker-dev.sh compose-up",
+    "docker:down": "./scripts/docker-dev.sh compose-down",
+    "docker:logs": "./scripts/docker-dev.sh logs",
+    "deploy:ecr": "./scripts/deploy-ecr.sh",
     "postinstall": "prisma generate"
   },
   "keywords": [],
@@ -22,6 +31,8 @@
     "zod": "^4.1.12"
   },
   "devDependencies": {
-    "nodemon": "^3.1.10"
+    "jest": "^29.7.0",
+    "nodemon": "^3.1.10",
+    "supertest": "^6.3.3"
   }
 }

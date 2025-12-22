@@ -1,0 +1,48 @@
+# Node modules
+node_modules
+npm-debug.log*
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Git
+.git
+.gitignore
+
+# Documentation
+README.md
+docs/
+
+# Test files
+tests/
+coverage/
+jest.config.js
+
+# Development files
+.vscode/
+.idea/
+*.log
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Build artifacts
+dist/
+build/
+
+# Temporary files
+tmp/
+temp/
+
+# Docker files
+Dockerfile
+.dockerignore
+docker-compose*.yml
