@@ -68,6 +68,7 @@ model Warehouse {
   createdAt           DateTime?      @default(now())
   status_updated_at   DateTime?
   id                  Int            @id @default(autoincrement())
+  visibility          Boolean?       @default(false)
   WarehouseData       WarehouseData?
 
   @@index([address(ops: raw("gin_trgm_ops"))], map: "idx_warehouse_address_trgm", type: Gin)
