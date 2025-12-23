@@ -40,7 +40,8 @@ const corsOptions = {
     origin: [
         'https://dimnz4vlbe2vn.cloudfront.net',
         'https://dimnz4vlbe2vn.cloudfront.net/',
-        process.env.CORS_ORIGIN || 'http://localhost:3000'
+        process.env.CORS_ORIGIN || 'http://localhost:3000',
+        'http://localhost:5173'
     ],
     credentials: true,
     optionsSuccessStatus: 200

@@ -49,6 +49,7 @@ class WarehouseValidator extends BaseValidator {
         clearHeightFt: z.string().optional().nullable(),
         otherSpecifications: z.string().optional().nullable(),
         availability: z.string().optional().nullable(),
+        visibility: z.boolean().optional().nullable(),
         isBroker: z.string().optional().nullable(),
         photos: z.string().optional().nullable(),
         
