@@ -25,21 +25,21 @@ class ErrorHandler {
 
         // Handle Prisma errors
         if (error instanceof Prisma.PrismaClientKnownRequestError) {
-            return this.handlePrismaError(error, req, res);
+            return ErrorHandler.handlePrismaError(error, req, res);
         }
 
         // Handle Prisma validation errors
         if (error instanceof Prisma.PrismaClientValidationError) {
-            return this.handlePrismaValidationError(error, req, res);
+            return ErrorHandler.handlePrismaValidationError(error, req, res);
         }
 
         // Handle validation errors (from Zod or custom validators)
         if (error.name === 'ValidationError') {
-            return this.handleValidationError(error, req, res);
+            return ErrorHandler.handleValidationError(error, req, res);
         }
 
         // Handle generic errors
-        return this.handleGenericError(error, req, res);
+        return ErrorHandler.handleGenericError(error, req, res);
     }
 
     /**
@@ -49,13 +49,13 @@ class ErrorHandler {
      * @param {Object} res - Express response object
      */
     static handlePrismaError(error, req, res) {
-        const errorResponse = this.createErrorResponse(
-            this.getPrismaErrorMessage(error.code),
+        const errorResponse = ErrorHandler.createErrorResponse(
+            ErrorHandler.getPrismaErrorMessage(error.code),
             error.code,
             req.path
         );
 
-        const statusCode = this.getPrismaErrorStatusCode(error.code);
+        const statusCode = ErrorHandler.getPrismaErrorStatusCode(error.code);
         return res.status(statusCode).json(errorResponse);
     }
 
@@ -66,7 +66,7 @@ class ErrorHandler {
      * @param {Object} res - Express response object
      */
     static handlePrismaValidationError(error, req, res) {
-        const errorResponse = this.createErrorResponse(
+        const errorResponse = ErrorHandler.createErrorResponse(
             'Invalid data provided to database operation',
             'PRISMA_VALIDATION_ERROR',
             req.path,
@@ -83,7 +83,7 @@ class ErrorHandler {
      * @param {Object} res - Express response object
      */
     static handleValidationError(error, req, res) {
-        const errorResponse = this.createErrorResponse(
+        const errorResponse = ErrorHandler.createErrorResponse(
             'Validation failed',
             'VALIDATION_ERROR',
             req.path,
@@ -100,7 +100,7 @@ class ErrorHandler {
      * @param {Object} res - Express response object
      */
     static handleGenericError(error, req, res) {
-        const errorResponse = this.createErrorResponse(
+        const errorResponse = ErrorHandler.createErrorResponse(
             'Internal server error',
             'INTERNAL_ERROR',
             req.path
