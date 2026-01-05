@@ -35,7 +35,10 @@ class WarehouseController extends BaseController {
                 zone: req.query.zone,
                 warehouseType: req.query.warehouseType,
                 sortBy: req.query.sortBy,
-                sortOrder: req.query.sortOrder
+                sortOrder: req.query.sortOrder,
+                // Add user context for potential filtering or audit
+                requestedBy: req.user.id,
+                requestedByEmail: req.user.email
             };
 
             // Remove undefined values
@@ -86,8 +89,16 @@ class WarehouseController extends BaseController {
      */
     createWarehouse = this.asyncHandler(async (req, res, next) => {
         try {
+            // Add authenticated user context to warehouse data
+            const warehouseData = {
+                ...req.body,
+                uploadedBy: req.user.email, // Use authenticated user's email
+                createdBy: req.user.id,     // Track who created the record
+                createdByEmail: req.user.email
+            };
+
             // Create warehouse through service
-            const newWarehouse = await this.warehouseService.createWarehouse(req.body);
+            const newWarehouse = await this.warehouseService.createWarehouse(warehouseData);
             
             // Send created response
             this.sendCreated(res, newWarehouse);
@@ -113,8 +124,16 @@ class WarehouseController extends BaseController {
                 return this.sendError(res, 'Request body cannot be empty for an update', 400);
             }
             
+            // Add authenticated user context to update data
+            const updateData = {
+                ...req.body,
+                updatedBy: req.user.id,     // Track who updated the record
+                updatedByEmail: req.user.email,
+                lastModified: new Date()
+            };
+            
             // Update warehouse through service
-            const updatedWarehouse = await this.warehouseService.updateWarehouse(id, req.body);
+            const updatedWarehouse = await this.warehouseService.updateWarehouse(id, updateData);
             
             // Send successful response
             this.sendSuccess(res, updatedWarehouse);
@@ -135,8 +154,15 @@ class WarehouseController extends BaseController {
             // Extract and validate ID
             const id = this.extractId(req);
             
+            // Add user context for audit logging
+            const deleteContext = {
+                deletedBy: req.user.id,
+                deletedByEmail: req.user.email,
+                deletedAt: new Date()
+            };
+            
             // Delete warehouse through service
-            await this.warehouseService.deleteWarehouse(id);
+            await this.warehouseService.deleteWarehouse(id, deleteContext);
             
             // Send no content response
             this.sendNoContent(res);
@@ -214,11 +240,12 @@ class WarehouseController extends BaseController {
                 contentType: req.body.contentType
             };
 
-            // Extract additional options
+            // Extract additional options with authenticated user context
             const options = {
                 expiresIn: req.body.expiresIn || 360,
                 keyPrefix: req.body.keyPrefix || '',
-                uploadedBy: req.body.uploadedBy || 'anonymous',
+                uploadedBy: req.user.email,  // Use authenticated user's email
+                uploadedById: req.user.id,   // Track user ID
                 purpose: 'warehouse-image'
             };
 
@@ -248,11 +275,12 @@ class WarehouseController extends BaseController {
                 return this.sendError(res, 'uploadRequests must be an array', 400);
             }
 
-            // Extract additional options
+            // Extract additional options with authenticated user context
             const options = {
                 expiresIn: req.body.expiresIn || 360,
                 keyPrefix: req.body.keyPrefix || 'batch',
-                uploadedBy: req.body.uploadedBy || 'anonymous',
+                uploadedBy: req.user.email,  // Use authenticated user's email
+                uploadedById: req.user.id,   // Track user ID
                 maxBatchSize: 10
             };
 
