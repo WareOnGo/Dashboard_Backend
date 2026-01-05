@@ -5,10 +5,12 @@
 
 const ErrorHandler = require('./errorHandler');
 const ValidationMiddleware = require('./validation');
+const AuthMiddleware = require('./authMiddleware');
 
 module.exports = {
     ErrorHandler,
     ValidationMiddleware,
-    // Future middleware exports
-    // cors: require('./cors')
+    AuthMiddleware,
+    // Convenience exports for common auth middleware functions
+    authMiddleware: AuthMiddleware.authMiddleware
 };

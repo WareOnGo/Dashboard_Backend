@@ -44,6 +44,18 @@ const corsOptions = {
         'http://localhost:5173'
     ],
     credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: [
+        'Content-Type', 
+        'Authorization', 
+        'X-Requested-With',
+        'Accept',
+        'Origin'
+    ],
+    exposedHeaders: [
+        'X-Token-Refresh-Suggested',
+        'X-Token-Expires-In'
+    ],
     optionsSuccessStatus: 200
 };
 app.use(cors(corsOptions));
@@ -87,6 +99,12 @@ database.connect().catch(error => {
 });
 
 // --- Routes ---
+
+/**
+ * Authentication API routes
+ * Handles all authentication-related endpoints under /auth
+ */
+app.use('/auth', require('./routes/auth'));
 
 /**
  * Warehouse API routes
