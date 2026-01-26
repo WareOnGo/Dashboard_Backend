@@ -3,8 +3,7 @@ const express = require('express');
 const router = express.Router();
 const container = require('../container');
 const validationMiddleware = require('../middleware/validation');
-// TODO: Uncomment when ready to enable authentication
-// const { authMiddleware } = require('../middleware/authMiddleware');
+const { authMiddleware } = require('../middleware/authMiddleware');
 
 // Get controller instance from container
 const warehouseController = container.resolve('warehouseController');
@@ -15,7 +14,7 @@ const warehouseController = container.resolve('warehouseController');
  * GET /api/warehouses
  */
 router.get('/', 
-    // authMiddleware.authenticateJWT, // TODO: Uncomment to enable auth
+    authMiddleware.authenticateJWT,
     warehouseController.getAllWarehouses
 );
 
@@ -23,7 +22,7 @@ router.get('/',
  * GET /api/warehouses/search
  */
 router.get('/search', 
-    // authMiddleware.authenticateJWT, // TODO: Uncomment to enable auth
+    authMiddleware.authenticateJWT,
     warehouseController.searchWarehouses
 );
 
@@ -31,7 +30,7 @@ router.get('/search',
  * GET /api/warehouses/statistics
  */
 router.get('/statistics', 
-    // authMiddleware.authenticateJWT, // TODO: Uncomment to enable auth
+    authMiddleware.authenticateJWT,
     warehouseController.getWarehouseStatistics
 );
 
@@ -39,7 +38,7 @@ router.get('/statistics',
  * GET /api/warehouses/:id
  */
 router.get('/:id', 
-    // authMiddleware.authenticateJWT, // TODO: Uncomment to enable auth
+    authMiddleware.authenticateJWT,
     warehouseController.getWarehouseById
 );
 
@@ -47,7 +46,7 @@ router.get('/:id',
  * POST /api/warehouses
  */
 router.post('/', 
-    // authMiddleware.authenticateJWT, // TODO: Uncomment to enable auth
+    authMiddleware.authenticateJWT,
     validationMiddleware.validateWarehouseCreate,
     warehouseController.createWarehouse
 );
@@ -56,7 +55,7 @@ router.post('/',
  * PUT /api/warehouses/:id
  */
 router.put('/:id', 
-    // authMiddleware.authenticateJWT, // TODO: Uncomment to enable auth
+    authMiddleware.authenticateJWT,
     validationMiddleware.validateWarehouseUpdate,
     warehouseController.updateWarehouse
 );
@@ -65,7 +64,7 @@ router.put('/:id',
  * DELETE /api/warehouses/:id
  */
 router.delete('/:id', 
-    // authMiddleware.authenticateJWT, // TODO: Uncomment to enable auth
+    authMiddleware.authenticateJWT,
     warehouseController.deleteWarehouse
 );
 
@@ -75,7 +74,7 @@ router.delete('/:id',
  * POST /api/warehouses/presigned-url
  */
 router.post('/presigned-url', 
-    // authMiddleware.authenticateJWT, // TODO: Uncomment to enable auth
+    authMiddleware.authenticateJWT,
     validationMiddleware.validateFileUpload,
     warehouseController.generatePresignedUrl
 );
@@ -84,7 +83,7 @@ router.post('/presigned-url',
  * POST /api/warehouses/presigned-urls/batch
  */
 router.post('/presigned-urls/batch', 
-    // authMiddleware.authenticateJWT, // TODO: Uncomment to enable auth
+    authMiddleware.authenticateJWT,
     validationMiddleware.validateBatchFileUpload,
     warehouseController.generateMultiplePresignedUrls
 );
@@ -93,7 +92,7 @@ router.post('/presigned-urls/batch',
  * POST /api/warehouses/files/:fileName/validate
  */
 router.post('/files/:fileName/validate', 
-    // authMiddleware.authenticateJWT, // TODO: Uncomment to enable auth
+    authMiddleware.authenticateJWT,
     warehouseController.validateUploadedFile
 );
 
@@ -101,7 +100,7 @@ router.post('/files/:fileName/validate',
  * DELETE /api/warehouses/files/:fileName
  */
 router.delete('/files/:fileName', 
-    // authMiddleware.authenticateJWT, // TODO: Uncomment to enable auth
+    authMiddleware.authenticateJWT,
     warehouseController.deleteUploadedFile
 );
 
@@ -109,7 +108,7 @@ router.delete('/files/:fileName',
  * GET /api/warehouses/files/:fileName
  */
 router.get('/files/:fileName', 
-    // authMiddleware.authenticateJWT, // TODO: Uncomment to enable auth
+    authMiddleware.authenticateJWT,
     warehouseController.getFileInfo
 );
 
