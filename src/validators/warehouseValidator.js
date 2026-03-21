@@ -10,8 +10,8 @@ class WarehouseValidator extends BaseValidator {
      * Schema for nested WarehouseData
      */
     static warehouseDataSchema = z.object({
-        latitude: z.number().optional().nullable(),
-        longitude: z.number().optional().nullable(),
+        latitude: z.union([z.number(), z.string()]).optional().nullable(),
+        longitude: z.union([z.number(), z.string()]).optional().nullable(),
         fireNocAvailable: z.boolean().optional().nullable(),
         fireSafetyMeasures: z.string().optional().nullable(),
         landType: z.string().optional().nullable(),
