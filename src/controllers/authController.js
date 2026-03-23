@@ -54,6 +54,15 @@ class AuthController extends BaseController {
                 domain: this.jwtService.extractDomain(oauthResult.user.email)
             };
 
+            // Audit the login
+            if (req.audit) {
+                req.audit('LOGIN', 'auth', userData.id, `User ${userData.email} logged in via Google OAuth`, {
+                    email: userData.email,
+                    name: userData.name,
+                    domain: userData.domain
+                });
+            }
+
             // Redirect to frontend with token and user data
             const { config } = require('../utils/config');
             const frontendUrl = config.server.frontendUrl;
@@ -222,6 +231,14 @@ class AuthController extends BaseController {
                 }
             };
 
+            // Audit token refresh — set user info manually since auth middleware may not run on this route
+            if (req.audit) {
+                req.user = req.user || { email: decoded.email, name: decoded.name };
+                req.audit('REFRESH', 'auth', decoded.id, `Token refreshed for ${decoded.email}`, {
+                    email: decoded.email
+                });
+            }
+
             return this.sendSuccess(res, responseData);
 
         } catch (error) {
@@ -245,6 +262,10 @@ class AuthController extends BaseController {
                 success: true,
                 message: 'Logged out successfully'
             };
+
+            if (req.audit) {
+                req.audit('LOGOUT', 'auth', null, `User logged out`);
+            }
 
             return this.sendSuccess(res, responseData);
 

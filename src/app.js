@@ -7,7 +7,10 @@ require('dotenv').config();
 const database = require('./utils/database');
 
 // Import middleware
-const { ErrorHandler, ValidationMiddleware } = require('./middleware');
+const { ErrorHandler, ValidationMiddleware, createAuditMiddleware } = require('./middleware');
+
+// Import DI container
+const container = require('./container');
 
 /**
  * Express application instance for the Warehouse Management API
@@ -85,6 +88,14 @@ app.use((req, res, next) => {
     console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
     next();
 });
+
+/**
+ * Audit logging middleware
+ * Attaches req.audit() helper to every request — writes happen
+ * asynchronously after the response is sent, never blocking the API
+ */
+const auditLogService = container.resolve('auditLogService');
+app.use(createAuditMiddleware(auditLogService));
 
 // --- Database Connection ---
 

@@ -50,7 +50,14 @@ class WarehouseController extends BaseController {
 
             // Get warehouses from service
             const warehouses = await this.warehouseService.getAllWarehouses(options);
-            
+
+            req.audit('READ', 'warehouse', null, 'Listed warehouses', {
+                filters: { city: options.city, state: options.state, zone: options.zone, warehouseType: options.warehouseType },
+                page: options.page,
+                limit: options.limit,
+                resultCount: warehouses.data?.length ?? warehouses.length
+            });
+
             // Send successful response
             this.sendSuccess(res, warehouses);
         } catch (error) {
@@ -72,7 +79,9 @@ class WarehouseController extends BaseController {
             
             // Get warehouse from service
             const warehouse = await this.warehouseService.getWarehouseById(id);
-            
+
+            req.audit('READ', 'warehouse', id, `Viewed warehouse ${id}`);
+
             // Send successful response
             this.sendSuccess(res, warehouse);
         } catch (error) {
@@ -99,7 +108,14 @@ class WarehouseController extends BaseController {
 
             // Create warehouse through service
             const newWarehouse = await this.warehouseService.createWarehouse(warehouseData);
-            
+
+            req.audit('CREATE', 'warehouse', newWarehouse.id, `Created warehouse in ${req.body.city}, ${req.body.state}`, {
+                warehouseType: req.body.warehouseType,
+                city: req.body.city,
+                state: req.body.state,
+                zone: req.body.zone
+            });
+
             // Send created response
             this.sendCreated(res, newWarehouse);
         } catch (error) {
@@ -134,7 +150,11 @@ class WarehouseController extends BaseController {
             
             // Update warehouse through service
             const updatedWarehouse = await this.warehouseService.updateWarehouse(id, updateData);
-            
+
+            req.audit('UPDATE', 'warehouse', id, `Updated warehouse ${id}`, {
+                updatedFields: Object.keys(req.body)
+            });
+
             // Send successful response
             this.sendSuccess(res, updatedWarehouse);
         } catch (error) {
@@ -163,7 +183,9 @@ class WarehouseController extends BaseController {
             
             // Delete warehouse through service
             await this.warehouseService.deleteWarehouse(id, deleteContext);
-            
+
+            req.audit('DELETE', 'warehouse', id, `Deleted warehouse ${id}`);
+
             // Send no content response
             this.sendNoContent(res);
         } catch (error) {
@@ -199,7 +221,12 @@ class WarehouseController extends BaseController {
 
             // Search warehouses through service
             const warehouses = await this.warehouseService.searchWarehouses(searchCriteria);
-            
+
+            req.audit('SEARCH', 'warehouse', null, 'Searched warehouses', {
+                criteria: searchCriteria,
+                resultCount: warehouses.length
+            });
+
             // Send successful response
             this.sendSuccess(res, warehouses);
         } catch (error) {
@@ -218,7 +245,9 @@ class WarehouseController extends BaseController {
         try {
             // Get statistics from service
             const statistics = await this.warehouseService.getWarehouseStatistics();
-            
+
+            req.audit('READ', 'warehouse', null, 'Viewed warehouse statistics');
+
             // Send successful response
             this.sendSuccess(res, statistics);
         } catch (error) {
@@ -251,7 +280,12 @@ class WarehouseController extends BaseController {
 
             // Generate presigned URL through service
             const uploadData = await this.fileUploadService.generatePresignedUrl(uploadRequest, options);
-            
+
+            req.audit('CREATE', 'file', uploadData.fileName || null, 'Generated presigned upload URL', {
+                contentType: req.body.contentType,
+                keyPrefix: req.body.keyPrefix
+            });
+
             // Send successful response
             this.sendSuccess(res, uploadData);
         } catch (error) {
@@ -286,7 +320,12 @@ class WarehouseController extends BaseController {
 
             // Generate multiple presigned URLs through service
             const batchUploadData = await this.fileUploadService.generateMultiplePresignedUrls(uploadRequests, options);
-            
+
+            req.audit('CREATE', 'file', null, `Generated ${uploadRequests.length} presigned upload URLs (batch)`, {
+                fileCount: uploadRequests.length,
+                keyPrefix: req.body.keyPrefix
+            });
+
             // Send successful response
             this.sendSuccess(res, batchUploadData);
         } catch (error) {
@@ -318,7 +357,9 @@ class WarehouseController extends BaseController {
 
             // Validate file through service
             const validationResult = await this.fileUploadService.validateUploadedFile(fileName, validationOptions);
-            
+
+            req.audit('READ', 'file', fileName, `Validated uploaded file ${fileName}`);
+
             // Send successful response
             this.sendSuccess(res, validationResult);
         } catch (error) {
@@ -343,7 +384,9 @@ class WarehouseController extends BaseController {
 
             // Delete file through service
             await this.fileUploadService.deleteUploadedFile(fileName);
-            
+
+            req.audit('DELETE', 'file', fileName, `Deleted file ${fileName}`);
+
             // Send no content response
             this.sendNoContent(res);
         } catch (error) {
@@ -368,7 +411,9 @@ class WarehouseController extends BaseController {
 
             // Get file info through service
             const fileInfo = await this.fileUploadService.getFileInfo(fileName);
-            
+
+            req.audit('READ', 'file', fileName, `Viewed file info for ${fileName}`);
+
             // Send successful response
             this.sendSuccess(res, fileInfo);
         } catch (error) {
