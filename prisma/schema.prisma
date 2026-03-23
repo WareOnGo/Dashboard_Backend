@@ -97,6 +97,26 @@ model WarehouseData {
   Warehouse           Warehouse              @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
 }
 
+model AuditLog {
+  id        String   @id @default(uuid())
+  action    String   // "CREATE", "UPDATE", "DELETE", "READ", "SEARCH", "LOGIN", "LOGOUT", etc.
+  entity    String   // "warehouse", "file", "auth", etc.
+  entityId  String?  // ID of the affected record (nullable for bulk/non-specific actions)
+  context   String?  // Human-readable message, e.g. "Deleted warehouse 42"
+  metadata  Json?    // Arbitrary JSON payload for extra details (old values, diff, request params)
+  userEmail String   // From req.user.email
+  userName  String?  // From req.user.name (Google profile display name)
+  ipAddress String?  // req.ip
+  createdAt DateTime @default(now())
+
+  @@index([entity, entityId])
+  @@index([userEmail])
+  @@index([action])
+  @@index([createdAt])
+
+  @@map("audit_logs")
+}
+
 model customer_request {
   id                      BigInt    @id @default(autoincrement())
   full_name               String
@@ -105,4 +125,12 @@ model customer_request {
   preferred_location      String?
   additional_requirements String?
   created_at              DateTime? @default(now()) @db.Timestamptz(6)
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model VideoComposition {
+  id                     String   @id @db.Uuid
+  composition_components Json
+  created_at             DateTime @default(now())
+  updated_at             DateTime
 }

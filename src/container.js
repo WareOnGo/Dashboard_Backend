@@ -3,10 +3,12 @@ const database = require('./utils/database');
 
 // Import Models
 const WarehouseModel = require('./models/warehouseModel');
+const AuditLogModel = require('./models/auditLogModel');
 
 // Import Services
 const WarehouseService = require('./services/warehouseService');
 const FileUploadService = require('./services/fileUploadService');
+const AuditLogService = require('./services/auditLogService');
 
 // Import Controllers
 const WarehouseController = require('./controllers/warehouseController');
@@ -188,6 +190,17 @@ class Container {
 
         this.registerSingleton('fileUploadService', () => {
             return new FileUploadService();
+        });
+
+        // Audit Log
+        this.registerSingleton('auditLogModel', () => {
+            const prismaClient = database.getClient();
+            return new AuditLogModel(prismaClient);
+        });
+
+        this.registerSingleton('auditLogService', (container) => {
+            const auditLogModel = container.resolve('auditLogModel');
+            return new AuditLogService(auditLogModel);
         });
 
         // Register Controllers (transient - new instance per request if needed)
