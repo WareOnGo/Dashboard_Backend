@@ -35,9 +35,17 @@ router.get('/statistics',
 );
 
 /**
+ * GET /api/warehouses/:id/contact-number
+ */
+router.get('/:id/contact-number',
+    authMiddleware.authenticateJWT,
+    warehouseController.getContactNumber
+);
+
+/**
  * GET /api/warehouses/:id
  */
-router.get('/:id', 
+router.get('/:id',
     authMiddleware.authenticateJWT,
     warehouseController.getWarehouseById
 );

@@ -188,6 +188,27 @@ class WarehouseService extends BaseService {
     }
 
     /**
+     * Get contact number for a specific warehouse (bypasses redaction)
+     * @param {number} warehouseId - Warehouse ID
+     * @returns {Object} Contact info { contactNumber, contactPerson }
+     */
+    async getContactNumber(warehouseId) {
+        return this.executeOperation(async () => {
+            this.validateData({ id: warehouseId.toString() }, (data) => WarehouseValidator.validateId(data));
+
+            const warehouse = await this.warehouseModel.findById(warehouseId);
+            if (!warehouse) {
+                const error = new Error(`Warehouse with ID ${warehouseId} not found`);
+                error.name = 'NotFoundError';
+                error.statusCode = 404;
+                throw error;
+            }
+
+            return { contactNumber: warehouse.contactNumber, contactPerson: warehouse.contactPerson };
+        });
+    }
+
+    /**
      * Build query options from request parameters
      * @param {Object} options - Request options
      * @returns {Object} Processed query options
@@ -361,33 +382,50 @@ class WarehouseService extends BaseService {
     }
 
     /**
+     * Determines if contact info should be redacted.
+     * Currently always true. When roles are added:
+     *   return !options?.userRole || options.userRole !== 'admin';
+     * @param {Object} options - Options that may contain role info
+     * @returns {boolean} Whether to redact contact information
+     */
+    shouldRedactContact(options = {}) {
+        return true;
+    }
+
+    /**
      * Transform warehouse data for response
      * @param {Object} warehouse - Raw warehouse data
+     * @param {Object} options - Options for transformation (e.g. role context)
      * @returns {Object} Transformed warehouse data
      * @private
      */
-    transformWarehouse(warehouse) {
+    transformWarehouse(warehouse, options = {}) {
         if (!warehouse) return null;
-        
+
         // Apply any business transformations
         const transformed = { ...warehouse };
-        
+
         // Ensure consistent data structure
         if (!transformed.WarehouseData) {
             transformed.WarehouseData = {};
         }
-        
+
+        if (this.shouldRedactContact(options)) {
+            delete transformed.contactNumber;
+        }
+
         return transformed;
     }
 
     /**
      * Transform warehouse list for response
      * @param {Array} warehouses - Array of raw warehouse data
+     * @param {Object} options - Options for transformation (e.g. role context)
      * @returns {Array} Array of transformed warehouse data
      * @private
      */
-    transformWarehouseList(warehouses) {
-        return warehouses.map(warehouse => this.transformWarehouse(warehouse));
+    transformWarehouseList(warehouses, options = {}) {
+        return warehouses.map(warehouse => this.transformWarehouse(warehouse, options));
     }
 
     /**
