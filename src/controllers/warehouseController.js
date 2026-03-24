@@ -194,6 +194,28 @@ class WarehouseController extends BaseController {
     });
 
     /**
+     * Get contact number for a specific warehouse
+     * GET /api/warehouses/:id/contact-number
+     * @param {Object} req - Express request object
+     * @param {Object} res - Express response object
+     * @param {Function} next - Express next function
+     */
+    getContactNumber = this.asyncHandler(async (req, res, next) => {
+        try {
+            const id = this.extractId(req);
+            const contactInfo = await this.warehouseService.getContactNumber(id);
+
+            req.audit('READ', 'contact', id.toString(), `Revealed contact number for warehouse ${id}`, {
+                warehouseId: id
+            });
+
+            this.sendSuccess(res, contactInfo);
+        } catch (error) {
+            next(error);
+        }
+    });
+
+    /**
      * Search warehouses
      * GET /api/warehouses/search
      * @param {Object} req - Express request object
