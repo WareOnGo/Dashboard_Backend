@@ -6,6 +6,7 @@ const { z } = require('zod'); // Import Zod
 const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const crypto = require('crypto');
+const { photosToMedia } = require('../src/utils/mediaUtils');
 
 // --- Initialize Clients ---
 const prisma = new PrismaClient();
@@ -61,7 +62,12 @@ const createWarehouseSchema = z.object({
     availability: z.string().optional().nullable(),
     isBroker: z.string().optional().nullable(),
     photos: z.string().optional().nullable(),
-    
+    media: z.object({
+        images: z.array(z.string().url()).default([]),
+        videos: z.array(z.string().url()).default([]),
+        docs: z.array(z.string().url()).default([]),
+    }).optional().nullable(),
+
     // Nested object
     warehouseData: warehouseDataSchema,
 });
@@ -99,7 +105,14 @@ router.post('/', async (req, res) => {
             return res.status(400).json({ error: "Invalid input", issues: validationResult.error.issues });        
         }
         
-        const { warehouseData, ...warehouse } = validationResult.data;
+        const { warehouseData, media: incomingMedia, ...warehouse } = validationResult.data;
+
+        // Double-write: compute media from photos (or use incoming media)
+        if (warehouse.photos && !incomingMedia) {
+            warehouse.media = photosToMedia(warehouse.photos);
+        } else if (incomingMedia) {
+            warehouse.media = incomingMedia;
+        }
 
         // 2. Create in database
         const newWarehouse = await prisma.warehouse.create({
@@ -138,7 +151,14 @@ router.put('/:id', async (req, res) => {
             return res.status(400).json({ error: "Request body cannot be empty for an update" });
         }
 
-        const { warehouseData, ...warehouse } = validationResult.data;
+        const { warehouseData, media: incomingMedia, ...warehouse } = validationResult.data;
+
+        // Double-write: compute media from photos (or use incoming media)
+        if (warehouse.photos && !incomingMedia) {
+            warehouse.media = photosToMedia(warehouse.photos);
+        } else if (incomingMedia) {
+            warehouse.media = incomingMedia;
+        }
 
         // 2. Update in database
         const updatedWarehouse = await prisma.warehouse.update({

@@ -69,6 +69,7 @@ model Warehouse {
   status_updated_at   DateTime?
   id                  Int            @id @default(autoincrement())
   visibility          Boolean?       @default(false)
+  media               Json?
   WarehouseData       WarehouseData?
 
   @@index([address(ops: raw("gin_trgm_ops"))], map: "idx_warehouse_address_trgm", type: Gin)
@@ -99,21 +100,20 @@ model WarehouseData {
 
 model AuditLog {
   id        String   @id @default(uuid())
-  action    String   // "CREATE", "UPDATE", "DELETE", "READ", "SEARCH", "LOGIN", "LOGOUT", etc.
-  entity    String   // "warehouse", "file", "auth", etc.
-  entityId  String?  // ID of the affected record (nullable for bulk/non-specific actions)
-  context   String?  // Human-readable message, e.g. "Deleted warehouse 42"
-  metadata  Json?    // Arbitrary JSON payload for extra details (old values, diff, request params)
-  userEmail String   // From req.user.email
-  userName  String?  // From req.user.name (Google profile display name)
-  ipAddress String?  // req.ip
+  action    String
+  entity    String
+  entityId  String?
+  context   String?
+  metadata  Json?
+  userEmail String
+  userName  String?
+  ipAddress String?
   createdAt DateTime @default(now())
 
   @@index([entity, entityId])
   @@index([userEmail])
   @@index([action])
   @@index([createdAt])
-
   @@map("audit_logs")
 }
 
