@@ -1,5 +1,6 @@
 // src/models/warehouseModel.js
 const BaseModel = require('./baseModel');
+const { photosToMedia } = require('../utils/mediaUtils');
 
 /**
  * WarehouseModel class for handling warehouse data operations
@@ -59,7 +60,14 @@ class WarehouseModel extends BaseModel {
      */
     async create(warehouseData) {
         try {
-            const { warehouseData: nestedData, ...warehouse } = warehouseData;
+            const { warehouseData: nestedData, media: incomingMedia, ...warehouse } = warehouseData;
+
+            // Double-write: compute media from photos (or use incoming media)
+            if (warehouse.photos && !incomingMedia) {
+                warehouse.media = photosToMedia(warehouse.photos);
+            } else if (incomingMedia) {
+                warehouse.media = incomingMedia;
+            }
 
             return await this.model.create({
                 data: {
@@ -83,7 +91,14 @@ class WarehouseModel extends BaseModel {
      */
     async update(id, updateData) {
         try {
-            const { warehouseData, ...warehouse } = updateData;
+            const { warehouseData, media: incomingMedia, ...warehouse } = updateData;
+
+            // Double-write: compute media from photos (or use incoming media)
+            if (warehouse.photos && !incomingMedia) {
+                warehouse.media = photosToMedia(warehouse.photos);
+            } else if (incomingMedia) {
+                warehouse.media = incomingMedia;
+            }
 
             const updatePayload = {
                 where: { id: parseInt(id) },

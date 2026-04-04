@@ -223,7 +223,11 @@ class FileUploadService extends BaseService {
             'image/png',
             'image/gif',
             'image/webp',
-            'application/pdf'
+            'application/pdf',
+            'video/mp4',
+            'video/quicktime',
+            'video/x-msvideo',
+            'video/webm',
         ];
         
         if (!allowedTypes.includes(processedRequest.contentType)) {
@@ -310,7 +314,11 @@ class FileUploadService extends BaseService {
             'image/png': '.png',
             'image/gif': '.gif',
             'image/webp': '.webp',
-            'application/pdf': '.pdf'
+            'application/pdf': '.pdf',
+            'video/mp4': '.mp4',
+            'video/quicktime': '.mov',
+            'video/x-msvideo': '.avi',
+            'video/webm': '.webm',
         };
         
         return extensionMap[contentType] || '';

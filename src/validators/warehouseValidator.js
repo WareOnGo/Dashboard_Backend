@@ -52,7 +52,12 @@ class WarehouseValidator extends BaseValidator {
         visibility: z.boolean().optional().nullable(),
         isBroker: z.string().optional().nullable(),
         photos: z.string().optional().nullable(),
-        
+        media: z.object({
+            images: z.array(z.string().url()).default([]),
+            videos: z.array(z.string().url()).default([]),
+            docs: z.array(z.string().url()).default([]),
+        }).optional().nullable(),
+
         // Nested object
         warehouseData: this.warehouseDataSchema,
     });
@@ -91,8 +96,8 @@ class WarehouseValidator extends BaseValidator {
     static fileUploadSchema = z.object({
         contentType: z.string().min(1, "contentType is required")
             .refine(
-                (type) => type.startsWith('image/') || type.startsWith('application/pdf'),
-                "contentType must be an image or PDF"
+                (type) => type.startsWith('image/') || type.startsWith('video/') || type === 'application/pdf',
+                "contentType must be an image, video, or PDF"
             )
     });
 
