@@ -20,22 +20,21 @@ class AuthController extends BaseController {
      * @param {Object} res - Express response object
      */
     handleOAuthCallback = async (req, res) => {
+        // Resolve target frontend up-front so every redirect path below uses it
+        const { state } = req.query;
+        const frontendUrl = this.resolveFrontendUrl(state);
+
         try {
-            const { code, error, error_description, state } = req.query;
+            const { code, error, error_description } = req.query;
 
             // Handle OAuth errors from Google
             if (error) {
                 const errorMessage = this.getOAuthErrorMessage(error, error_description);
-                // Redirect to frontend with error
-                const { config } = require('../utils/config');
-                const frontendUrl = config.server.frontendUrl;
                 return res.redirect(`${frontendUrl}/?error=${encodeURIComponent(errorMessage)}`);
             }
 
             // Validate authorization code
             if (!code) {
-                const { config } = require('../utils/config');
-                const frontendUrl = config.server.frontendUrl;
                 return res.redirect(`${frontendUrl}/?error=${encodeURIComponent('Authorization code is required')}`);
             }
 
@@ -64,20 +63,46 @@ class AuthController extends BaseController {
             }
 
             // Redirect to frontend with token and user data
-            const { config } = require('../utils/config');
-            const frontendUrl = config.server.frontendUrl;
             const redirectUrl = `${frontendUrl}/auth/callback?token=${encodeURIComponent(jwtToken)}&user=${encodeURIComponent(JSON.stringify(userData))}`;
 
             return res.redirect(redirectUrl);
 
         } catch (error) {
-            // Redirect to frontend with error
-            const { config } = require('../utils/config');
-            const frontendUrl = config.server.frontendUrl;
             const errorMessage = error.message || 'Authentication failed';
             return res.redirect(`${frontendUrl}/?error=${encodeURIComponent(errorMessage)}`);
         }
     };
+
+    /**
+     * Resolve which frontend to redirect back to after OAuth.
+     * Uses the `state` param when it matches an allow-listed frontend,
+     * otherwise falls back to the default FRONTEND_URL.
+     *
+     * Allow-list comes from ALLOWED_FRONTENDS (comma-separated). The default
+     * FRONTEND_URL is always implicitly allowed, so existing deploys keep working
+     * without setting ALLOWED_FRONTENDS.
+     *
+     * Validating against an allow-list is critical — without it, `state` would
+     * turn this endpoint into an open redirect usable for phishing.
+     *
+     * @param {string|undefined} state - The `state` query param from Google's callback
+     * @returns {string} Base URL of the frontend to redirect to
+     */
+    resolveFrontendUrl(state) {
+        const { config } = require('../utils/config');
+        const defaultFrontend = config.server.frontendUrl;
+
+        const allowList = (process.env.ALLOWED_FRONTENDS || '')
+            .split(',')
+            .map(s => s.trim())
+            .filter(Boolean);
+        allowList.push(defaultFrontend);
+
+        if (state && allowList.includes(state)) {
+            return state;
+        }
+        return defaultFrontend;
+    }
 
     /**
      * Handle authentication errors with specific error types
