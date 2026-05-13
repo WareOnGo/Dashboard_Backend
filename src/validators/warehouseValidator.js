@@ -10,8 +10,8 @@ class WarehouseValidator extends BaseValidator {
      * Schema for nested WarehouseData
      */
     static warehouseDataSchema = z.object({
-        latitude: z.union([z.number(), z.string()]).optional().nullable(),
-        longitude: z.union([z.number(), z.string()]).optional().nullable(),
+        latitude: z.coerce.number().optional().nullable(),
+        longitude: z.coerce.number().optional().nullable(),
         fireNocAvailable: z.boolean().optional().nullable(),
         fireSafetyMeasures: z.string().optional().nullable(),
         landType: z.string().optional().nullable(),
@@ -57,6 +57,45 @@ class WarehouseValidator extends BaseValidator {
             videos: z.array(z.string().url()).default([]),
             docs: z.array(z.string().url()).default([]),
         }).optional().nullable(),
+
+        // Additional optional fields (schema-aligned, backwards-compatible)
+        listing_type: z.string().optional().nullable(),
+        alt_phone_number: z.string().optional().nullable(),
+        land_parcel_size: z.string().optional().nullable(),
+        builtup_area: z.string().optional().nullable(),
+        owner_warmnth: z.string().optional().nullable(),
+        distance_from_highway: z.string().optional().nullable(),
+        is_builder: z.boolean().optional().nullable(),
+        owner_of_multiple_sites: z.string().optional().nullable(),
+        carpet_area: z.string().optional().nullable(),
+        nearest_transport: z.string().optional().nullable(),
+        fire_exits: z.string().optional().nullable(),
+
+        fire_compliance_cert_type: z.string().optional().nullable(),
+        negotiated_rent: z.string().optional().nullable(),
+        washroom_count: z.string().optional().nullable(),
+        ownerCompanyName: z.string().optional().nullable(),
+        ownerAltPoc: z.string().optional().nullable(),
+        gateSizeFt: z.string().optional().nullable(),
+        dockApronLengthFt: z.string().optional().nullable(),
+        setbackArea: z.string().optional().nullable(),
+        ccRoads: z.string().optional().nullable(),
+        wallAndSecurityRoom: z.string().optional().nullable(),
+
+        plinthHeightFt: z.string().optional().nullable(),
+        dockDimension: z.string().optional().nullable(),
+        canopyType: z.string().optional().nullable(),
+        dockPlatformType: z.string().optional().nullable(),
+        otherDockingSpecs: z.string().optional().nullable(),
+        flooringType: z.string().optional().nullable(),
+        floorStrengthPerSqm: z.string().optional().nullable(),
+        ventilationType: z.string().optional().nullable(),
+        ventilationAirChangesPerDay: z.string().optional().nullable(),
+        insulationPresent: z.string().optional().nullable(),
+        insulationType: z.string().optional().nullable(),
+        lightingDetails: z.string().optional().nullable(),
+        wogVerified: z.boolean().optional().nullable(),
+        centreHeight: z.string().optional().nullable(),
 
         // Nested object
         warehouseData: this.warehouseDataSchema,
