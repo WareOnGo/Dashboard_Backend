@@ -80,6 +80,8 @@ class S3ClientManager {
                     accessKeyId: process.env.R2_ACCESS_KEY_ID,
                     secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
                 },
+                requestChecksumCalculation: 'WHEN_REQUIRED',
+                responseChecksumValidation: 'WHEN_REQUIRED'
             });
         }
         return this.client;

@@ -124,6 +124,49 @@ class WarehouseController extends BaseController {
     });
 
     /**
+     * Create a new warehouse from Scout form
+     * POST /api/warehouses/scout
+     * @param {Object} req - Express request object
+     * @param {Object} res - Express response object
+     * @param {Function} next - Express next function
+     */
+    createScoutWarehouse = this.asyncHandler(async (req, res, next) => {
+        try {
+            const scout = req.scout;
+
+            // Force scout-specific fields to maintain security and identify source
+            const warehouseData = {
+                ...req.body,
+                wogVerified: false,
+                visibility: false,
+                uploadedBy: scout.email || scout.name, // Use actual scout identity
+                createdBy: `SCOUT_${scout.id}`,
+                createdByEmail: scout.email || scout.name
+            };
+
+            // Create warehouse through service
+            const newWarehouse = await this.warehouseService.createWarehouse(warehouseData);
+
+            // Audit log captures scout details
+            req.user = { email: scout.email || scout.name }; // Mock req.user for audit logging if it relies on it
+            req.audit('CREATE', 'warehouse', newWarehouse.id, `Created scout warehouse in ${req.body.city}, ${req.body.state}`, {
+                source: 'SCOUT_FORM',
+                scoutId: scout.id,
+                scoutEmpid: scout.empid,
+                warehouseType: req.body.warehouseType,
+                city: req.body.city,
+                state: req.body.state,
+                zone: req.body.zone
+            });
+
+            // Send created response
+            this.sendCreated(res, newWarehouse);
+        } catch (error) {
+            next(error);
+        }
+    });
+
+    /**
      * Update an existing warehouse
      * PUT /api/warehouses/:id
      * @param {Object} req - Express request object
@@ -305,6 +348,50 @@ class WarehouseController extends BaseController {
 
             req.audit('CREATE', 'file', uploadData.fileName || null, 'Generated presigned upload URL', {
                 contentType: req.body.contentType,
+                keyPrefix: req.body.keyPrefix
+            });
+
+            // Send successful response
+            this.sendSuccess(res, uploadData);
+        } catch (error) {
+            next(error);
+        }
+    });
+
+    /**
+     * Generate presigned URL for scout file upload
+     * POST /api/warehouses/scout/presigned-url
+     * @param {Object} req - Express request object
+     * @param {Object} res - Express response object
+     * @param {Function} next - Express next function
+     */
+    generateScoutPresignedUrl = this.asyncHandler(async (req, res, next) => {
+        try {
+            const scout = req.scout;
+
+            // Extract upload request data
+            const uploadRequest = {
+                contentType: req.body.contentType
+            };
+
+            // Options for scout uploads
+            const options = {
+                expiresIn: req.body.expiresIn || 360,
+                keyPrefix: req.body.keyPrefix || 'scout',
+                uploadedBy: scout.email || scout.name,
+                uploadedById: `SCOUT_${scout.id}`,
+                purpose: 'warehouse-image-scout'
+            };
+
+            // Generate presigned URL through service
+            const uploadData = await this.fileUploadService.generatePresignedUrl(uploadRequest, options);
+
+            req.user = { email: scout.email || scout.name }; // Mock req.user for audit logging
+            req.audit('CREATE', 'file', uploadData.fileName || null, 'Generated scout presigned upload URL', {
+                contentType: req.body.contentType,
+                source: 'SCOUT_FORM',
+                scoutId: scout.id,
+                scoutEmpid: scout.empid,
                 keyPrefix: req.body.keyPrefix
             });
 

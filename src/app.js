@@ -39,12 +39,17 @@ const PORT = process.env.PORT || 3001;
  * 
  * @type {Object}
  */
+const envOrigins = process.env.CORS_ORIGIN 
+    ? process.env.CORS_ORIGIN.split(',').map(url => url.trim())
+    : ['http://localhost:3000'];
+
 const corsOptions = {
     origin: [
         'https://dimnz4vlbe2vn.cloudfront.net',
         'https://dimnz4vlbe2vn.cloudfront.net/',
-        process.env.CORS_ORIGIN || 'http://localhost:3000',
-        'http://localhost:5173'
+        ...envOrigins,
+        'http://localhost:5173',
+        'http://localhost:5174'
     ],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],

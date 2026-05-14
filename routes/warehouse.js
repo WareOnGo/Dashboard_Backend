@@ -6,6 +6,7 @@ const { z } = require('zod'); // Import Zod
 const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const crypto = require('crypto');
+const rateLimit = require('express-rate-limit');
 const { photosToMedia } = require('../src/utils/mediaUtils');
 
 // --- Initialize Clients ---
@@ -170,6 +171,57 @@ router.post('/', async (req, res) => {
     } catch (error) {
         console.error("Error creating warehouse:", error);
         res.status(500).json({ error: "Could not create warehouse" });
+    }
+});
+
+// --- Rate Limiting for Scout Submissions ---
+const scoutRateLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000, // 1 hour window
+    max: 10, // Limit each IP to 10 scout submissions per window
+    message: { error: "Too many scout submissions from this IP, please try again after an hour" },
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+
+/**
+ * POST /api/warehouses/scout
+ * Unauthenticated endpoint for scout submissions with rate limiting.
+ */
+router.post('/scout', scoutRateLimiter, async (req, res) => {
+    try {
+        // 1. Validate the request body
+        const validationResult = createWarehouseSchema.safeParse(req.body);
+        if (!validationResult.success) {
+            return res.status(400).json({ error: "Invalid input", issues: validationResult.error.issues });        
+        }
+        
+        const { warehouseData, media: incomingMedia, ...warehouse } = validationResult.data;
+
+        // Compute media from photos (or use incoming media)
+        if (warehouse.photos && !incomingMedia) {
+            warehouse.media = photosToMedia(warehouse.photos);
+        } else if (incomingMedia) {
+            warehouse.media = incomingMedia;
+        }
+
+        // 2. Force scout-specific fields to maintain security and identify source
+        warehouse.wogVerified = false;
+        warehouse.visibility = false;
+
+        // 3. Create in database
+        const newWarehouse = await prisma.warehouse.create({
+            data: {
+                ...warehouse,
+                WarehouseData: {
+                    create: warehouseData,
+                },
+            },
+            include: { WarehouseData: true },
+        });
+        res.status(201).json(newWarehouse);
+    } catch (error) {
+        console.error("Error creating scout warehouse:", error);
+        res.status(500).json({ error: "Could not submit scout form" });
     }
 });
 
