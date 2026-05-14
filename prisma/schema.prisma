@@ -197,3 +197,25 @@ model opportunities {
   reminder_3d_attempts     Int       @default(0)
   update_count             Int       @default(0)
 }
+
+model googlemapscrapejobs {
+  id                  String    @id
+  keywords            String
+  output_key          String
+  status              String    @default("running")
+  error               String?
+  created_at          DateTime  @default(now()) @db.Timestamptz(6)
+  payload             Json?
+  queued_at           DateTime? @db.Timestamptz(6)
+  next_dispatch_after DateTime? @db.Timestamptz(6)
+  dispatched_at       DateTime? @db.Timestamptz(6)
+}
+
+model Scout {
+  id         Int      @id @default(autoincrement())
+  empid      String   @unique
+  name       String
+  email      String?
+  status     String   @default("ACTIVE") // ACTIVE or REVOKED
+  created_at DateTime @default(now())
+}

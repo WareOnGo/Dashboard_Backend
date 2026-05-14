@@ -4,9 +4,20 @@ const router = express.Router();
 const container = require('../container');
 const validationMiddleware = require('../middleware/validation');
 const { authMiddleware } = require('../middleware/authMiddleware');
+const rateLimit = require('express-rate-limit');
+const { verifyScoutToken } = require('../middleware/scoutMiddleware');
 
 // Get controller instance from container
 const warehouseController = container.resolve('warehouseController');
+
+// --- Rate Limiters & Scout Middleware ---
+const scoutRateLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000, // 1 hour window
+    max: 15, // Limit each IP to 15 requests per window
+    message: { error: "Too many scout requests from this IP, please try again after an hour" },
+    standardHeaders: true,
+    legacyHeaders: false,
+});
 
 // --- CRUD Endpoints ---
 
@@ -60,6 +71,17 @@ router.post('/',
 );
 
 /**
+ * POST /api/warehouses/scout
+ * Unauthenticated endpoint for scout submissions
+ */
+router.post('/scout', 
+    scoutRateLimiter,
+    verifyScoutToken,
+    validationMiddleware.validateWarehouseCreate,
+    warehouseController.createScoutWarehouse
+);
+
+/**
  * PUT /api/warehouses/:id
  */
 router.put('/:id', 
@@ -85,6 +107,17 @@ router.post('/presigned-url',
     authMiddleware.authenticateJWT,
     validationMiddleware.validateFileUpload,
     warehouseController.generatePresignedUrl
+);
+
+/**
+ * POST /api/warehouses/scout/presigned-url
+ * Unauthenticated endpoint for scout file uploads
+ */
+router.post('/scout/presigned-url', 
+    scoutRateLimiter,
+    verifyScoutToken,
+    validationMiddleware.validateFileUpload,
+    warehouseController.generateScoutPresignedUrl
 );
 
 /**
