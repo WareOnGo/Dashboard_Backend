@@ -68,7 +68,7 @@ model Warehouse {
   isBroker                    String?
   photos                      String?
   createdAt                   DateTime?      @default(now())
-  status_updated_at           DateTime?
+  status_updated_at           DateTime?      @updatedAt
   id                          Int            @id @default(autoincrement())
   visibility                  Boolean?       @default(false)
   media                       Json?
