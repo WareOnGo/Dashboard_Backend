@@ -19,6 +19,16 @@ const scoutRateLimiter = rateLimit({
     legacyHeaders: false,
 });
 
+// Higher cap for the presigned-URL endpoint: each media file = one request,
+// so a single submission can easily need 30+ calls.
+const scoutUploadRateLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    max: 200,
+    message: { error: "Too many scout upload requests from this IP, please try again after an hour" },
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+
 // --- CRUD Endpoints ---
 
 /**
@@ -113,8 +123,8 @@ router.post('/presigned-url',
  * POST /api/warehouses/scout/presigned-url
  * Unauthenticated endpoint for scout file uploads
  */
-router.post('/scout/presigned-url', 
-    scoutRateLimiter,
+router.post('/scout/presigned-url',
+    scoutUploadRateLimiter,
     verifyScoutToken,
     validationMiddleware.validateFileUpload,
     warehouseController.generateScoutPresignedUrl
