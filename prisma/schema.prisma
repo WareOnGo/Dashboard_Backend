@@ -42,6 +42,7 @@ model VerifiedNumber {
   created_at     DateTime @default(now())
   twenty_user_id String?  @unique(map: "verified_number_twenty_user_id_key")
   email          String?  @unique(map: "verified_number_email_key")
+  empID          String?  @unique(map: "verified_number_empID_key")
 }
 
 /// This model contains an expression index which requires additional setup for migrations. Visit https://pris.ly/d/expression-indexes for more info.
@@ -211,11 +212,27 @@ model googlemapscrapejobs {
   dispatched_at       DateTime? @db.Timestamptz(6)
 }
 
-model Scout {
-  id         Int      @id @default(autoincrement())
-  empid      String   @unique
-  name       String
-  email      String?
-  status     String   @default("ACTIVE") // ACTIVE or REVOKED
-  created_at DateTime @default(now())
+model CronRunLog {
+  id         BigInt   @id @default(autoincrement())
+  jobName    String
+  ranAt      DateTime @default(now())
+  status     String
+  durationMs Int
+  metadata   Json?
+  notes      String?
+
+  @@index([jobName, ranAt])
+}
+
+model GeocodeAttempt {
+  id            Int       @id @default(autoincrement())
+  warehouseId   Int       @unique
+  attemptCount  Int       @default(0)
+  lastAttemptAt DateTime  @default(now())
+  lastVia       String?
+  lastError     String?
+  succeededAt   DateTime?
+
+  @@index([lastAttemptAt])
+  @@index([succeededAt])
 }
