@@ -3,43 +3,50 @@ const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
 /**
- * Middleware to verify a scout's empid token
- * It checks if req.body.uploadedBy (or a header) contains a valid, active empid
+ * Middleware to verify a scout's empID against the VerifiedNumber table.
+ * Token comes in via req.body.uploadedBy or the x-scout-token header.
+ * On success, attaches req.scout with { id, empid, name, email, status } so
+ * downstream controllers can keep using their existing field names.
  */
 const verifyScoutToken = async (req, res, next) => {
     try {
-        // Try to get token from body.uploadedBy (as requested) or fallback to an auth header
-        const empid = req.body?.uploadedBy || req.headers['x-scout-token'];
+        const rawEmpId = req.body?.uploadedBy || req.headers['x-scout-token'];
 
-        if (!empid) {
+        if (!rawEmpId) {
             return res.status(401).json({
                 error: 'Unauthorized',
-                message: 'Scout token (empid) is missing. Please provide your Employee ID in the uploadedBy field.'
+                message: 'Scout token (empID) is missing. Please provide your Employee ID in the uploadedBy field.'
             });
         }
 
-        // Query the database for the scout
-        const scout = await prisma.scout.findUnique({
-            where: { empid }
+        const empID = String(rawEmpId).trim().toUpperCase();
+
+        const verified = await prisma.verifiedNumber.findUnique({
+            where: { empID }
         });
 
-        // Check if scout exists and is active
-        if (!scout) {
+        if (!verified) {
             return res.status(401).json({
                 error: 'Unauthorized',
-                message: 'Invalid Scout token (empid).'
+                message: 'Invalid Scout token (empID).'
             });
         }
 
-        if (scout.status !== 'ACTIVE') {
+        if (!verified.is_active) {
             return res.status(403).json({
                 error: 'Forbidden',
                 message: 'Your Scout access has been revoked. Please contact administration.'
             });
         }
 
-        // Attach scout object to request for the controller to use
-        req.scout = scout;
+        req.scout = {
+            id: verified.id,
+            empid: verified.empID,
+            name: verified.name,
+            email: verified.email,
+            status: verified.is_active ? 'ACTIVE' : 'REVOKED',
+        };
+
         next();
     } catch (error) {
         console.error('Error verifying scout token:', error);
