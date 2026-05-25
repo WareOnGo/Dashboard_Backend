@@ -284,7 +284,7 @@ class WarehouseService extends BaseService {
         
         // Apply default values or business logic
         if (!processedData.availability) {
-            processedData.availability = 'Available';
+            processedData.availability = 'Yes';
         }
         
         // Normalize contact number format

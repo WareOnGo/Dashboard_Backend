@@ -109,6 +109,10 @@ const createWarehouseSchema = z.object({
     wogVerified: z.boolean().optional().nullable(),
     centreHeight: z.string().optional().nullable(),
 
+    status: z.enum(['Under construction', 'Build to suit', 'Ready to move']).optional().nullable(),
+    handoverDate: z.coerce.date().optional().nullable(),
+    lockInDate: z.coerce.date().optional().nullable(),
+
     // Nested object
     warehouseData: warehouseDataSchema,
 });
