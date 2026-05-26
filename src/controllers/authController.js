@@ -1,6 +1,7 @@
 const BaseController = require('./baseController');
 const GoogleOAuthService = require('../services/googleOAuthService');
 const JWTService = require('../services/jwtService');
+const { isAdmin } = require('../utils/admin');
 
 /**
  * Authentication Controller
@@ -50,7 +51,8 @@ class AuthController extends BaseController {
                 email: oauthResult.user.email,
                 name: oauthResult.user.name,
                 picture: oauthResult.user.picture,
-                domain: this.jwtService.extractDomain(oauthResult.user.email)
+                domain: this.jwtService.extractDomain(oauthResult.user.email),
+                isAdmin: isAdmin(oauthResult.user.email)
             };
 
             // Audit the login
@@ -252,7 +254,8 @@ class AuthController extends BaseController {
                     email: decoded.email,
                     name: decoded.name,
                     picture: decoded.picture,
-                    domain: decoded.domain
+                    domain: decoded.domain,
+                    isAdmin: isAdmin(decoded.email)
                 }
             };
 
@@ -330,7 +333,8 @@ class AuthController extends BaseController {
                     email: user.email,
                     name: user.name,
                     picture: user.picture,
-                    domain: user.domain
+                    domain: user.domain,
+                    isAdmin: !!user.isAdmin
                 }
             };
 
