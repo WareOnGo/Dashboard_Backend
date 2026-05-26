@@ -1,6 +1,7 @@
 const jwt = require('jsonwebtoken');
 const BaseService = require('./baseService');
 const { getAuthConfig } = require('../utils/config');
+const { isAdmin } = require('../utils/admin');
 
 /**
  * JWT Service for token generation, validation, and refresh operations
@@ -52,6 +53,7 @@ class JWTService extends BaseService {
                 name: payload.name,
                 picture: payload.picture,
                 domain: this.extractDomain(payload.email),
+                isAdmin: isAdmin(payload.email),
                 iss: 'warehouse-api', // Issuer
                 aud: 'warehouse-frontend' // Audience
             };

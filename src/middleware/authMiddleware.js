@@ -1,4 +1,5 @@
 const JWTService = require('../services/jwtService');
+const { isAdmin } = require('../utils/admin');
 
 /**
  * Authentication middleware for protecting routes with JWT validation
@@ -35,6 +36,9 @@ class AuthMiddleware {
                 name: userPayload.name,
                 picture: userPayload.picture,
                 domain: userPayload.domain,
+                // Re-evaluate from env on every request so the allowlist can be
+                // updated without forcing existing users to re-login.
+                isAdmin: isAdmin(userPayload.email),
                 isAuthenticated: true
             };
 
@@ -78,6 +82,7 @@ class AuthMiddleware {
                 name: userPayload.name,
                 picture: userPayload.picture,
                 domain: userPayload.domain,
+                isAdmin: isAdmin(userPayload.email),
                 isAuthenticated: true
             };
 
@@ -113,6 +118,20 @@ class AuthMiddleware {
 
             next();
         };
+    };
+
+    /**
+     * Middleware to restrict access to admin users only.
+     * Must be used after authenticateJWT.
+     */
+    requireAdmin = (req, res, next) => {
+        if (!req.user || !req.user.isAuthenticated) {
+            return this.sendUnauthorizedResponse(res, 'Authentication required');
+        }
+        if (!req.user.isAdmin) {
+            return this.sendForbiddenResponse(res, 'Admin access required', 'ADMIN_ONLY');
+        }
+        next();
     };
 
     /**
@@ -262,6 +281,7 @@ class AuthMiddleware {
             authenticateJWT: instance.authenticateJWT,
             optionalAuthentication: instance.optionalAuthentication,
             requireDomain: instance.requireDomain,
+            requireAdmin: instance.requireAdmin,
             checkTokenExpiration: instance.checkTokenExpiration
         };
     }

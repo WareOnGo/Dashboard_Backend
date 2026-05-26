@@ -103,8 +103,9 @@ router.put('/:id',
 /**
  * DELETE /api/warehouses/:id
  */
-router.delete('/:id', 
+router.delete('/:id',
     authMiddleware.authenticateJWT,
+    authMiddleware.requireAdmin,
     warehouseController.deleteWarehouse
 );
 
@@ -150,8 +151,9 @@ router.post('/files/:fileName/validate',
 /**
  * DELETE /api/warehouses/files/:fileName
  */
-router.delete('/files/:fileName', 
+router.delete('/files/:fileName',
     authMiddleware.authenticateJWT,
+    authMiddleware.requireAdmin,
     warehouseController.deleteUploadedFile
 );
 
