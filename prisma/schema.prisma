@@ -113,6 +113,8 @@ model Warehouse {
   status                      String?
   handoverDate                DateTime?      @db.Date
   lockInDate                  DateTime?      @db.Date
+  cam                         String?
+  chargeableArea              Int?
   WarehouseData               WarehouseData?
 
   @@index([address(ops: raw("gin_trgm_ops"))], map: "idx_warehouse_address_trgm", type: Gin)

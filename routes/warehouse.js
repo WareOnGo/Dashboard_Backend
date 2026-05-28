@@ -113,6 +113,9 @@ const createWarehouseSchema = z.object({
     handoverDate: z.coerce.date().optional().nullable(),
     lockInDate: z.coerce.date().optional().nullable(),
 
+    cam: z.string().optional().nullable(),
+    chargeableArea: z.coerce.number().int().optional().nullable(),
+
     // Nested object
     warehouseData: warehouseDataSchema,
 });
