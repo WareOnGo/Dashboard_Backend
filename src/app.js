@@ -128,6 +128,12 @@ app.use('/auth', require('./routes/auth'));
  */
 app.use('/api/warehouses', require('./routes/warehouse'));
 
+/**
+ * Staging / validation layer routes (admin-only)
+ * Review, edit, approve, and reject inbound submissions under /api/staging
+ */
+app.use('/api/staging', require('./routes/staging'));
+
 // --- Basic Test Route ---
 
 /**

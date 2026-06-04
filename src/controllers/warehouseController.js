@@ -10,11 +10,13 @@ class WarehouseController extends BaseController {
      * Constructor for WarehouseController
      * @param {WarehouseService} warehouseService - Warehouse service instance
      * @param {FileUploadService} fileUploadService - File upload service instance
+     * @param {StagingService} stagingService - Staging/validation layer service instance
      */
-    constructor(warehouseService, fileUploadService) {
+    constructor(warehouseService, fileUploadService, stagingService) {
         super();
         this.warehouseService = warehouseService;
         this.fileUploadService = fileUploadService;
+        this.stagingService = stagingService;
     }
 
     /**
@@ -98,26 +100,26 @@ class WarehouseController extends BaseController {
      */
     createWarehouse = this.asyncHandler(async (req, res, next) => {
         try {
-            // Add authenticated user context to warehouse data
-            const warehouseData = {
-                ...req.body,
-                uploadedBy: req.user.email, // Use authenticated user's email
-                createdBy: req.user.id,     // Track who created the record
-                createdByEmail: req.user.email
-            };
+            // Dashboard submissions get the same review scrutiny as Scout ones: they are
+            // staged (PENDING) for admin review/approval instead of going straight to
+            // master. Strict createWarehouseSchema validation still runs upstream.
+            const staged = await this.stagingService.createDashboardSubmission({
+                submission: req.body,
+                user: req.user,
+            });
 
-            // Create warehouse through service
-            const newWarehouse = await this.warehouseService.createWarehouse(warehouseData);
-
-            req.audit('CREATE', 'warehouse', newWarehouse.id, `Created warehouse in ${req.body.city}, ${req.body.state}`, {
+            req.audit('CREATE', 'staged_warehouse', staged.id, `Staged dashboard warehouse in ${req.body.city}, ${req.body.state}`, {
+                source: 'DASHBOARD',
+                reviewStatus: staged.reviewStatus,
                 warehouseType: req.body.warehouseType,
                 city: req.body.city,
                 state: req.body.state,
                 zone: req.body.zone
             });
 
-            // Send created response
-            this.sendCreated(res, newWarehouse);
+            // NOTE: returns a staged row (uuid id, reviewStatus=PENDING), not a master
+            // Warehouse. The dashboard create flow should read "submitted for review".
+            this.sendCreated(res, staged);
         } catch (error) {
             next(error);
         }
@@ -134,33 +136,32 @@ class WarehouseController extends BaseController {
         try {
             const scout = req.scout;
 
-            // Force scout-specific fields to maintain security and identify source
-            const warehouseData = {
-                ...req.body,
-                wogVerified: false,
-                visibility: false,
-                uploadedBy: scout.email || scout.name, // Use actual scout identity
-                createdBy: `SCOUT_${scout.id}`,
-                createdByEmail: scout.email || scout.name
-            };
-
-            // Create warehouse through service
-            const newWarehouse = await this.warehouseService.createWarehouse(warehouseData);
+            // Scout submissions no longer go straight into the master Warehouse table.
+            // They are staged (PENDING) for admin review before promotion.
+            // The strict createWarehouseSchema validation still runs upstream (route
+            // middleware), so the Scout frontend keeps its field-level error UX.
+            const staged = await this.stagingService.createScoutSubmission({
+                submission: req.body,
+                scout,
+            });
 
             // Audit log captures scout details
             req.user = { email: scout.email || scout.name }; // Mock req.user for audit logging if it relies on it
-            req.audit('CREATE', 'warehouse', newWarehouse.id, `Created scout warehouse in ${req.body.city}, ${req.body.state}`, {
-                source: 'SCOUT_FORM',
+            req.audit('CREATE', 'staged_warehouse', staged.id, `Staged scout warehouse in ${req.body.city}, ${req.body.state}`, {
+                source: 'SCOUT', // matches the staged row's `source` value (not 'SCOUT_FORM')
                 scoutId: scout.id,
                 scoutEmpid: scout.empid,
+                reviewStatus: staged.reviewStatus,
                 warehouseType: req.body.warehouseType,
                 city: req.body.city,
                 state: req.body.state,
                 zone: req.body.zone
             });
 
-            // Send created response
-            this.sendCreated(res, newWarehouse);
+            // Send created response. NOTE: the returned object is a staged row
+            // (uuid id, reviewStatus=PENDING), not a master Warehouse. The Scout
+            // frontend success copy should read "submitted for review".
+            this.sendCreated(res, staged);
         } catch (error) {
             next(error);
         }
