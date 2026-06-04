@@ -110,9 +110,9 @@ model Warehouse {
   centreHeight                String?
   listing_type                String?
   photosWebp                  String?
-  status                      String?
   handoverDate                DateTime?      @db.Date
   lockInDate                  DateTime?      @db.Date
+  status                      String?
   cam                         String?
   chargeableArea              Int?
   WarehouseData               WarehouseData?
@@ -307,4 +307,116 @@ enum TicketStatus {
   APPROVED
   REJECTED
   CANCELLED
+}
+
+/// Staging / validation layer for inbound warehouse submissions (Scout + external endpoints).
+/// Rows are reviewed, edited, and approved in the dashboard before promotion to Warehouse.
+/// All mirrored Warehouse/WarehouseData columns are nullable so ingest never bounces data.
+/// See docs/STAGING_VALIDATION_LAYER.md.
+model StagedWarehouse {
+  id              String        @id @default(uuid())
+
+  // --- pipeline / review metadata ---
+  reviewStatus    StagingStatus @default(PENDING) // named reviewStatus to avoid collision with mirrored `status`
+  source          String                          // 'SCOUT' | 'PARTNER_API' | ...
+  submittedBy     String                          // scout email / api key id
+  submittedAt     DateTime      @default(now())
+  reviewedBy      String?
+  reviewedAt      DateTime?
+  rejectionReason String?
+  warehouseId     Int?                            // SOFT reference to promoted master row (no @relation / FK)
+
+  // --- raw snapshot + reserved correction hooks (null for now) ---
+  rawPayload      Json?                           // immutable copy of the submission as received
+  flags           Json?                           // [{field, severity, message, source, suggestedValue?}]
+  reviewMeta      Json?                           // AI provenance: model, confidence, runAt
+
+  // --- mirrored Warehouse columns (all nullable) ---
+  warehouseOwnerType          String?
+  warehouseType               String?
+  address                     String?
+  googleLocation              String?
+  city                        String?
+  state                       String?
+  postalCode                  String?
+  zone                        String?
+  contactPerson               String?
+  contactNumber               String?
+  totalSpaceSqft              Int[]
+  offeredSpaceSqft            String?
+  numberOfDocks               String?
+  clearHeightFt               String?
+  compliances                 String?
+  otherSpecifications         String?
+  ratePerSqft                 String?
+  availability                String?
+  uploadedBy                  String?
+  isBroker                    String?
+  photos                      String?
+  photosWebp                  String?
+  visibility                  Boolean?
+  media                       Json?
+  alt_phone_number            String?
+  land_parcel_size            String?
+  builtup_area                String?
+  owner_warmnth               String?
+  distance_from_highway       String?
+  is_builder                  Boolean?
+  owner_of_multiple_sites     String?
+  carpet_area                 String?
+  nearest_transport           String?
+  fire_exits                  String?
+  fire_compliance_cert_type   String?
+  negotiated_rent             String?
+  washroom_count              String?
+  ownerCompanyName            String?
+  ownerAltPoc                 String?
+  gateSizeFt                  String?
+  dockApronLengthFt           String?
+  setbackArea                 String?
+  ccRoads                     String?
+  wallAndSecurityRoom         String?
+  plinthHeightFt              String?
+  dockDimension               String?
+  canopyType                  String?
+  dockPlatformType            String?
+  otherDockingSpecs           String?
+  flooringType                String?
+  floorStrengthPerSqm         String?
+  ventilationType             String?
+  ventilationAirChangesPerDay String?
+  insulationPresent           String?
+  insulationType              String?
+  lightingDetails             String?
+  wogVerified                 Boolean?
+  centreHeight                String?
+  listing_type                String?
+  status                      String?    // mirrors Warehouse.status (construction status)
+  handoverDate                DateTime?  @db.Date
+  lockInDate                  DateTime?  @db.Date
+  cam                         String?
+  chargeableArea              Int?
+
+  // --- mirrored WarehouseData columns (all nullable) ---
+  latitude            Float?
+  longitude           Float?
+  fireNocAvailable    Boolean?
+  fireSafetyMeasures  String?
+  landType            String?
+  approachRoadWidth   String?
+  dimensions          String?
+  parkingDockingSpace String?
+  pollutionZone       String?
+  powerKva            String?
+  vaastuCompliance    String?
+
+  @@index([reviewStatus, submittedAt])
+}
+
+enum StagingStatus {
+  PENDING
+  IN_REVIEW
+  APPROVED
+  REJECTED
+  // headroom: FLAGGED / NEEDS_CORRECTION can be added later without renaming the above
 }

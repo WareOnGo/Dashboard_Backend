@@ -4,14 +4,17 @@ const database = require('./utils/database');
 // Import Models
 const WarehouseModel = require('./models/warehouseModel');
 const AuditLogModel = require('./models/auditLogModel');
+const StagedWarehouseModel = require('./models/stagedWarehouseModel');
 
 // Import Services
 const WarehouseService = require('./services/warehouseService');
 const FileUploadService = require('./services/fileUploadService');
 const AuditLogService = require('./services/auditLogService');
+const StagingService = require('./services/stagingService');
 
 // Import Controllers
 const WarehouseController = require('./controllers/warehouseController');
+const StagingController = require('./controllers/stagingController');
 
 /**
  * Dependency Injection Container
@@ -203,12 +206,30 @@ class Container {
             return new AuditLogService(auditLogModel);
         });
 
+        // Staging / validation layer
+        this.registerSingleton('stagedWarehouseModel', () => {
+            const prismaClient = database.getClient();
+            return new StagedWarehouseModel(prismaClient);
+        });
+
+        this.registerSingleton('stagingService', (container) => {
+            const stagedWarehouseModel = container.resolve('stagedWarehouseModel');
+            const warehouseService = container.resolve('warehouseService');
+            return new StagingService(stagedWarehouseModel, warehouseService);
+        });
+
         // Register Controllers (transient - new instance per request if needed)
         // Controllers handle HTTP requests and may benefit from fresh instances
         this.register('warehouseController', (container) => {
             const warehouseService = container.resolve('warehouseService');
             const fileUploadService = container.resolve('fileUploadService');
-            return new WarehouseController(warehouseService, fileUploadService);
+            const stagingService = container.resolve('stagingService');
+            return new WarehouseController(warehouseService, fileUploadService, stagingService);
+        });
+
+        this.register('stagingController', (container) => {
+            const stagingService = container.resolve('stagingService');
+            return new StagingController(stagingService);
         });
     }
 
