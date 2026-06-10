@@ -118,9 +118,16 @@ database.connect().catch(error => {
 
 /**
  * Authentication API routes
- * Handles all authentication-related endpoints under /auth
+ * Handles all authentication-related endpoints under /auth.
+ *
+ * Also mounted under /api/auth so it shares the same /api prefix as the rest
+ * of the API (which is what the frontend client uses). The bare /auth mount is
+ * kept so the Google OAuth redirect URI (/auth/google/callback) does not change
+ * and needs no reconfiguration. The same router instance handles both mounts.
  */
-app.use('/auth', require('./routes/auth'));
+const authRoutes = require('./routes/auth');
+app.use('/auth', authRoutes);
+app.use('/api/auth', authRoutes);
 
 /**
  * Warehouse API routes
