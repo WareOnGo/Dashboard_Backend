@@ -1,6 +1,7 @@
 // src/services/stagingService.js
 const BaseService = require('./baseService');
 const WarehouseValidator = require('../validators/warehouseValidator');
+const { geocodeUrl } = require('../utils/googleMaps');
 
 /**
  * The nested WarehouseData fields, flattened onto the StagedWarehouse mirror.
@@ -79,6 +80,7 @@ class StagingService extends BaseService {
                 source: 'SCOUT',
                 submittedBy: scout.email || scout.name,
             });
+            await this.autofillCoordinatesFromUrl(staged);
             return this.stagedWarehouseModel.create(staged);
         });
     }
@@ -101,6 +103,7 @@ class StagingService extends BaseService {
                 source: 'DASHBOARD',
                 submittedBy: user.email,
             });
+            await this.autofillCoordinatesFromUrl(staged);
             return this.stagedWarehouseModel.create(staged);
         });
     }
@@ -123,6 +126,7 @@ class StagingService extends BaseService {
     async createIngestSubmission({ submission, source = 'PARTNER_API', submittedBy = 'webhook:partner_api' }) {
         return this.executeOperation(async () => {
             const staged = this.toStagedRow(submission, { source, submittedBy });
+            await this.autofillCoordinatesFromUrl(staged);
             return this.stagedWarehouseModel.create(staged);
         });
     }
@@ -156,6 +160,66 @@ class StagingService extends BaseService {
             wogVerified: false,
             visibility: false,
         };
+    }
+
+    /**
+     * Best-effort autofill of latitude/longitude from the submission's Google
+     * Maps URL (`googleLocation`). Mutates the flat staged row in place.
+     *
+     * Never throws — a geocoding failure (bad URL, network, Google changes)
+     * must not block a submission, which just gets staged without coordinates.
+     * Won't overwrite coordinates the submission already supplied.
+     *
+     * @param {Object} staged - Flat staged row produced by toStagedRow
+     * @returns {Promise<void>}
+     * @private
+     */
+    async autofillCoordinatesFromUrl(staged) {
+        if (!staged.googleLocation) return;
+        if (staged.latitude != null && staged.longitude != null) return;
+
+        try {
+            const { lat, lng } = await geocodeUrl(staged.googleLocation);
+            if (lat != null && lng != null) {
+                staged.latitude = lat;
+                staged.longitude = lng;
+            }
+        } catch {
+            // best-effort; the submission proceeds without coordinates
+        }
+    }
+
+    /**
+     * On edit, re-geocode latitude/longitude only when the submission's
+     * `googleLocation` actually changes. Mutates the flat `mapped` edits in place.
+     *
+     * Never throws (best-effort). If the same edit explicitly sets latitude and
+     * longitude, those win and no geocoding happens. If the URL is cleared,
+     * existing coordinates are left untouched rather than fabricated.
+     *
+     * @param {Object} row - The current staged row (pre-edit)
+     * @param {Object} mapped - The flattened proposed edits (post flattenForMirror)
+     * @returns {Promise<void>}
+     * @private
+     */
+    async autofillCoordinatesOnUrlChange(row, mapped) {
+        const urlChanged =
+            'googleLocation' in mapped && mapped.googleLocation !== row.googleLocation;
+        if (!urlChanged) return;
+        // Respect explicit coordinate edits made in the same request.
+        if (mapped.latitude != null && mapped.longitude != null) return;
+        // URL cleared — don't invent coordinates from nothing.
+        if (!mapped.googleLocation) return;
+
+        try {
+            const { lat, lng } = await geocodeUrl(mapped.googleLocation);
+            if (lat != null && lng != null) {
+                mapped.latitude = lat;
+                mapped.longitude = lng;
+            }
+        } catch {
+            // best-effort; the edit proceeds without refreshed coordinates
+        }
     }
 
     /**
@@ -202,6 +266,9 @@ class StagingService extends BaseService {
             }
 
             const mapped = this.flattenForMirror(edits);
+            // Re-geocode only when the Google Maps URL itself changes. Done before
+            // computeDiff so the refreshed coordinates show up in the returned changes.
+            await this.autofillCoordinatesOnUrlChange(row, mapped);
             const changes = this.computeDiff(row, mapped);
             if (changes.length === 0) {
                 return { submission: row, changes: [] };
