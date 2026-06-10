@@ -21,6 +21,25 @@ const STAGING_META_FIELDS = new Set([
 
 const REVIEWABLE = new Set(['PENDING']);
 
+/**
+ * AUTO-APPROVE FLAG (temporary).
+ *
+ * When true, freshly staged submissions are promoted to the master Warehouse
+ * immediately on creation instead of waiting in the PENDING review queue.
+ * Flip to false to restore manual admin approval.
+ *
+ * Auto-approval is best-effort: a submission that fails strict warehouse
+ * validation (e.g. a partial PARTNER_API ingest payload) is left PENDING for a
+ * human to fix rather than failing the submission outright.
+ */
+const AUTO_APPROVE_SUBMISSIONS = true;
+
+/** Reviewer attribution recorded on rows promoted by the auto-approve flag. */
+const AUTO_APPROVE_REVIEWER = Object.freeze({
+    email: 'system:auto-approve',
+    name: 'Auto Approver',
+});
+
 /** Default page size for the review queue when the caller doesn't specify a limit. */
 const DEFAULT_LIST_LIMIT = 100;
 
@@ -81,7 +100,8 @@ class StagingService extends BaseService {
                 submittedBy: scout.email || scout.name,
             });
             await this.autofillCoordinatesFromUrl(staged);
-            return this.stagedWarehouseModel.create(staged);
+            const created = await this.stagedWarehouseModel.create(staged);
+            return this.maybeAutoApprove(created);
         });
     }
 
@@ -104,7 +124,8 @@ class StagingService extends BaseService {
                 submittedBy: user.email,
             });
             await this.autofillCoordinatesFromUrl(staged);
-            return this.stagedWarehouseModel.create(staged);
+            const created = await this.stagedWarehouseModel.create(staged);
+            return this.maybeAutoApprove(created);
         });
     }
 
@@ -127,7 +148,8 @@ class StagingService extends BaseService {
         return this.executeOperation(async () => {
             const staged = this.toStagedRow(submission, { source, submittedBy });
             await this.autofillCoordinatesFromUrl(staged);
-            return this.stagedWarehouseModel.create(staged);
+            const created = await this.stagedWarehouseModel.create(staged);
+            return this.maybeAutoApprove(created);
         });
     }
 
@@ -362,6 +384,27 @@ class StagingService extends BaseService {
     }
 
     // --- helpers ---
+
+    /**
+     * Auto-approve hook for freshly staged rows. When AUTO_APPROVE_SUBMISSIONS is
+     * on, promote the row immediately and return the refreshed (APPROVED) row.
+     * Best-effort: if the row can't be validated/promoted (e.g. a partial ingest
+     * payload that fails strict validation), it's left PENDING and returned as-is.
+     * @param {Object} staged - The just-created staged row
+     * @returns {Promise<Object>} The staged row (APPROVED if promotion succeeded)
+     * @private
+     */
+    async maybeAutoApprove(staged) {
+        if (!AUTO_APPROVE_SUBMISSIONS) return staged;
+        try {
+            await this.approveSubmission(staged.id, AUTO_APPROVE_REVIEWER);
+        } catch (error) {
+            // Leave the row PENDING for manual review if it can't be auto-approved.
+            if (error && error.name === 'ValidationError') return staged;
+            throw error;
+        }
+        return this.stagedWarehouseModel.findByStagedId(staged.id);
+    }
 
     /**
      * Flatten a warehouse payload (with nested warehouseData) into mirror columns,
