@@ -2,6 +2,7 @@ const BaseController = require('./baseController');
 const GoogleOAuthService = require('../services/googleOAuthService');
 const JWTService = require('../services/jwtService');
 const { isAdmin } = require('../utils/admin');
+const { CAPS, resolveCapabilities, can } = require('../utils/access');
 
 /**
  * Authentication Controller
@@ -45,6 +46,9 @@ class AuthController extends BaseController {
             // Generate JWT token
             const jwtToken = this.jwtService.generateToken(oauthResult.user);
 
+            // Resolve service capabilities for the frontend gates
+            const capabilities = await resolveCapabilities(oauthResult.user.email);
+
             // Prepare user data
             const userData = {
                 id: oauthResult.user.id,
@@ -52,7 +56,9 @@ class AuthController extends BaseController {
                 name: oauthResult.user.name,
                 picture: oauthResult.user.picture,
                 domain: this.jwtService.extractDomain(oauthResult.user.email),
-                isAdmin: isAdmin(oauthResult.user.email)
+                capabilities,
+                isAdmin: can(capabilities, CAPS.ADMIN),
+                isReviewer: can(capabilities, CAPS.REVIEW)
             };
 
             // Audit the login
@@ -245,6 +251,8 @@ class AuthController extends BaseController {
             // Decode new token to get user info
             const decoded = this.jwtService.verifyToken(newToken);
 
+            const capabilities = await resolveCapabilities(decoded.email);
+
             const responseData = {
                 success: true,
                 token: newToken,
@@ -255,7 +263,9 @@ class AuthController extends BaseController {
                     name: decoded.name,
                     picture: decoded.picture,
                     domain: decoded.domain,
-                    isAdmin: isAdmin(decoded.email)
+                    capabilities,
+                    isAdmin: can(capabilities, CAPS.ADMIN),
+                    isReviewer: can(capabilities, CAPS.REVIEW)
                 }
             };
 
@@ -326,6 +336,8 @@ class AuthController extends BaseController {
                 );
             }
 
+            const capabilities = await resolveCapabilities(user.email);
+
             const responseData = {
                 success: true,
                 user: {
@@ -334,7 +346,9 @@ class AuthController extends BaseController {
                     name: user.name,
                     picture: user.picture,
                     domain: user.domain,
-                    isAdmin: !!user.isAdmin
+                    capabilities,
+                    isAdmin: can(capabilities, CAPS.ADMIN),
+                    isReviewer: can(capabilities, CAPS.REVIEW)
                 }
             };
 

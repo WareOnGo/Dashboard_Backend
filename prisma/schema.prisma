@@ -43,6 +43,14 @@ model VerifiedNumber {
   twenty_user_id String?   @unique(map: "verified_number_twenty_user_id_key")
   email          String?   @unique(map: "verified_number_email_key")
   empID          String?   @unique(map: "verified_number_empID_key")
+  // Legacy single-role field; retained but no longer drives access. Access is now
+  // capability-based via the boolean columns below (see src/utils/access.js).
+  role           String    @default("EMPLOYEE")
+  // --- Service-based access capabilities (each defaults off; granted per user) ---
+  dashboardAccess     Boolean @default(false) // main warehouse dashboard
+  callDashboardAccess Boolean @default(false) // call dashboard service
+  reviewerAccess      Boolean @default(false) // staging review panel (no delete)
+  adminAccess         Boolean @default(false) // full access incl. delete; implies all others
   Employee       Employee?
 }
 
@@ -277,6 +285,8 @@ model Ticket {
   submittedByEmpID String
   createdAt        DateTime      @default(now())
   updatedAt        DateTime
+  approvedAmount   Decimal?      @db.Decimal(12, 2)
+  expenseDate      DateTime?     @db.Date
   Attachment       Attachment[]
   Employee         Employee      @relation(fields: [submittedByEmpID], references: [empID])
   TicketEvent      TicketEvent[]
@@ -296,42 +306,23 @@ model TicketEvent {
   @@index([ticketId])
 }
 
-enum AttachmentKind {
-  IMAGE
-  DOCUMENT
-}
-
-enum TicketStatus {
-  PENDING
-  REVIEW
-  APPROVED
-  REJECTED
-  CANCELLED
-}
-
 /// Staging / validation layer for inbound warehouse submissions (Scout + external endpoints).
 /// Rows are reviewed, edited, and approved in the dashboard before promotion to Warehouse.
 /// All mirrored Warehouse/WarehouseData columns are nullable so ingest never bounces data.
 /// See docs/STAGING_VALIDATION_LAYER.md.
 model StagedWarehouse {
-  id              String        @id @default(uuid())
-
-  // --- pipeline / review metadata ---
-  reviewStatus    StagingStatus @default(PENDING) // named reviewStatus to avoid collision with mirrored `status`
-  source          String                          // 'SCOUT' | 'PARTNER_API' | ...
-  submittedBy     String                          // scout email / api key id
-  submittedAt     DateTime      @default(now())
-  reviewedBy      String?
-  reviewedAt      DateTime?
-  rejectionReason String?
-  warehouseId     Int?                            // SOFT reference to promoted master row (no @relation / FK)
-
-  // --- raw snapshot + reserved correction hooks (null for now) ---
-  rawPayload      Json?                           // immutable copy of the submission as received
-  flags           Json?                           // [{field, severity, message, source, suggestedValue?}]
-  reviewMeta      Json?                           // AI provenance: model, confidence, runAt
-
-  // --- mirrored Warehouse columns (all nullable) ---
+  id                          String        @id @default(uuid())
+  reviewStatus                StagingStatus @default(PENDING)
+  source                      String
+  submittedBy                 String
+  submittedAt                 DateTime      @default(now())
+  reviewedBy                  String?
+  reviewedAt                  DateTime?
+  rejectionReason             String?
+  warehouseId                 Int?
+  rawPayload                  Json?
+  flags                       Json?
+  reviewMeta                  Json?
   warehouseOwnerType          String?
   warehouseType               String?
   address                     String?
@@ -391,26 +382,38 @@ model StagedWarehouse {
   wogVerified                 Boolean?
   centreHeight                String?
   listing_type                String?
-  status                      String?    // mirrors Warehouse.status (construction status)
-  handoverDate                DateTime?  @db.Date
-  lockInDate                  DateTime?  @db.Date
+  status                      String?
+  handoverDate                DateTime?     @db.Date
+  lockInDate                  DateTime?     @db.Date
   cam                         String?
   chargeableArea              Int?
-
-  // --- mirrored WarehouseData columns (all nullable) ---
-  latitude            Float?
-  longitude           Float?
-  fireNocAvailable    Boolean?
-  fireSafetyMeasures  String?
-  landType            String?
-  approachRoadWidth   String?
-  dimensions          String?
-  parkingDockingSpace String?
-  pollutionZone       String?
-  powerKva            String?
-  vaastuCompliance    String?
+  latitude                    Float?
+  longitude                   Float?
+  fireNocAvailable            Boolean?
+  fireSafetyMeasures          String?
+  landType                    String?
+  approachRoadWidth           String?
+  dimensions                  String?
+  parkingDockingSpace         String?
+  pollutionZone               String?
+  powerKva                    String?
+  vaastuCompliance            String?
 
   @@index([reviewStatus, submittedAt])
+}
+
+enum AttachmentKind {
+  IMAGE
+  DOCUMENT
+}
+
+enum TicketStatus {
+  PENDING
+  REVIEW
+  APPROVED
+  CLEARED
+  REJECTED
+  CANCELLED
 }
 
 enum StagingStatus {
@@ -418,5 +421,4 @@ enum StagingStatus {
   IN_REVIEW
   APPROVED
   REJECTED
-  // headroom: FLAGGED / NEEDS_CORRECTION can be added later without renaming the above
 }

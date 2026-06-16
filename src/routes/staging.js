@@ -5,6 +5,7 @@ const rateLimit = require('express-rate-limit');
 const container = require('../container');
 const ValidationMiddleware = require('../middleware/validation');
 const { authMiddleware } = require('../middleware/authMiddleware');
+const { CAPS } = require('../utils/access');
 const { verifyWebhookSecret } = require('../middleware/webhookMiddleware');
 const StagingValidator = require('../validators/stagingValidator');
 
@@ -35,9 +36,11 @@ router.post('/ingest',
     stagingController.ingestSubmission,
 );
 
-// --- Admin-only review API (everything below) ---
-// Every remaining staging route is admin-only (decided): authenticate, then require admin.
-router.use(authMiddleware.authenticateJWT, authMiddleware.requireAdmin);
+// --- Review API (everything below) ---
+// Authenticate, then require the REVIEW capability. Reviewers (reviewerAccess) and admins both
+// pass here; the one exception is DELETE, which layers requireAdmin below so reviewers get no
+// delete access. requireAccess also stashes req.user.capabilities / isReviewer / isAdmin.
+router.use(authMiddleware.authenticateJWT, authMiddleware.requireAccess(CAPS.REVIEW));
 
 /**
  * GET /api/staging?reviewStatus=&page=&limit=
@@ -96,8 +99,11 @@ router.post('/:id/reopen',
 /**
  * DELETE /api/staging/:id
  * Delete a staged submission (does not remove a promoted master warehouse).
+ * Admin-only: requireAdmin layers on top of the panel-wide requireAccess(REVIEW) gate so
+ * reviewers cannot delete.
  */
 router.delete('/:id',
+    authMiddleware.requireAdmin,
     ValidationMiddleware.validateParams(StagingValidator.idSchema),
     stagingController.deleteSubmission,
 );
