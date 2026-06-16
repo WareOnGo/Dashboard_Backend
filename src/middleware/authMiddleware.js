@@ -1,5 +1,6 @@
 const JWTService = require('../services/jwtService');
 const { isAdmin } = require('../utils/admin');
+const { CAPS, resolveCapabilities, can } = require('../utils/access');
 
 /**
  * Authentication middleware for protecting routes with JWT validation
@@ -132,6 +133,40 @@ class AuthMiddleware {
             return this.sendForbiddenResponse(res, 'Admin access required', 'ADMIN_ONLY');
         }
         next();
+    };
+
+    /**
+     * Capability gate factory. Must be used after authenticateJWT.
+     *
+     * Resolves the caller's capability set from the DB (env-admins/adminAccess get all caps)
+     * and stashes it on req.user for downstream handlers/middleware:
+     *   - req.user.capabilities — { DASHBOARD, CALL_DASHBOARD, REVIEW, ADMIN } booleans
+     *   - req.user.isAdmin      — promoted to true if the user holds the ADMIN capability
+     *   - req.user.isReviewer   — convenience mirror of the REVIEW capability (frontend back-compat)
+     *
+     * @param {string} capability - one of CAPS (e.g. CAPS.REVIEW)
+     * @returns {Function} Express middleware
+     *
+     * @example router.use(authenticateJWT, requireAccess(CAPS.REVIEW))
+     */
+    requireAccess = (capability) => async (req, res, next) => {
+        if (!req.user || !req.user.isAuthenticated) {
+            return this.sendUnauthorizedResponse(res, 'Authentication required');
+        }
+
+        try {
+            const caps = await resolveCapabilities(req.user.email);
+            req.user.capabilities = caps;
+            req.user.isAdmin = req.user.isAdmin || can(caps, CAPS.ADMIN);
+            req.user.isReviewer = can(caps, CAPS.REVIEW);
+
+            if (!can(caps, capability)) {
+                return this.sendForbiddenResponse(res, `${capability} access required`, 'FORBIDDEN_CAPABILITY');
+            }
+            next();
+        } catch (error) {
+            return this.handleAuthenticationError(error, res);
+        }
     };
 
     /**
@@ -282,6 +317,7 @@ class AuthMiddleware {
             optionalAuthentication: instance.optionalAuthentication,
             requireDomain: instance.requireDomain,
             requireAdmin: instance.requireAdmin,
+            requireAccess: instance.requireAccess,
             checkTokenExpiration: instance.checkTokenExpiration
         };
     }
