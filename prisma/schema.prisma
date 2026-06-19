@@ -7,6 +7,21 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// Reviewer-drawn micro-market areas (polygons) for the in-dashboard mapping tool.
+// Table created out-of-band; geometry is GeoJSON stored as jsonb.
+model MicroMarket {
+  id            String   @id @default(uuid())
+  name          String   @default("")
+  city          String   @default("")
+  geometry      Json
+  reviewerEmail String?
+  reviewerName  String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@map("micro_market")
+}
+
 model Draft {
   sender_number  String   @id
   status         String
