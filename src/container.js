@@ -5,16 +5,19 @@ const database = require('./utils/database');
 const WarehouseModel = require('./models/warehouseModel');
 const AuditLogModel = require('./models/auditLogModel');
 const StagedWarehouseModel = require('./models/stagedWarehouseModel');
+const MicroMarketModel = require('./models/microMarketModel');
 
 // Import Services
 const WarehouseService = require('./services/warehouseService');
 const FileUploadService = require('./services/fileUploadService');
 const AuditLogService = require('./services/auditLogService');
 const StagingService = require('./services/stagingService');
+const MicroMarketService = require('./services/microMarketService');
 
 // Import Controllers
 const WarehouseController = require('./controllers/warehouseController');
 const StagingController = require('./controllers/stagingController');
+const MicroMarketController = require('./controllers/microMarketController');
 
 /**
  * Dependency Injection Container
@@ -230,6 +233,22 @@ class Container {
         this.register('stagingController', (container) => {
             const stagingService = container.resolve('stagingService');
             return new StagingController(stagingService);
+        });
+
+        // Micro-markets (reviewer-drawn polygon areas)
+        this.registerSingleton('microMarketModel', () => {
+            const prismaClient = database.getClient();
+            return new MicroMarketModel(prismaClient);
+        });
+
+        this.registerSingleton('microMarketService', (container) => {
+            const microMarketModel = container.resolve('microMarketModel');
+            return new MicroMarketService(microMarketModel);
+        });
+
+        this.register('microMarketController', (container) => {
+            const microMarketService = container.resolve('microMarketService');
+            return new MicroMarketController(microMarketService);
         });
     }
 

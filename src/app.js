@@ -141,6 +141,12 @@ app.use('/api/warehouses', require('./routes/warehouse'));
  */
 app.use('/api/staging', require('./routes/staging'));
 
+/**
+ * Micro-market mapping routes (reviewer-gated)
+ * Reviewer-drawn polygon areas under /api/micro-markets
+ */
+app.use('/api/micro-markets', require('./routes/microMarkets'));
+
 // --- Basic Test Route ---
 
 /**
