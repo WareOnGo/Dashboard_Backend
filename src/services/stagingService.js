@@ -2,6 +2,7 @@
 const BaseService = require('./baseService');
 const WarehouseValidator = require('../validators/warehouseValidator');
 const { geocodeUrl } = require('../utils/googleMaps');
+const { deriveZone } = require('../utils/deriveZone');
 
 /**
  * The nested WarehouseData fields, flattened onto the StagedWarehouse mirror.
@@ -166,6 +167,13 @@ class StagingService extends BaseService {
     toStagedRow(submission, { source, submittedBy }) {
         const { warehouseData = {}, ...flatWarehouse } = submission;
 
+        // Autofill zone from state only when the client didn't send one. The Scout
+        // form dropped the field (so it's derived), while the dashboard form still
+        // lets a user pick/edit zone explicitly — that choice is respected here and
+        // on the edit path (editSubmission), keeping create and edit consistent.
+        const sentZone = typeof flatWarehouse.zone === 'string' ? flatWarehouse.zone.trim() : '';
+        const zone = sentZone || deriveZone(flatWarehouse.state);
+
         return {
             source,
             submittedBy,
@@ -176,6 +184,11 @@ class StagingService extends BaseService {
             // Mirror columns: top-level warehouse fields + flattened nested geo/extra fields.
             ...flatWarehouse,
             ...warehouseData,
+
+            // Zone is derived from state server-side (clients no longer send it), so the
+            // value stays canonical. Must come after the spreads to win over any
+            // client-sent zone.
+            zone,
 
             // Forced fields — must win over anything in the submission.
             uploadedBy: submittedBy,
