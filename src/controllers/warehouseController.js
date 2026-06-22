@@ -114,7 +114,7 @@ class WarehouseController extends BaseController {
                 warehouseType: req.body.warehouseType,
                 city: req.body.city,
                 state: req.body.state,
-                zone: req.body.zone
+                zone: staged.zone // derived server-side from state
             });
 
             // NOTE: returns a staged row (uuid id, reviewStatus=PENDING), not a master
@@ -155,7 +155,7 @@ class WarehouseController extends BaseController {
                 warehouseType: req.body.warehouseType,
                 city: req.body.city,
                 state: req.body.state,
-                zone: req.body.zone
+                zone: staged.zone // derived server-side from state
             });
 
             // Send created response. NOTE: the returned object is a staged row

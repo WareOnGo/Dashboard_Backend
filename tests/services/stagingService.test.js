@@ -34,6 +34,33 @@ describe('StagingService mapping', () => {
             // raw snapshot preserved (with nesting)
             expect(row.rawPayload.warehouseData.powerKva).toBe('500');
         });
+
+        it('derives zone from state when no zone is supplied (Scout form drops the field)', () => {
+            const submission = { ...baseSubmission(), state: 'Maharashtra' };
+            delete submission.zone;
+            const row = svc.toStagedRow(submission, { source: 'SCOUT', submittedBy: scout.email });
+            expect(row.zone).toBe('WEST');
+        });
+
+        it('respects a client-sent zone (dashboard form still lets users pick it)', () => {
+            // Karnataka would derive to SOUTH, but the dashboard explicitly chose North.
+            const submission = { ...baseSubmission(), state: 'Karnataka', zone: 'North' };
+            const row = svc.toStagedRow(submission, { source: 'DASHBOARD', submittedBy: scout.email });
+            expect(row.zone).toBe('North');
+        });
+
+        it('treats a blank/whitespace zone as absent and derives from state', () => {
+            const submission = { ...baseSubmission(), state: 'Tamil Nadu', zone: '   ' };
+            const row = svc.toStagedRow(submission, { source: 'SCOUT', submittedBy: scout.email });
+            expect(row.zone).toBe('SOUTH');
+        });
+
+        it('falls back to MISC when the state is unmappable and no zone was sent', () => {
+            const submission = { ...baseSubmission(), state: 'Atlantis' };
+            delete submission.zone;
+            const row = svc.toStagedRow(submission, { source: 'PARTNER_API', submittedBy: scout.email });
+            expect(row.zone).toBe('MISC');
+        });
     });
 
     describe('buildPromotionPayload', () => {

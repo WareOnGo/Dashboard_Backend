@@ -32,7 +32,9 @@ class WarehouseValidator extends BaseValidator {
         address: z.string().min(1, "address is required"),
         city: z.string().min(1, "city is required"),
         state: z.string().min(1, "state is required"),
-        zone: z.string().min(1, "zone is required"),
+        // Zone is autofilled server-side from `state` (see deriveZone). Accepted if
+        // sent, but no longer required from clients (the Scout form dropped it).
+        zone: z.string().optional().nullable(),
         contactPerson: z.string().min(1, "contactPerson is required"),
         contactNumber: z.string().min(1, "contactNumber is required"),
         totalSpaceSqft: z.array(z.number().int()).min(1, "totalSpaceSqft is required"),
