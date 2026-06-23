@@ -1,5 +1,6 @@
 // src/controllers/stagingController.js
 const BaseController = require('./baseController');
+const gupshupService = require('../services/gupshupService');
 
 /**
  * StagingController — admin-facing review API for the validation layer.
@@ -108,7 +109,17 @@ class StagingController extends BaseController {
             const reviewer = { email: req.user.email, name: req.user.name, ip: req.ip };
             // The APPROVE audit entry is written by the model, right after the atomic status claim.
             const warehouse = await this.stagingService.approveSubmission(req.params.id, reviewer);
-            this.sendCreated(res, warehouse);
+
+            // Best-effort WhatsApp notification to the submitter (no-op unless the feature flag is on).
+            // Source the message from the promoted warehouse itself so any reviewer edits made
+            // before approval are reflected. uploadedBy carries through as the original submitter.
+            const notification = await gupshupService.notifyReviewDecision({
+                outcome: 'APPROVED',
+                row: { ...warehouse, submittedBy: warehouse.uploadedBy },
+                warehouseId: warehouse.id,
+            });
+
+            this.sendCreated(res, { ...warehouse, notification });
         } catch (error) {
             this.handleServiceError(res, error, next);
         }
@@ -124,7 +135,14 @@ class StagingController extends BaseController {
                 reviewer,
                 req.body.rejectionReason,
             );
-            this.sendSuccess(res, submission);
+
+            // Best-effort WhatsApp notification to the submitter (no-op unless the feature flag is on).
+            const notification = await gupshupService.notifyReviewDecision({
+                outcome: 'REJECTED',
+                row: submission,
+            });
+
+            this.sendSuccess(res, { ...submission, notification });
         } catch (error) {
             this.handleServiceError(res, error, next);
         }

@@ -33,7 +33,7 @@ const REVIEWABLE = new Set(['PENDING']);
  * validation (e.g. a partial PARTNER_API ingest payload) is left PENDING for a
  * human to fix rather than failing the submission outright.
  */
-const AUTO_APPROVE_SUBMISSIONS = true;
+const AUTO_APPROVE_SUBMISSIONS = false;
 
 /** Reviewer attribution recorded on rows promoted by the auto-approve flag. */
 const AUTO_APPROVE_REVIEWER = Object.freeze({
