@@ -51,6 +51,21 @@ const config = {
     secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
     bucketName: process.env.R2_BUCKET_NAME,
     publicUrl: process.env.R2_PUBLIC_URL
+  },
+
+  // Gupshup WhatsApp — review-outcome notifications to the employee who submitted.
+  // OFF by default: only flip GUPSHUP_ENABLED=true once the review flow goes live.
+  // See src/services/gupshupService.js.
+  gupshup: {
+    // Master kill-switch. Anything other than the string 'true' keeps it off.
+    enabled: process.env.GUPSHUP_ENABLED === 'true',
+    apiKey: process.env.GUPSHUP_API_KEY,
+    endpoint: process.env.GUPSHUP_ENDPOINT || 'https://api.gupshup.io/wa/api/v1/template/msg',
+    source: process.env.GUPSHUP_SOURCE,            // registered WABA phone in E.164 form
+    srcName: process.env.GUPSHUP_SRC_NAME,         // Gupshup app name
+    templateId: process.env.GUPSHUP_TEMPLATE_ID,   // approved utility template id
+    // Fixed comment sent on approvals (approvals carry no reviewer note today).
+    approveComment: process.env.GUPSHUP_APPROVE_COMMENT || 'Approved, your submission is now live.'
   }
 };
 
