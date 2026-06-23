@@ -50,13 +50,14 @@ class StagedWarehouseModel extends BaseModel {
      */
     async findAll({ reviewStatus, skip, take } = {}) {
         try {
-            return await this.model.findMany({
+            const rows = await this.model.findMany({
                 where: reviewStatus ? { reviewStatus } : undefined,
                 orderBy: { submittedAt: 'desc' },
                 omit: { rawPayload: true, flags: true, reviewMeta: true },
                 skip,
                 take,
             });
+            return this.annotateWarehouseExistence(rows);
         } catch (error) {
             this.handleDatabaseError(error);
         }
@@ -69,10 +70,57 @@ class StagedWarehouseModel extends BaseModel {
      */
     async findByStagedId(id) {
         try {
-            return await this.model.findUnique({ where: { id } });
+            const row = await this.model.findUnique({ where: { id } });
+            if (!row) return null;
+            await this.annotateWarehouseExistence([row]);
+            return row;
         } catch (error) {
             this.handleDatabaseError(error);
         }
+    }
+
+    /**
+     * Annotate each row with `warehouseDeleted` — true when an APPROVED row still
+     * points at a master Warehouse (`warehouseId`) that no longer exists. Computed
+     * at read time (one batched existence query) so the review panel reflects
+     * reality no matter how the warehouse was removed — direct API delete, manual
+     * DB delete, or future code — with no stored flag to keep in sync. The
+     * `warehouseId` column has no FK, so this is the source of truth for the UI.
+     *
+     * Best-effort: if the existence check fails, rows are left unflagged
+     * (warehouseDeleted=false) so a live listing is never falsely marked deleted.
+     * @param {Array<Object>} rows
+     * @returns {Promise<Array<Object>>} the same rows, each with `warehouseDeleted: boolean`
+     * @private
+     */
+    async annotateWarehouseExistence(rows) {
+        const ids = [...new Set(
+            rows
+                .filter((r) => r.reviewStatus === 'APPROVED' && r.warehouseId != null)
+                .map((r) => r.warehouseId),
+        )];
+
+        let liveIds = new Set();
+        if (ids.length) {
+            try {
+                const found = await this.prisma.warehouse.findMany({
+                    where: { id: { in: ids } },
+                    select: { id: true },
+                });
+                liveIds = new Set(found.map((w) => w.id));
+            } catch (err) {
+                console.error('StagedWarehouseModel: warehouse existence check failed', err.message);
+                for (const row of rows) row.warehouseDeleted = false;
+                return rows;
+            }
+        }
+
+        for (const row of rows) {
+            row.warehouseDeleted = row.reviewStatus === 'APPROVED'
+                && row.warehouseId != null
+                && !liveIds.has(row.warehouseId);
+        }
+        return rows;
     }
 
     /**
