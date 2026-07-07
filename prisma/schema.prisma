@@ -7,17 +7,15 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// Reviewer-drawn micro-market areas (polygons) for the in-dashboard mapping tool.
-// Table created out-of-band; geometry is GeoJSON stored as jsonb.
 model MicroMarket {
   id            String   @id @default(uuid())
   name          String   @default("")
   city          String   @default("")
   geometry      Json
+  createdAt     DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime @default(now()) @updatedAt @db.Timestamptz(6)
   reviewerEmail String?
   reviewerName  String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
 
   @@map("micro_market")
 }
@@ -50,23 +48,25 @@ model MessageLog {
 }
 
 model VerifiedNumber {
-  id             Int       @id @default(autoincrement())
-  phone_number   String    @unique
-  name           String
-  is_active      Boolean   @default(true)
-  created_at     DateTime  @default(now())
-  twenty_user_id String?   @unique(map: "verified_number_twenty_user_id_key")
-  email          String?   @unique(map: "verified_number_email_key")
-  empID          String?   @unique(map: "verified_number_empID_key")
-  // Legacy single-role field; retained but no longer drives access. Access is now
-  // capability-based via the boolean columns below (see src/utils/access.js).
-  role           String    @default("EMPLOYEE")
-  // --- Service-based access capabilities (each defaults off; granted per user) ---
-  dashboardAccess     Boolean @default(false) // main warehouse dashboard
-  callDashboardAccess Boolean @default(false) // call dashboard service
-  reviewerAccess      Boolean @default(false) // staging review panel (no delete)
-  adminAccess         Boolean @default(false) // full access incl. delete; implies all others
-  Employee       Employee?
+  id                  Int            @id @default(autoincrement())
+  phone_number        String         @unique
+  name                String
+  is_active           Boolean        @default(true)
+  created_at          DateTime       @default(now())
+  twenty_user_id      String?        @unique(map: "verified_number_twenty_user_id_key")
+  email               String?        @unique(map: "verified_number_email_key")
+  empID               String?        @unique(map: "verified_number_empID_key")
+  role                String         @default("EMPLOYEE")
+  adminAccess         Boolean        @default(false)
+  callDashboardAccess Boolean        @default(false)
+  dashboardAccess     Boolean        @default(false)
+  reviewerAccess      Boolean        @default(false)
+  Employee            Employee?
+  agent_session       agent_session?
+  conversation        conversation?
+  media_context       media_context?
+  reminder            reminder[]
+  task                task[]
 }
 
 /// This model contains an expression index which requires additional setup for migrations. Visit https://pris.ly/d/expression-indexes for more info.
@@ -417,6 +417,58 @@ model StagedWarehouse {
   @@index([reviewStatus, submittedAt])
 }
 
+model agent_session {
+  sender_number  String         @id
+  agent          String
+  expires_at     DateTime
+  updated_at     DateTime
+  VerifiedNumber VerifiedNumber @relation(fields: [sender_number], references: [phone_number], onDelete: Cascade)
+}
+
+model conversation {
+  sender_number  String         @id
+  turns          Json
+  updated_at     DateTime
+  VerifiedNumber VerifiedNumber @relation(fields: [sender_number], references: [phone_number], onDelete: Cascade)
+}
+
+model media_context {
+  sender_number  String         @id
+  kind           String
+  r2_url         String?
+  mime           String?
+  text           String?
+  truncated      Boolean        @default(false)
+  expires_at     DateTime
+  updated_at     DateTime
+  VerifiedNumber VerifiedNumber @relation(fields: [sender_number], references: [phone_number], onDelete: Cascade)
+}
+
+model reminder {
+  id             Int            @id @default(autoincrement())
+  sender_number  String
+  from_number    String
+  text           String
+  due_at         DateTime
+  status         String         @default("pending")
+  created_at     DateTime       @default(now())
+  VerifiedNumber VerifiedNumber @relation(fields: [sender_number], references: [phone_number], onDelete: Cascade)
+
+  @@index([status, due_at])
+}
+
+model task {
+  id             Int            @id @default(autoincrement())
+  sender_number  String
+  text           String
+  done           Boolean        @default(false)
+  created_at     DateTime       @default(now())
+  done_at        DateTime?
+  VerifiedNumber VerifiedNumber @relation(fields: [sender_number], references: [phone_number], onDelete: Cascade)
+
+  @@index([sender_number, done])
+}
+
 enum AttachmentKind {
   IMAGE
   DOCUMENT
@@ -436,4 +488,18 @@ enum StagingStatus {
   IN_REVIEW
   APPROVED
   REJECTED
+}
+
+/// Generic runtime settings store, namespaced by application so multiple apps can
+/// share it. One row per setting; `value` is JSONB (bool/string/number/object).
+/// e.g. { application: "dashboard", key: "auto_approve_submissions", value: true }.
+model AppSetting {
+  application String
+  key         String
+  value       Json
+  updatedBy   String?
+  updatedAt   DateTime @updatedAt
+
+  @@id([application, key])
+  @@map("app_setting")
 }
