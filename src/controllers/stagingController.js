@@ -10,11 +10,38 @@ const gupshupService = require('../services/gupshupService');
 class StagingController extends BaseController {
     /**
      * @param {StagingService} stagingService
+     * @param {SettingsService} settingsService
      */
-    constructor(stagingService) {
+    constructor(stagingService, settingsService) {
         super();
         this.stagingService = stagingService;
+        this.settingsService = settingsService;
     }
+
+    /** GET /api/staging/settings/auto-approve — current autopilot state (reviewer-visible). */
+    getAutoApprove = this.asyncHandler(async (req, res, next) => {
+        try {
+            const enabled = await this.settingsService.getAutoApprove();
+            this.sendSuccess(res, { enabled });
+        } catch (error) {
+            this.handleServiceError(res, error, next);
+        }
+    });
+
+    /** PATCH /api/staging/settings/auto-approve — flip autopilot (admin-only). Body: { enabled: boolean }. */
+    setAutoApprove = this.asyncHandler(async (req, res, next) => {
+        try {
+            if (typeof req.body?.enabled !== 'boolean') {
+                return this.sendError(res, 'Body must include a boolean "enabled".', 400);
+            }
+            const enabled = await this.settingsService.setAutoApprove(req.body.enabled, req.user.email);
+            req.audit('UPDATE', 'app_setting', 'auto_approve_submissions',
+                `Auto-approve ${enabled ? 'ENABLED' : 'DISABLED'}`, { enabled });
+            this.sendSuccess(res, { enabled });
+        } catch (error) {
+            this.handleServiceError(res, error, next);
+        }
+    });
 
     /**
      * Map service-thrown client errors (4xx) to responses; let 5xx bubble to the
