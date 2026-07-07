@@ -2,6 +2,10 @@
 const BaseService = require('./baseService');
 const WarehouseValidator = require('../validators/warehouseValidator');
 
+/** Server-side pagination defaults for the warehouse list. */
+const DEFAULT_PAGE_SIZE = 20;
+const MAX_PAGE_SIZE = 100;
+
 /**
  * WarehouseService class for handling warehouse business logic
  * Contains all business operations for warehouse management
@@ -27,20 +31,95 @@ class WarehouseService extends BaseService {
      */
     async getAllWarehouses(options = {}) {
         return this.executeOperation(async () => {
-            // Validate query parameters if provided
-            if (Object.keys(options).length > 0) {
-                this.validateData(options, (data) => WarehouseValidator.validateQuery(data));
-            }
+            // Validate + coerce query params (page/limit → numbers, unknown keys stripped).
+            const filters = (options && Object.keys(options).length > 0)
+                ? this.validateData(options, (data) => WarehouseValidator.validateQuery(data))
+                : {};
 
-            // Apply business rules for filtering
-            const queryOptions = this.buildQueryOptions(options);
-            
-            // Fetch warehouses from model
-            const warehouses = await this.warehouseModel.findAll(queryOptions);
-            
-            // Apply business transformations
-            return this.transformWarehouseList(warehouses);
+            const fetchAll = filters.all === 'true';
+            const page = filters.page && filters.page > 0 ? filters.page : 1;
+            const limit = filters.limit && filters.limit > 0
+                ? Math.min(filters.limit, MAX_PAGE_SIZE)
+                : DEFAULT_PAGE_SIZE;
+
+            const where = await this.resolveWhere(filters);
+            const orderBy = filters.sortBy
+                ? { [filters.sortBy]: filters.sortOrder || 'desc' }
+                : { createdAt: 'desc' };
+
+            // Page rows + total count fetched together; count uses the same where clause
+            // so the pager total always matches the filtered set. With all=true we skip
+            // paging and return the whole filtered set (full-data consumers).
+            const findArgs = { where, orderBy };
+            if (!fetchAll) {
+                findArgs.skip = (page - 1) * limit;
+                findArgs.take = limit;
+            }
+            const [rows, total] = await Promise.all([
+                this.warehouseModel.findAll(findArgs),
+                this.warehouseModel.count(where),
+            ]);
+
+            return {
+                data: this.transformWarehouseList(rows),
+                pagination: fetchAll
+                    ? { page: 1, limit: total, total, totalPages: 1 }
+                    : { page, limit, total, totalPages: Math.ceil(total / limit) },
+            };
         });
+    }
+
+    /**
+     * Get coordinates ({ id, lat, lng }) for ALL warehouses matching the given
+     * filters — no pagination. Lets the map plot the full filtered set while the
+     * list view pages. Uses the same filter resolution as the list, so the map and
+     * the list always agree. Rows without coordinates are dropped (can't be plotted).
+     * @param {Object} options - Same query params as getAllWarehouses (paging/sort ignored)
+     * @returns {Array<{id:number, lat:number, lng:number}>}
+     */
+    async getWarehouseCoordinates(options = {}) {
+        return this.executeOperation(async () => {
+            const filters = (options && Object.keys(options).length > 0)
+                ? this.validateData(options, (data) => WarehouseValidator.validateQuery(data))
+                : {};
+
+            const where = await this.resolveWhere(filters);
+            const rows = await this.warehouseModel.findCoordinates(where);
+
+            return rows
+                .map((w) => ({
+                    id: w.id,
+                    lat: w.WarehouseData?.latitude ?? null,
+                    lng: w.WarehouseData?.longitude ?? null,
+                }))
+                .filter((p) => p.lat != null && p.lng != null);
+        });
+    }
+
+    /**
+     * Resolve validated query filters into a Prisma `where`, including the numeric
+     * ranges that need a raw id pre-query (area on Int[] totalSpaceSqft, budget on
+     * String ratePerSqft). Shared by the list and coordinates endpoints so they
+     * filter identically.
+     * @param {Object} filters - Validated query params
+     * @returns {Promise<Object>} Prisma where clause
+     * @private
+     */
+    async resolveWhere(filters) {
+        const where = this.buildWhere(filters);
+
+        const ranges = {
+            areaMin: filters.minArea,
+            areaMax: filters.maxArea,
+            budgetMin: filters.minRate,
+            budgetMax: filters.maxRate,
+        };
+        if (Object.values(ranges).some((v) => v != null)) {
+            const ids = await this.warehouseModel.findIdsByNumericRange(ranges);
+            where.id = { in: ids || [] };
+        }
+
+        return where;
     }
 
     /**
@@ -214,57 +293,73 @@ class WarehouseService extends BaseService {
      * @returns {Object} Processed query options
      * @private
      */
-    buildQueryOptions(options) {
-        const queryOptions = {};
-        
-        // Handle pagination
-        if (options.page && options.limit) {
-            queryOptions.skip = (options.page - 1) * options.limit;
-            queryOptions.take = options.limit;
-        }
-        
-        // Handle sorting
-        if (options.sortBy) {
-            queryOptions.orderBy = {
-                [options.sortBy]: options.sortOrder || 'desc'
-            };
-        }
-        
-        // Handle filtering - build where clause
+    /**
+     * Build a Prisma `where` clause from validated query filters.
+     *
+     * Step 1 covers the "easy" filters (top-level string/boolean columns + free-text
+     * search). The harder ones — budget range (ratePerSqft is a String), area range
+     * (totalSpaceSqft is Int[]), and nested WarehouseData filters (fireNoc/landType) —
+     * are handled in a later step.
+     *
+     * @param {Object} filters - Validated query params
+     * @returns {Object} Prisma where clause ({} = match all)
+     * @private
+     */
+    buildWhere(filters) {
         const where = {};
-        if (options.city) {
-            where.city = {
-                contains: options.city,
-                mode: 'insensitive'
-            };
+        // Relation filters and multi-clause conditions go in an AND array so they
+        // compose cleanly with the top-level keys and the search OR.
+        const and = [];
+
+        // Free-text search across the common string columns. A purely numeric term
+        // also matches the warehouse id exactly (substring-on-id is a separate step).
+        if (filters.search && filters.search.trim()) {
+            const term = filters.search.trim();
+            const or = [
+                { address: { contains: term, mode: 'insensitive' } },
+                { city: { contains: term, mode: 'insensitive' } },
+                { contactPerson: { contains: term, mode: 'insensitive' } },
+                { warehouseType: { contains: term, mode: 'insensitive' } },
+                { warehouseOwnerType: { contains: term, mode: 'insensitive' } },
+            ];
+            if (/^\d+$/.test(term)) or.push({ id: Number(term) });
+            where.OR = or;
         }
-        
-        if (options.state) {
-            where.state = {
-                contains: options.state,
-                mode: 'insensitive'
-            };
+
+        // Simple case-insensitive "contains" filters on top-level string columns.
+        const containsFields = [
+            'city', 'state', 'zone', 'warehouseType',
+            'warehouseOwnerType', 'availability', 'isBroker', 'uploadedBy',
+        ];
+        for (const field of containsFields) {
+            if (filters[field]) {
+                where[field] = { contains: filters[field], mode: 'insensitive' };
+            }
         }
-        
-        if (options.zone) {
-            where.zone = {
-                contains: options.zone,
-                mode: 'insensitive'
-            };
+
+        // Visibility ('visible' | 'hidden'). 'hidden' includes both false and null,
+        // matching the old client-side semantics (anything not explicitly visible).
+        if (filters.visibility === 'visible') {
+            where.visibility = true;
+        } else if (filters.visibility === 'hidden') {
+            and.push({ OR: [{ visibility: false }, { visibility: null }] });
         }
-        
-        if (options.warehouseType) {
-            where.warehouseType = {
-                contains: options.warehouseType,
-                mode: 'insensitive'
-            };
+
+        // Fire NOC lives on the WarehouseData relation. 'available' => true;
+        // 'not_available' => everything else (false, null, or no WarehouseData row).
+        if (filters.fireNoc === 'available') {
+            and.push({ WarehouseData: { is: { fireNocAvailable: true } } });
+        } else if (filters.fireNoc === 'not_available') {
+            and.push({ NOT: { WarehouseData: { is: { fireNocAvailable: true } } } });
         }
-        
-        if (Object.keys(where).length > 0) {
-            queryOptions.where = where;
+
+        // Land type also lives on WarehouseData.
+        if (filters.landType) {
+            and.push({ WarehouseData: { is: { landType: { contains: filters.landType, mode: 'insensitive' } } } });
         }
-        
-        return queryOptions;
+
+        if (and.length > 0) where.AND = and;
+        return where;
     }
 
     /**

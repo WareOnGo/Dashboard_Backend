@@ -1,4 +1,5 @@
 // src/models/warehouseModel.js
+const { Prisma } = require('@prisma/client');
 const BaseModel = require('./baseModel');
 const { photosToMedia } = require('../utils/mediaUtils');
 
@@ -24,8 +25,85 @@ class WarehouseModel extends BaseModel {
                 orderBy: { createdAt: 'desc' },
                 ...options
             };
-            
+
             return await this.model.findMany(defaultOptions);
+        } catch (error) {
+            this.handleDatabaseError(error);
+        }
+    }
+
+    /**
+     * Count warehouses matching a Prisma `where` clause. Used alongside findAll
+     * for server-side pagination (total result count for the pager).
+     * @param {Object} [where] - Prisma where clause (empty = count all)
+     * @returns {number} Matching row count
+     */
+    async count(where = {}) {
+        try {
+            return await this.model.count({ where });
+        } catch (error) {
+            this.handleDatabaseError(error);
+        }
+    }
+
+    /**
+     * Return ids of warehouses matching numeric range filters that Prisma's typed
+     * `where` can't express, via raw SQL:
+     *  - area:   any element of the `totalSpaceSqft` (Int[]) column within [min,max]
+     *  - budget: `ratePerSqft` (a String column) parsed to a number within [min,max]
+     * The budget parse strips non-numeric chars and only casts well-formed numbers
+     * (mirrors the old client-side `parseFloat(rate.replace(/[^\d.]/g,''))`), so a
+     * malformed value is simply excluded rather than throwing.
+     *
+     * @param {Object} ranges - { areaMin?, areaMax?, budgetMin?, budgetMax? }
+     * @returns {number[]|null} Matching ids, or null when no range was supplied
+     */
+    async findIdsByNumericRange({ areaMin, areaMax, budgetMin, budgetMax } = {}) {
+        try {
+            const conditions = [];
+
+            if (areaMin != null || areaMax != null) {
+                const lo = areaMin ?? 0;
+                const hi = areaMax ?? 2147483647;
+                conditions.push(
+                    Prisma.sql`EXISTS (SELECT 1 FROM unnest("totalSpaceSqft") AS e WHERE e BETWEEN ${lo} AND ${hi})`,
+                );
+            }
+
+            if (budgetMin != null || budgetMax != null) {
+                const lo = budgetMin ?? 0;
+                const hi = budgetMax ?? 1000000000;
+                const cleaned = Prisma.sql`regexp_replace(COALESCE("ratePerSqft", ''), '[^0-9.]', '', 'g')`;
+                conditions.push(
+                    Prisma.sql`(CASE WHEN ${cleaned} ~ '^[0-9]+(\\.[0-9]+)?$' THEN ${cleaned}::double precision ELSE NULL END) BETWEEN ${lo} AND ${hi}`,
+                );
+            }
+
+            if (conditions.length === 0) return null;
+
+            const whereClause = Prisma.join(conditions, ' AND ');
+            const rows = await this.prisma.$queryRaw`SELECT id FROM "Warehouse" WHERE ${whereClause}`;
+            return rows.map((r) => Number(r.id));
+        } catch (error) {
+            this.handleDatabaseError(error);
+        }
+    }
+
+    /**
+     * Fetch id + coordinates for every warehouse matching `where` (no pagination).
+     * Coordinates live on the WarehouseData relation. Used by the map endpoint.
+     * @param {Object} [where] - Prisma where clause
+     * @returns {Array<{id:number, WarehouseData:{latitude:number|null, longitude:number|null}|null}>}
+     */
+    async findCoordinates(where = {}) {
+        try {
+            return await this.model.findMany({
+                where,
+                select: {
+                    id: true,
+                    WarehouseData: { select: { latitude: true, longitude: true } },
+                },
+            });
         } catch (error) {
             this.handleDatabaseError(error);
         }
