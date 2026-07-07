@@ -23,17 +23,18 @@ const STAGING_META_FIELDS = new Set([
 const REVIEWABLE = new Set(['PENDING']);
 
 /**
- * AUTO-APPROVE FLAG (temporary).
+ * AUTO-APPROVE ("autopilot").
  *
- * When true, freshly staged submissions are promoted to the master Warehouse
- * immediately on creation instead of waiting in the PENDING review queue.
- * Flip to false to restore manual admin approval.
+ * When on, freshly staged submissions are promoted to the master Warehouse
+ * immediately on creation instead of waiting in the PENDING review queue. The
+ * state now lives in the DB (app_setting) and is toggled at runtime by an admin
+ * from the review panel — see SettingsService.getAutoApprove(). It is read per
+ * submission in maybeAutoApprove().
  *
  * Auto-approval is best-effort: a submission that fails strict warehouse
  * validation (e.g. a partial PARTNER_API ingest payload) is left PENDING for a
  * human to fix rather than failing the submission outright.
  */
-const AUTO_APPROVE_SUBMISSIONS = true;
 
 /** Reviewer attribution recorded on rows promoted by the auto-approve flag. */
 const AUTO_APPROVE_REVIEWER = Object.freeze({
@@ -75,10 +76,11 @@ function validationError(message, issues) {
  * docs/STAGING_VALIDATION_LAYER.md.
  */
 class StagingService extends BaseService {
-    constructor(stagedWarehouseModel, warehouseService) {
+    constructor(stagedWarehouseModel, warehouseService, settingsService) {
         super();
         this.stagedWarehouseModel = stagedWarehouseModel;
         this.warehouseService = warehouseService;
+        this.settingsService = settingsService;
     }
 
     /**
@@ -399,16 +401,27 @@ class StagingService extends BaseService {
     // --- helpers ---
 
     /**
-     * Auto-approve hook for freshly staged rows. When AUTO_APPROVE_SUBMISSIONS is
-     * on, promote the row immediately and return the refreshed (APPROVED) row.
-     * Best-effort: if the row can't be validated/promoted (e.g. a partial ingest
-     * payload that fails strict validation), it's left PENDING and returned as-is.
+     * Auto-approve hook for freshly staged rows. When autopilot is on (DB setting,
+     * see SettingsService), promote the row immediately and return the refreshed
+     * (APPROVED) row. Best-effort: if the row can't be validated/promoted (e.g. a
+     * partial ingest payload that fails strict validation), it's left PENDING and
+     * returned as-is.
+     *
+     * Fail-safe: if the auto-approve setting can't be read (transient DB error),
+     * the row is left PENDING for manual review rather than auto-published.
      * @param {Object} staged - The just-created staged row
      * @returns {Promise<Object>} The staged row (APPROVED if promotion succeeded)
      * @private
      */
     async maybeAutoApprove(staged) {
-        if (!AUTO_APPROVE_SUBMISSIONS) return staged;
+        let enabled;
+        try {
+            enabled = await this.settingsService.getAutoApprove();
+        } catch (error) {
+            console.error('maybeAutoApprove: could not read auto-approve setting, leaving PENDING:', error.message);
+            return staged;
+        }
+        if (!enabled) return staged;
         try {
             await this.approveSubmission(staged.id, AUTO_APPROVE_REVIEWER);
         } catch (error) {

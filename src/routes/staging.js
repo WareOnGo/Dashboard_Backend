@@ -52,6 +52,17 @@ router.get('/',
 );
 
 /**
+ * Auto-approve ("autopilot") toggle. GET is visible to any reviewer (so the panel
+ * can show current state); PATCH is admin-only. Registered before /:id so
+ * "settings" isn't captured as a submission id.
+ */
+router.get('/settings/auto-approve', stagingController.getAutoApprove);
+router.patch('/settings/auto-approve',
+    authMiddleware.requireAdmin,
+    stagingController.setAutoApprove,
+);
+
+/**
  * GET /api/staging/:id
  */
 router.get('/:id',

@@ -6,6 +6,7 @@ const WarehouseModel = require('./models/warehouseModel');
 const AuditLogModel = require('./models/auditLogModel');
 const StagedWarehouseModel = require('./models/stagedWarehouseModel');
 const MicroMarketModel = require('./models/microMarketModel');
+const AppSettingModel = require('./models/appSettingModel');
 
 // Import Services
 const WarehouseService = require('./services/warehouseService');
@@ -13,6 +14,7 @@ const FileUploadService = require('./services/fileUploadService');
 const AuditLogService = require('./services/auditLogService');
 const StagingService = require('./services/stagingService');
 const MicroMarketService = require('./services/microMarketService');
+const SettingsService = require('./services/settingsService');
 
 // Import Controllers
 const WarehouseController = require('./controllers/warehouseController');
@@ -215,10 +217,22 @@ class Container {
             return new StagedWarehouseModel(prismaClient);
         });
 
+        // Generic app settings store (runtime toggles like auto-approve)
+        this.registerSingleton('appSettingModel', () => {
+            const prismaClient = database.getClient();
+            return new AppSettingModel(prismaClient);
+        });
+
+        this.registerSingleton('settingsService', (container) => {
+            const appSettingModel = container.resolve('appSettingModel');
+            return new SettingsService(appSettingModel);
+        });
+
         this.registerSingleton('stagingService', (container) => {
             const stagedWarehouseModel = container.resolve('stagedWarehouseModel');
             const warehouseService = container.resolve('warehouseService');
-            return new StagingService(stagedWarehouseModel, warehouseService);
+            const settingsService = container.resolve('settingsService');
+            return new StagingService(stagedWarehouseModel, warehouseService, settingsService);
         });
 
         // Register Controllers (transient - new instance per request if needed)
@@ -232,7 +246,8 @@ class Container {
 
         this.register('stagingController', (container) => {
             const stagingService = container.resolve('stagingService');
-            return new StagingController(stagingService);
+            const settingsService = container.resolve('settingsService');
+            return new StagingController(stagingService, settingsService);
         });
 
         // Micro-markets (reviewer-drawn polygon areas)
