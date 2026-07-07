@@ -91,6 +91,7 @@ class WarehouseService extends BaseService {
                     id: w.id,
                     lat: w.WarehouseData?.latitude ?? null,
                     lng: w.WarehouseData?.longitude ?? null,
+                    availability: w.availability ?? null,
                 }))
                 .filter((p) => p.lat != null && p.lng != null);
         });

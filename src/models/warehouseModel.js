@@ -101,6 +101,9 @@ class WarehouseModel extends BaseModel {
                 where,
                 select: {
                     id: true,
+                    // availability drives the marker color on the map (kept lightweight);
+                    // all other card/detail fields are lazy-loaded on marker click.
+                    availability: true,
                     WarehouseData: { select: { latitude: true, longitude: true } },
                 },
             });
