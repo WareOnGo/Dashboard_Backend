@@ -28,40 +28,45 @@ class WarehouseController extends BaseController {
      */
     getAllWarehouses = this.asyncHandler(async (req, res, next) => {
         try {
-            // Extract query parameters for filtering and pagination
-            const options = {
-                page: req.query.page ? parseInt(req.query.page) : undefined,
-                limit: req.query.limit ? parseInt(req.query.limit) : undefined,
-                city: req.query.city,
-                state: req.query.state,
-                zone: req.query.zone,
-                warehouseType: req.query.warehouseType,
-                sortBy: req.query.sortBy,
-                sortOrder: req.query.sortOrder,
-                // Add user context for potential filtering or audit
-                requestedBy: req.user.id,
-                requestedByEmail: req.user.email
-            };
-
-            // Remove undefined values
-            Object.keys(options).forEach(key => {
-                if (options[key] === undefined) {
-                    delete options[key];
-                }
-            });
-
-            // Get warehouses from service
-            const warehouses = await this.warehouseService.getAllWarehouses(options);
+            // The service validates/coerces the query params and returns a paginated
+            // envelope: { data, pagination: { page, limit, total, totalPages } }.
+            const result = await this.warehouseService.getAllWarehouses(req.query);
 
             req.audit('READ', 'warehouse', null, 'Listed warehouses', {
-                filters: { city: options.city, state: options.state, zone: options.zone, warehouseType: options.warehouseType },
-                page: options.page,
-                limit: options.limit,
-                resultCount: warehouses.data?.length ?? warehouses.length
+                filters: {
+                    search: req.query.search,
+                    city: req.query.city,
+                    state: req.query.state,
+                    zone: req.query.zone,
+                    warehouseType: req.query.warehouseType,
+                },
+                page: result.pagination?.page,
+                limit: result.pagination?.limit,
+                resultCount: result.data?.length ?? 0,
             });
 
             // Send successful response
-            this.sendSuccess(res, warehouses);
+            this.sendSuccess(res, result);
+        } catch (error) {
+            next(error);
+        }
+    });
+
+    /**
+     * GET /api/warehouses/coordinates
+     * Lightweight { id, lat, lng } for ALL warehouses matching the current filters
+     * (no pagination) so the map can stay complete while the list view pages.
+     * Accepts the same filter query params as GET /api/warehouses.
+     */
+    getWarehouseCoordinates = this.asyncHandler(async (req, res, next) => {
+        try {
+            const data = await this.warehouseService.getWarehouseCoordinates(req.query);
+
+            req.audit('READ', 'warehouse', null, 'Listed warehouse coordinates', {
+                resultCount: data.length,
+            });
+
+            this.sendSuccess(res, data);
         } catch (error) {
             next(error);
         }

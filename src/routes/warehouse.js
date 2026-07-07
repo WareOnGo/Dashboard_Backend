@@ -50,9 +50,19 @@ router.get('/search',
 /**
  * GET /api/warehouses/statistics
  */
-router.get('/statistics', 
+router.get('/statistics',
     authMiddleware.authenticateJWT,
     warehouseController.getWarehouseStatistics
+);
+
+/**
+ * GET /api/warehouses/coordinates
+ * All matching { id, lat, lng } for the map (no pagination). Registered before
+ * /:id so it isn't captured as an id param.
+ */
+router.get('/coordinates',
+    authMiddleware.authenticateJWT,
+    warehouseController.getWarehouseCoordinates
 );
 
 /**
