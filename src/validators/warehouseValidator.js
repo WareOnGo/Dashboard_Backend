@@ -128,12 +128,31 @@ class WarehouseValidator extends BaseValidator {
     static warehouseQuerySchema = z.object({
         page: z.string().regex(/^\d+$/).transform(Number).optional(),
         limit: z.string().regex(/^\d+$/).transform(Number).optional(),
+        // Escape hatch: 'true' returns ALL matching rows (no paging) for full-data
+        // consumers (itinerary/PPT builder, micro-market mapping). The Dashboard list
+        // never sets this.
+        all: z.enum(['true']).optional(),
+        // Free-text search (matches across address/city/contactPerson/type/owner-type,
+        // plus exact id when the term is numeric).
+        search: z.string().optional(),
         city: z.string().optional(),
         state: z.string().optional(),
         zone: z.string().optional(),
         warehouseType: z.string().optional(),
-        minSpace: z.string().regex(/^\d+$/).transform(Number).optional(),
-        maxSpace: z.string().regex(/^\d+$/).transform(Number).optional(),
+        warehouseOwnerType: z.string().optional(),
+        availability: z.string().optional(),
+        isBroker: z.string().optional(),
+        uploadedBy: z.string().optional(),
+        landType: z.string().optional(),
+        // Matches the dashboard filter vocabulary.
+        visibility: z.enum(['visible', 'hidden']).optional(),
+        fireNoc: z.enum(['available', 'not_available']).optional(),
+        // Numeric range filters (resolved server-side via a raw id pre-query because
+        // ratePerSqft is a String column and totalSpaceSqft is an Int[]).
+        minArea: z.string().regex(/^\d+$/).transform(Number).optional(),
+        maxArea: z.string().regex(/^\d+$/).transform(Number).optional(),
+        minRate: z.string().regex(/^\d+(\.\d+)?$/).transform(Number).optional(),
+        maxRate: z.string().regex(/^\d+(\.\d+)?$/).transform(Number).optional(),
         sortBy: z.enum(['createdAt', 'totalSpaceSqft', 'ratePerSqft']).optional(),
         sortOrder: z.enum(['asc', 'desc']).optional()
     });
