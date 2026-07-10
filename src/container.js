@@ -7,6 +7,7 @@ const AuditLogModel = require('./models/auditLogModel');
 const StagedWarehouseModel = require('./models/stagedWarehouseModel');
 const MicroMarketModel = require('./models/microMarketModel');
 const AppSettingModel = require('./models/appSettingModel');
+const VerifiedNumberModel = require('./models/verifiedNumberModel');
 
 // Import Services
 const WarehouseService = require('./services/warehouseService');
@@ -20,6 +21,7 @@ const SettingsService = require('./services/settingsService');
 const WarehouseController = require('./controllers/warehouseController');
 const StagingController = require('./controllers/stagingController');
 const MicroMarketController = require('./controllers/microMarketController');
+const VerifiedNumberController = require('./controllers/verifiedNumberController');
 
 /**
  * Dependency Injection Container
@@ -264,6 +266,17 @@ class Container {
         this.register('microMarketController', (container) => {
             const microMarketService = container.resolve('microMarketService');
             return new MicroMarketController(microMarketService);
+        });
+
+        // Verified numbers (WareOnGo POCs — read-only lookup for pickers)
+        this.registerSingleton('verifiedNumberModel', () => {
+            const prismaClient = database.getClient();
+            return new VerifiedNumberModel(prismaClient);
+        });
+
+        this.register('verifiedNumberController', (container) => {
+            const verifiedNumberModel = container.resolve('verifiedNumberModel');
+            return new VerifiedNumberController(verifiedNumberModel);
         });
     }
 
