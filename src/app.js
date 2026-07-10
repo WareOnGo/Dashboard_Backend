@@ -147,6 +147,12 @@ app.use('/api/staging', require('./routes/staging'));
  */
 app.use('/api/micro-markets', require('./routes/microMarkets'));
 
+/**
+ * Verified numbers routes
+ * WareOnGo POC lookup (name + number) under /api/verified-numbers
+ */
+app.use('/api/verified-numbers', require('./routes/verifiedNumbers'));
+
 // --- Basic Test Route ---
 
 /**
