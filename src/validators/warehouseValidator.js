@@ -105,6 +105,7 @@ class WarehouseValidator extends BaseValidator {
 
         cam: z.string().optional().nullable(),
         chargeableArea: z.coerce.number().int().optional().nullable(),
+        scoutNotes: z.string().optional().nullable(),
 
         // Nested object
         warehouseData: this.warehouseDataSchema,

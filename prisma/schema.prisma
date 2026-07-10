@@ -138,6 +138,7 @@ model Warehouse {
   status                      String?
   cam                         String?
   chargeableArea              Int?
+  scoutNotes                  String?
   WarehouseData               WarehouseData?
 
   @@index([address(ops: raw("gin_trgm_ops"))], map: "idx_warehouse_address_trgm", type: Gin)
@@ -402,6 +403,7 @@ model StagedWarehouse {
   lockInDate                  DateTime?     @db.Date
   cam                         String?
   chargeableArea              Int?
+  scoutNotes                  String?
   latitude                    Float?
   longitude                   Float?
   fireNocAvailable            Boolean?
