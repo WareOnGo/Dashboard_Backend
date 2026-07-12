@@ -4,6 +4,7 @@ const router = express.Router();
 const container = require('../container');
 const validationMiddleware = require('../middleware/validation');
 const { authMiddleware } = require('../middleware/authMiddleware');
+const { CAPS } = require('../utils/access');
 const rateLimit = require('express-rate-limit');
 const { verifyScoutToken } = require('../middleware/scoutMiddleware');
 
@@ -67,9 +68,12 @@ router.get('/coordinates',
 
 /**
  * GET /api/warehouses/:id/contact-number
+ * Admin-only until the reveal-approval flow ships; non-admins get 403
+ * (FORBIDDEN_CAPABILITY) which the frontend surfaces as "Admin approval needed".
  */
 router.get('/:id/contact-number',
     authMiddleware.authenticateJWT,
+    authMiddleware.requireAccess(CAPS.ADMIN),
     warehouseController.getContactNumber
 );
 
