@@ -8,6 +8,7 @@ const StagedWarehouseModel = require('./models/stagedWarehouseModel');
 const MicroMarketModel = require('./models/microMarketModel');
 const AppSettingModel = require('./models/appSettingModel');
 const VerifiedNumberModel = require('./models/verifiedNumberModel');
+const VisitNoteModel = require('./models/visitNoteModel');
 
 // Import Services
 const WarehouseService = require('./services/warehouseService');
@@ -16,12 +17,14 @@ const AuditLogService = require('./services/auditLogService');
 const StagingService = require('./services/stagingService');
 const MicroMarketService = require('./services/microMarketService');
 const SettingsService = require('./services/settingsService');
+const VisitNoteService = require('./services/visitNoteService');
 
 // Import Controllers
 const WarehouseController = require('./controllers/warehouseController');
 const StagingController = require('./controllers/stagingController');
 const MicroMarketController = require('./controllers/microMarketController');
 const VerifiedNumberController = require('./controllers/verifiedNumberController');
+const VisitNoteController = require('./controllers/visitNoteController');
 
 /**
  * Dependency Injection Container
@@ -277,6 +280,22 @@ class Container {
         this.register('verifiedNumberController', (container) => {
             const verifiedNumberModel = container.resolve('verifiedNumberModel');
             return new VerifiedNumberController(verifiedNumberModel);
+        });
+
+        // Visit notes (site-visit log per warehouse)
+        this.registerSingleton('visitNoteModel', () => {
+            const prismaClient = database.getClient();
+            return new VisitNoteModel(prismaClient);
+        });
+
+        this.registerSingleton('visitNoteService', (container) => {
+            const visitNoteModel = container.resolve('visitNoteModel');
+            return new VisitNoteService(visitNoteModel);
+        });
+
+        this.register('visitNoteController', (container) => {
+            const visitNoteService = container.resolve('visitNoteService');
+            return new VisitNoteController(visitNoteService);
         });
     }
 
