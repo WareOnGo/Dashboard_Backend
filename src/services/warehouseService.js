@@ -327,6 +327,15 @@ class WarehouseService extends BaseService {
             where.OR = or;
         }
 
+        // Explicit id list ("3,17,42"). Goes in the AND array so it intersects
+        // cleanly with the numeric-range id pre-query instead of clobbering it.
+        if (filters.ids) {
+            const idList = [...new Set(
+                filters.ids.split(',').map((s) => Number(s.trim())).filter((n) => Number.isInteger(n) && n > 0)
+            )];
+            and.push({ id: { in: idList } });
+        }
+
         // Simple case-insensitive "contains" filters on top-level string columns.
         const containsFields = [
             'city', 'state', 'zone', 'warehouseType',

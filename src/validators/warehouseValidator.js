@@ -133,6 +133,10 @@ class WarehouseValidator extends BaseValidator {
         // consumers (itinerary/PPT builder, micro-market mapping). The Dashboard list
         // never sets this.
         all: z.enum(['true']).optional(),
+        // Explicit id list: comma-separated integers ("3,17,42"). Composes with the
+        // other filters via AND. Used by the PPT/itinerary tools to resolve a handful
+        // of warehouses without pulling the full table (pair with all=true).
+        ids: z.string().regex(/^\s*\d+\s*(,\s*\d+\s*)*$/, "ids must be comma-separated integers").optional(),
         // Free-text search (matches across address/city/contactPerson/type/owner-type,
         // plus exact id when the term is numeric).
         search: z.string().optional(),
