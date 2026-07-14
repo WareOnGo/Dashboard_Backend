@@ -140,6 +140,7 @@ model Warehouse {
   chargeableArea              Int?
   scoutNotes                  String?
   WarehouseData               WarehouseData?
+  WarehouseVisitNote          WarehouseVisitNote[]
 
   @@index([address(ops: raw("gin_trgm_ops"))], map: "idx_warehouse_address_trgm", type: Gin)
   @@index([clearHeightFt], map: "idx_warehouse_clear_height")
@@ -504,4 +505,24 @@ model AppSetting {
 
   @@id([application, key])
   @@map("app_setting")
+}
+
+/// Site-visit log for a warehouse. One row per client visit; a warehouse can
+/// have many. Notes split into client feedback vs WareOnGo POC feedback.
+model WarehouseVisitNote {
+  id             Int       @id @default(autoincrement())
+  warehouseId    Int
+  client         String
+  clientPoc      String?
+  wareOnGoPoc    String?
+  visitDate      DateTime  @db.Date
+  clientFeedback String?
+  pocFeedback    String?
+  createdByEmail String?
+  createdByName  String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  Warehouse      Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+
+  @@index([warehouseId])
 }

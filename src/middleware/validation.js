@@ -2,6 +2,7 @@
 const { z } = require('zod');
 const ErrorHandler = require('./errorHandler');
 const WarehouseValidator = require('../validators/warehouseValidator');
+const VisitNoteValidator = require('../validators/visitNoteValidator');
 
 /**
  * Validation middleware for Express routes
@@ -291,6 +292,20 @@ class ValidationMiddleware {
         keyPrefix: z.string().optional(),
         uploadedBy: z.string().optional()
     }));
+
+    // --- Visit-note validation middleware ---
+
+    /**
+     * Middleware to validate visit note creation request
+     * @returns {Function} Express middleware function
+     */
+    static validateVisitNoteCreate = this.validateBody(VisitNoteValidator.createVisitNoteSchema);
+
+    /**
+     * Middleware to validate visit note update request
+     * @returns {Function} Express middleware function
+     */
+    static validateVisitNoteUpdate = this.validateBody(VisitNoteValidator.updateVisitNoteSchema);
 }
 
 module.exports = ValidationMiddleware;

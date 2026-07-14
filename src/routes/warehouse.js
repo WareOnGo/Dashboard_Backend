@@ -8,8 +8,9 @@ const { CAPS } = require('../utils/access');
 const rateLimit = require('express-rate-limit');
 const { verifyScoutToken } = require('../middleware/scoutMiddleware');
 
-// Get controller instance from container
+// Get controller instances from container
 const warehouseController = container.resolve('warehouseController');
+const visitNoteController = container.resolve('visitNoteController');
 
 // --- Rate Limiters & Scout Middleware ---
 const scoutRateLimiter = rateLimit({
@@ -75,6 +76,44 @@ router.get('/:id/contact-number',
     authMiddleware.authenticateJWT,
     authMiddleware.requireAccess(CAPS.ADMIN),
     warehouseController.getContactNumber
+);
+
+// --- Visit Notes (site-visit log per warehouse) ---
+
+/**
+ * GET /api/warehouses/:id/visit-notes
+ */
+router.get('/:id/visit-notes',
+    authMiddleware.authenticateJWT,
+    visitNoteController.list
+);
+
+/**
+ * POST /api/warehouses/:id/visit-notes
+ */
+router.post('/:id/visit-notes',
+    authMiddleware.authenticateJWT,
+    validationMiddleware.validateVisitNoteCreate,
+    visitNoteController.create
+);
+
+/**
+ * PUT /api/warehouses/:id/visit-notes/:noteId
+ */
+router.put('/:id/visit-notes/:noteId',
+    authMiddleware.authenticateJWT,
+    validationMiddleware.validateVisitNoteUpdate,
+    visitNoteController.update
+);
+
+/**
+ * DELETE /api/warehouses/:id/visit-notes/:noteId
+ * Admin-only, consistent with warehouse deletion.
+ */
+router.delete('/:id/visit-notes/:noteId',
+    authMiddleware.authenticateJWT,
+    authMiddleware.requireAccess(CAPS.ADMIN),
+    visitNoteController.remove
 );
 
 /**
