@@ -99,6 +99,15 @@ class WarehouseValidator extends BaseValidator {
         wogVerified: z.boolean().optional().nullable(),
         centreHeight: z.string().optional().nullable(),
 
+        // RCC-specific specs. Surfaced in the forms only when warehouseType is 'RCC',
+        // but accepted unconditionally here — an existing row keeps its values if the
+        // type is later changed, and the review/ingest paths reuse this schema.
+        totalFloors: z.string().optional().nullable(),
+        liftAccess: z.boolean().optional().nullable(),
+        passengerLiftCount: z.string().optional().nullable(),
+        serviceLiftCount: z.string().optional().nullable(),
+        liftLoadCapacity: z.string().optional().nullable(),
+
         status: z.enum(['Under construction', 'Build to suit', 'Ready to move']).optional().nullable(),
         handoverDate: z.coerce.date().optional().nullable(),
         lockInDate: z.coerce.date().optional().nullable(),

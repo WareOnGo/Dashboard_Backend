@@ -92,10 +92,10 @@ model Warehouse {
   uploadedBy                  String
   isBroker                    String?
   photos                      String?
-  createdAt                   DateTime?      @default(now())
-  status_updated_at           DateTime?      @updatedAt
-  id                          Int            @id @default(autoincrement())
-  visibility                  Boolean?       @default(false)
+  createdAt                   DateTime?            @default(now())
+  status_updated_at           DateTime?            @updatedAt
+  id                          Int                  @id @default(autoincrement())
+  visibility                  Boolean?             @default(false)
   media                       Json?
   alt_phone_number            String?
   land_parcel_size            String?
@@ -133,12 +133,17 @@ model Warehouse {
   centreHeight                String?
   listing_type                String?
   photosWebp                  String?
-  handoverDate                DateTime?      @db.Date
-  lockInDate                  DateTime?      @db.Date
+  handoverDate                DateTime?            @db.Date
+  lockInDate                  DateTime?            @db.Date
   status                      String?
   cam                         String?
   chargeableArea              Int?
   scoutNotes                  String?
+  totalFloors                 String?
+  liftAccess                  Boolean?
+  passengerLiftCount          String?
+  serviceLiftCount            String?
+  liftLoadCapacity            String?
   WarehouseData               WarehouseData?
   WarehouseVisitNote          WarehouseVisitNote[]
 
@@ -207,28 +212,54 @@ model VideoComposition {
 
 /// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
 model opportunities {
-  opportunity_id           String    @id
-  data                     Json
-  stage                    String?
-  assignee_email           String?
-  last_activity_at         DateTime  @default(now()) @db.Timestamptz(6)
-  created_at               DateTime  @default(now()) @db.Timestamptz(6)
-  reminder_1h_sent         Boolean   @default(false)
-  reminder_1d_sent         Boolean   @default(false)
-  reminder_3d_sent         Boolean   @default(false)
-  reminder_1h_failed       String?
-  reminder_1d_failed       String?
-  reminder_3d_failed       String?
-  reminder_1h_request_id   BigInt?
-  reminder_1h_attempted_at DateTime? @db.Timestamptz(6)
-  reminder_1h_attempts     Int       @default(0)
-  reminder_1d_request_id   BigInt?
-  reminder_1d_attempted_at DateTime? @db.Timestamptz(6)
-  reminder_1d_attempts     Int       @default(0)
-  reminder_3d_request_id   BigInt?
-  reminder_3d_attempted_at DateTime? @db.Timestamptz(6)
-  reminder_3d_attempts     Int       @default(0)
-  update_count             Int       @default(0)
+  opportunity_id              String    @id
+  data                        Json
+  stage                       String?
+  assignee_email              String?
+  last_activity_at            DateTime  @default(now()) @db.Timestamptz(6)
+  created_at                  DateTime  @default(now()) @db.Timestamptz(6)
+  reminder_1h_sent            Boolean   @default(false)
+  reminder_1d_sent            Boolean   @default(false)
+  reminder_3d_sent            Boolean   @default(false)
+  reminder_1h_failed          String?
+  reminder_1d_failed          String?
+  reminder_3d_failed          String?
+  reminder_1h_request_id      BigInt?
+  reminder_1h_attempted_at    DateTime? @db.Timestamptz(6)
+  reminder_1h_attempts        Int       @default(0)
+  reminder_1d_request_id      BigInt?
+  reminder_1d_attempted_at    DateTime? @db.Timestamptz(6)
+  reminder_1d_attempts        Int       @default(0)
+  reminder_3d_request_id      BigInt?
+  reminder_3d_attempted_at    DateTime? @db.Timestamptz(6)
+  reminder_3d_attempts        Int       @default(0)
+  update_count                Int       @default(0)
+  assigned_to                 Json?
+  city                        String?
+  company_name                String?
+  deleted_at                  DateTime? @db.Timestamptz(6)
+  first_seen_at               DateTime  @default(now()) @db.Timestamptz(6)
+  last_contacted              DateTime? @db.Timestamptz(6)
+  last_meaningful_update_at   DateTime? @db.Timestamptz(6)
+  last_meaningful_update_by   String?
+  last_meaningful_update_kind String?
+  last_note_at                DateTime? @db.Timestamptz(6)
+  last_note_text              String?
+  last_polled_at              DateTime? @db.Timestamptz(6)
+  last_task_at                DateTime? @db.Timestamptz(6)
+  name                        String?
+  next_follow_up              DateTime? @db.Timestamptz(6)
+  owner_id                    String?
+  priority                    String?
+  stage_entered_at            DateTime? @db.Timestamptz(6)
+  twenty_created_at           DateTime? @db.Timestamptz(6)
+  twenty_updated_at           DateTime? @db.Timestamptz(6)
+  closure_sent_at             DateTime? @db.Timestamptz(6)
+
+  @@index([assignee_email])
+  @@index([last_meaningful_update_at])
+  @@index([stage])
+  @@index([twenty_updated_at])
 }
 
 model googlemapscrapejobs {
@@ -404,7 +435,6 @@ model StagedWarehouse {
   lockInDate                  DateTime?     @db.Date
   cam                         String?
   chargeableArea              Int?
-  scoutNotes                  String?
   latitude                    Float?
   longitude                   Float?
   fireNocAvailable            Boolean?
@@ -416,6 +446,12 @@ model StagedWarehouse {
   pollutionZone               String?
   powerKva                    String?
   vaastuCompliance            String?
+  scoutNotes                  String?
+  totalFloors                 String?
+  liftAccess                  Boolean?
+  passengerLiftCount          String?
+  serviceLiftCount            String?
+  liftLoadCapacity            String?
 
   @@index([reviewStatus, submittedAt])
 }
@@ -472,27 +508,6 @@ model task {
   @@index([sender_number, done])
 }
 
-enum AttachmentKind {
-  IMAGE
-  DOCUMENT
-}
-
-enum TicketStatus {
-  PENDING
-  REVIEW
-  APPROVED
-  CLEARED
-  REJECTED
-  CANCELLED
-}
-
-enum StagingStatus {
-  PENDING
-  IN_REVIEW
-  APPROVED
-  REJECTED
-}
-
 /// Generic runtime settings store, namespaced by application so multiple apps can
 /// share it. One row per setting; `value` is JSONB (bool/string/number/object).
 /// e.g. { application: "dashboard", key: "auto_approve_submissions", value: true }.
@@ -525,4 +540,45 @@ model WarehouseVisitNote {
   Warehouse      Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
 
   @@index([warehouseId])
+}
+
+model stage_transitions {
+  id             BigInt   @id @default(autoincrement())
+  opportunity_id String
+  from_stage     String?
+  to_stage       String
+  changed_at     DateTime @db.Timestamptz(6)
+  detected_at    DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([opportunity_id])
+  @@index([to_stage])
+}
+
+model sync_checkpoints {
+  object          String    @id
+  last_updated_at DateTime? @db.Timestamptz(6)
+  last_run_at     DateTime? @db.Timestamptz(6)
+  last_run_status String?
+  last_error      String?
+}
+
+enum AttachmentKind {
+  IMAGE
+  DOCUMENT
+}
+
+enum TicketStatus {
+  PENDING
+  REVIEW
+  APPROVED
+  CLEARED
+  REJECTED
+  CANCELLED
+}
+
+enum StagingStatus {
+  PENDING
+  IN_REVIEW
+  APPROVED
+  REJECTED
 }
