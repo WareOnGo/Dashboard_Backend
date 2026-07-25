@@ -244,7 +244,10 @@ class WarehouseController extends BaseController {
 
     /**
      * Get contact number for a specific warehouse
-     * GET /api/warehouses/:id/contact-number
+     * GET /api/warehouses/:id/contact-number?reason=<deal>
+     *
+     * `reason` (the deal the number is needed for) is required by
+     * validationMiddleware.validateContactReveal and recorded with the audit entry.
      * @param {Object} req - Express request object
      * @param {Object} res - Express response object
      * @param {Function} next - Express next function
@@ -252,10 +255,12 @@ class WarehouseController extends BaseController {
     getContactNumber = this.asyncHandler(async (req, res, next) => {
         try {
             const id = this.extractId(req);
+            const { reason } = req.validatedQuery;
             const contactInfo = await this.warehouseService.getContactNumber(id);
 
-            req.audit('READ', 'contact', id.toString(), `Revealed contact number for warehouse ${id}`, {
-                warehouseId: id
+            req.audit('READ', 'contact', id.toString(), `Revealed contact number for warehouse ${id} — reason: ${reason}`, {
+                warehouseId: id,
+                reason
             });
 
             this.sendSuccess(res, contactInfo);

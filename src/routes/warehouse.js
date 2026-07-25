@@ -69,12 +69,13 @@ router.get('/coordinates',
 
 /**
  * GET /api/warehouses/:id/contact-number
- * Admin-only until the reveal-approval flow ships; non-admins get 403
- * (FORBIDDEN_CAPABILITY) which the frontend surfaces as "Admin approval needed".
+ * Open to any authenticated user, but the caller must say which deal they need the
+ * number for. The reason is validated here (not just in the UI) so it can't be skipped
+ * by hitting the API directly, and it lands in the audit log with the reveal.
  */
 router.get('/:id/contact-number',
     authMiddleware.authenticateJWT,
-    authMiddleware.requireAccess(CAPS.ADMIN),
+    validationMiddleware.validateContactReveal,
     warehouseController.getContactNumber
 );
 
