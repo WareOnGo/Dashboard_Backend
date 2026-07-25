@@ -277,6 +277,20 @@ class ValidationMiddleware {
     static validateWarehouseQuery = this.validateQuery(WarehouseValidator.warehouseQuerySchema);
 
     /**
+     * Middleware to validate a contact-number reveal.
+     *
+     * `reason` is the deal the caller needs the number for. It is required so every
+     * reveal in the audit log is attributable to a stated purpose.
+     * @returns {Function} Express middleware function
+     */
+    static validateContactReveal = this.validateQuery(z.object({
+        reason: z.string()
+            .trim()
+            .min(3, 'Tell us which deal you need this number for')
+            .max(280, 'Reason must be 280 characters or fewer'),
+    }));
+
+    /**
      * Middleware to validate file upload request
      * @returns {Function} Express middleware function
      */
