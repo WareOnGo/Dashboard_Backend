@@ -139,11 +139,12 @@ model Warehouse {
   cam                         String?
   chargeableArea              Int?
   scoutNotes                  String?
-  totalFloors                 String?
   liftAccess                  Boolean?
+  liftLoadCapacity            String?
   passengerLiftCount          String?
   serviceLiftCount            String?
-  liftLoadCapacity            String?
+  totalFloors                 String?
+  hasBorewell                 Boolean?
   WarehouseData               WarehouseData?
   WarehouseVisitNote          WarehouseVisitNote[]
 
@@ -447,11 +448,12 @@ model StagedWarehouse {
   powerKva                    String?
   vaastuCompliance            String?
   scoutNotes                  String?
-  totalFloors                 String?
   liftAccess                  Boolean?
+  liftLoadCapacity            String?
   passengerLiftCount          String?
   serviceLiftCount            String?
-  liftLoadCapacity            String?
+  totalFloors                 String?
+  hasBorewell                 Boolean?
 
   @@index([reviewStatus, submittedAt])
 }
