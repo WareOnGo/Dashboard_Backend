@@ -42,15 +42,24 @@ async function resolveViaCid(ftid) {
 
 /**
  * Extract coordinates directly out of a Google Maps URL string using the
- * various encodings Maps uses (@lat,lng, !3d!4d, /search/, ll=, q=, DMS).
+ * various encodings Maps uses (!3d!4d, /search/, ll=, q=, DMS, @lat,lng).
+ *
+ * Order matters. A place URL carries two different points: `!3d!4d` inside the
+ * data segment is the place pin, while `@lat,lng,zoom` is only the map viewport
+ * centre, which Maps offsets to make room for the side panel. Measured against
+ * live rows the two sit 200-400m apart, so the pin encodings are tried first
+ * and `@` is kept as a last resort for URLs that carry nothing else.
  *
  * @param {string} str
  * @returns {Coordinates|null}
  */
 function extractCoordsFromString(str) {
-  const m1 = str.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
-  if (m1) return { lat: parseFloat(m1[1]), lng: parseFloat(m1[2]), via: 'url_@' };
+  // Canonical place-pin block; the !8m2 prefix makes it unambiguous.
+  const m8 = str.match(/!8m2!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
+  if (m8) return { lat: parseFloat(m8[1]), lng: parseFloat(m8[2]), via: 'url_!8m2!3d!4d' };
 
+  // Bare pin block. The !3d/!4d adjacency matters: camera segments encode
+  // lat as !3d too, but follow it with !2m/!1f rather than !4d.
   const m3 = str.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
   if (m3) return { lat: parseFloat(m3[1]), lng: parseFloat(m3[2]), via: 'url_!3d!4d' };
 
@@ -73,6 +82,10 @@ function extractCoordsFromString(str) {
     if (dms[8] === 'W') lng = -lng;
     return { lat, lng, via: 'url_dms' };
   }
+
+  // Viewport centre — only correct when the URL has no place attached.
+  const m1 = str.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+  if (m1) return { lat: parseFloat(m1[1]), lng: parseFloat(m1[2]), via: 'url_@_viewport' };
 
   return null;
 }
