@@ -198,7 +198,10 @@ class Container {
         // Services contain business logic and are typically stateless
         this.registerSingleton('warehouseService', (container) => {
             const warehouseModel = container.resolve('warehouseModel');
-            return new WarehouseService(warehouseModel);
+            // Resolved lazily inside the factory, so registration order doesn't
+            // matter (microMarketService is registered further down).
+            const microMarketService = container.resolve('microMarketService');
+            return new WarehouseService(warehouseModel, microMarketService);
         });
 
         this.registerSingleton('fileUploadService', () => {

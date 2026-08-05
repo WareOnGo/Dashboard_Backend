@@ -16,6 +16,15 @@ class MicroMarketModel extends BaseModel {
         return this.model.findMany({ orderBy: { createdAt: 'asc' } });
     }
 
+    /**
+     * Just the columns point-in-polygon tagging needs. Skips reviewer/timestamp
+     * columns so the cached set stays small.
+     * @returns {Promise<Array<{id: string, name: string, geometry: Object}>>}
+     */
+    listForTagging() {
+        return this.model.findMany({ select: { id: true, name: true, geometry: true } });
+    }
+
     getById(id) {
         return this.model.findUnique({ where: { id: String(id) } });
     }

@@ -344,6 +344,9 @@ class StagingService extends BaseService {
             }
 
             const processed = this.warehouseService.applyCreateBusinessRules(result.data);
+            // Derive micro-market tags from the coordinates geocoded at submission
+            // time, so the promoted warehouse lands already tagged.
+            await this.warehouseService.applyMicroMarketTags(processed);
             // Approval couples visibility: approved => not hidden.
             processed.visibility = true;
             // wogVerified is a SEPARATE trust signal with its own process — approval never

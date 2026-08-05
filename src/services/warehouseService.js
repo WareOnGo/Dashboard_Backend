@@ -11,9 +11,37 @@ const MAX_PAGE_SIZE = 100;
  * Contains all business operations for warehouse management
  */
 class WarehouseService extends BaseService {
-    constructor(warehouseModel) {
+    /**
+     * @param {WarehouseModel} warehouseModel
+     * @param {MicroMarketService} [microMarketService] - optional; when absent,
+     *   writes simply go untagged rather than failing.
+     */
+    constructor(warehouseModel, microMarketService = null) {
         super();
         this.warehouseModel = warehouseModel;
+        this.microMarketService = microMarketService;
+    }
+
+    /**
+     * Stamp `micromarket` onto a warehouse payload from its coordinates, so the
+     * tag is derived server-side the moment coordinates are known (i.e. right
+     * after geocoding) rather than by a later sweep.
+     *
+     * Mutates and returns the payload. A no-op when the payload carries no
+     * coordinates, so a partial update that doesn't touch location leaves the
+     * existing tag alone.
+     *
+     * @param {Object} payload - Warehouse payload with nested `warehouseData`
+     * @returns {Promise<Object>} the same payload
+     */
+    async applyMicroMarketTags(payload) {
+        if (!this.microMarketService) return payload;
+
+        const { latitude, longitude } = payload?.warehouseData || {};
+        if (latitude == null || longitude == null) return payload;
+
+        payload.micromarket = await this.microMarketService.tagsForPoint(latitude, longitude);
+        return payload;
     }
 
     /**
@@ -160,7 +188,8 @@ class WarehouseService extends BaseService {
             
             // Apply business rules and transformations
             const processedData = this.applyCreateBusinessRules(validatedData);
-            
+            await this.applyMicroMarketTags(processedData);
+
             // Create warehouse through model
             const newWarehouse = await this.warehouseModel.create(processedData);
             
@@ -194,7 +223,10 @@ class WarehouseService extends BaseService {
             
             // Apply business rules for updates
             const processedData = this.applyUpdateBusinessRules(validatedData);
-            
+            // Re-tag only when this edit carries coordinates; a partial update that
+            // doesn't touch location keeps whatever tag the row already has.
+            await this.applyMicroMarketTags(processedData);
+
             // Update warehouse through model
             const updatedWarehouse = await this.warehouseModel.update(id, processedData);
             

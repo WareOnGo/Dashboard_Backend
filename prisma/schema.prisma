@@ -145,6 +145,7 @@ model Warehouse {
   serviceLiftCount            String?
   totalFloors                 String?
   hasBorewell                 Boolean?
+  micromarket                 String[]             @default([])
   WarehouseData               WarehouseData?
   WarehouseVisitNote          WarehouseVisitNote[]
 

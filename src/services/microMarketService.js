@@ -1,11 +1,19 @@
 // src/services/microMarketService.js
 const BaseService = require('./baseService');
+const { resolveTags } = require('../utils/microMarketGeometry');
 
 const clientError = (message, statusCode) => {
     const err = new Error(message);
     err.statusCode = statusCode;
     return err;
 };
+
+/**
+ * How long a cached polygon set is trusted. Writes made through this service
+ * bust the cache immediately, so the TTL only covers changes made out-of-band
+ * (direct SQL, the standalone micro-market-mapper app, another instance).
+ */
+const POLYGON_CACHE_TTL_MS = 5 * 60 * 1000;
 
 /**
  * MicroMarketService — CRUD for reviewer-drawn polygon areas.
@@ -19,10 +27,55 @@ class MicroMarketService extends BaseService {
     constructor(microMarketModel) {
         super();
         this.microMarketModel = microMarketModel;
+        /** @type {{ at: number, markets: Array }|null} Cached polygon set for tagging. */
+        this.polygonCache = null;
     }
 
     list() {
         return this.executeOperation(() => this.microMarketModel.listAll());
+    }
+
+    /** Drop the cached polygon set so the next tag call re-reads from the DB. */
+    invalidatePolygonCache() {
+        this.polygonCache = null;
+    }
+
+    /**
+     * The polygon set used for tagging, cached in memory.
+     *
+     * Worth caching: the containment maths costs ~8µs, but fetching the polygons
+     * over the Supabase pooler costs ~250-800ms. Uncached, every tagged write
+     * would pay that round trip. The whole set is ~17KB, so holding it is cheap.
+     * @private
+     */
+    async getPolygons() {
+        const fresh = this.polygonCache && Date.now() - this.polygonCache.at < POLYGON_CACHE_TTL_MS;
+        if (fresh) return this.polygonCache.markets;
+
+        const markets = await this.microMarketModel.listForTagging();
+        this.polygonCache = { at: Date.now(), markets };
+        return markets;
+    }
+
+    /**
+     * Micro-market tags for a coordinate pair — the names of every polygon
+     * containing the point (id as a fallback for unnamed polygons), sorted.
+     * Overlapping polygons are legitimate, hence an array.
+     *
+     * Never throws: tagging is an enrichment, so a polygon-fetch failure must not
+     * break the warehouse write that triggered it. Returns [] on failure.
+     * @param {number|null} lat
+     * @param {number|null} lon
+     * @returns {Promise<string[]>}
+     */
+    async tagsForPoint(lat, lon) {
+        if (lat == null || lon == null) return [];
+        try {
+            return resolveTags(await this.getPolygons(), lat, lon);
+        } catch (err) {
+            console.error('MicroMarketService: micro-market tagging failed', err.message);
+            return [];
+        }
     }
 
     create({ id, name, city, geometry, reviewer }) {
@@ -39,7 +92,9 @@ class MicroMarketService extends BaseService {
             };
             if (id != null) data.id = String(id);
             try {
-                return await this.microMarketModel.createOne(data);
+                const created = await this.microMarketModel.createOne(data);
+                this.invalidatePolygonCache();
+                return created;
             } catch (err) {
                 if (err.code === 'P2002') throw clientError('id already exists', 409);
                 throw err;
@@ -57,7 +112,9 @@ class MicroMarketService extends BaseService {
             if (reviewer?.email) data.reviewerEmail = reviewer.email;
             if (reviewer?.name) data.reviewerName = reviewer.name;
             try {
-                return await this.microMarketModel.updateById(id, data);
+                const updated = await this.microMarketModel.updateById(id, data);
+                this.invalidatePolygonCache();
+                return updated;
             } catch (err) {
                 if (err.code === 'P2025') throw clientError('not found', 404);
                 throw err;
@@ -73,6 +130,7 @@ class MicroMarketService extends BaseService {
                 // Idempotent: deleting a missing row is a no-op success.
                 if (err.code !== 'P2025') throw err;
             }
+            this.invalidatePolygonCache();
         });
     }
 }
