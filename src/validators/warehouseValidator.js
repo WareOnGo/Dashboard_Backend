@@ -110,7 +110,19 @@ class WarehouseValidator extends BaseValidator {
         liftLoadCapacity: z.string().optional().nullable(),
 
         status: z.enum(['Under construction', 'Build to suit', 'Ready to move']).optional().nullable(),
+
+        // Handover timing is either a precise date (FIXED) or a lead time relative to
+        // today (VARIABLE, e.g. 2 + MONTHS). handoverType picks which side is read;
+        // both are accepted and stored unconditionally so that toggling the mode back
+        // restores the previous value — same treatment as the RCC-only specs above.
+        // Validated per-field only, which also keeps the lenient staging ingest path
+        // (stagingValidator.ingestSchema aliases updateWarehouseSchema) accepting
+        // partial partner payloads.
         handoverDate: z.coerce.date().optional().nullable(),
+        handoverType: z.enum(['FIXED', 'VARIABLE']).optional().nullable(),
+        handoverLeadValue: z.coerce.number().int().positive().max(120).optional().nullable(),
+        handoverLeadUnit: z.enum(['DAYS', 'WEEKS', 'MONTHS']).optional().nullable(),
+
         lockInDate: z.coerce.date().optional().nullable(),
 
         cam: z.string().optional().nullable(),

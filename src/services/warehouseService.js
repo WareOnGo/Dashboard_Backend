@@ -433,7 +433,7 @@ class WarehouseService extends BaseService {
         if (processedData.totalSpaceSqft && Array.isArray(processedData.totalSpaceSqft)) {
             processedData.totalSpaceSqft = processedData.totalSpaceSqft.filter(space => space > 0);
         }
-        
+
         return processedData;
     }
 
@@ -455,7 +455,7 @@ class WarehouseService extends BaseService {
         if (processedData.totalSpaceSqft && Array.isArray(processedData.totalSpaceSqft)) {
             processedData.totalSpaceSqft = processedData.totalSpaceSqft.filter(space => space > 0);
         }
-        
+
         return processedData;
     }
 
