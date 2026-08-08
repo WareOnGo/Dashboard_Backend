@@ -134,6 +134,9 @@ model Warehouse {
   listing_type                String?
   photosWebp                  String?
   handoverDate                DateTime?            @db.Date
+  handoverType                HandoverType?
+  handoverLeadValue           Int?
+  handoverLeadUnit            HandoverLeadUnit?
   lockInDate                  DateTime?            @db.Date
   status                      String?
   cam                         String?
@@ -361,11 +364,11 @@ model TicketEvent {
 /// All mirrored Warehouse/WarehouseData columns are nullable so ingest never bounces data.
 /// See docs/STAGING_VALIDATION_LAYER.md.
 model StagedWarehouse {
-  id                          String        @id @default(uuid())
-  reviewStatus                StagingStatus @default(PENDING)
+  id                          String            @id @default(uuid())
+  reviewStatus                StagingStatus     @default(PENDING)
   source                      String
   submittedBy                 String
-  submittedAt                 DateTime      @default(now())
+  submittedAt                 DateTime          @default(now())
   reviewedBy                  String?
   reviewedAt                  DateTime?
   rejectionReason             String?
@@ -433,8 +436,11 @@ model StagedWarehouse {
   centreHeight                String?
   listing_type                String?
   status                      String?
-  handoverDate                DateTime?     @db.Date
-  lockInDate                  DateTime?     @db.Date
+  handoverDate                DateTime?         @db.Date
+  handoverType                HandoverType?
+  handoverLeadValue           Int?
+  handoverLeadUnit            HandoverLeadUnit?
+  lockInDate                  DateTime?         @db.Date
   cam                         String?
   chargeableArea              Int?
   latitude                    Float?
@@ -584,4 +590,23 @@ enum StagingStatus {
   IN_REVIEW
   APPROVED
   REJECTED
+}
+
+// How a warehouse's handover timing is expressed. FIXED means a precise calendar
+// date (handoverDate); VARIABLE means a lead time relative to today
+// (handoverLeadValue + handoverLeadUnit, e.g. "~2 months").
+//
+// handoverType selects which side is READ — it does not clear the other. Both are
+// kept so that toggling the mode back restores whatever was there before, the same
+// way the RCC-only columns survive a warehouseType change. Null on legacy rows,
+// which the UI reads as FIXED.
+enum HandoverType {
+  FIXED
+  VARIABLE
+}
+
+enum HandoverLeadUnit {
+  DAYS
+  WEEKS
+  MONTHS
 }

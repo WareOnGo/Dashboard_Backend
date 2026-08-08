@@ -111,6 +111,9 @@ const createWarehouseSchema = z.object({
 
     status: z.enum(['Under construction', 'Build to suit', 'Ready to move']).optional().nullable(),
     handoverDate: z.coerce.date().optional().nullable(),
+    handoverType: z.enum(['FIXED', 'VARIABLE']).optional().nullable(),
+    handoverLeadValue: z.coerce.number().int().positive().max(120).optional().nullable(),
+    handoverLeadUnit: z.enum(['DAYS', 'WEEKS', 'MONTHS']).optional().nullable(),
     lockInDate: z.coerce.date().optional().nullable(),
 
     cam: z.string().optional().nullable(),
