@@ -108,6 +108,7 @@ const createWarehouseSchema = z.object({
     lightingDetails: z.string().optional().nullable(),
     wogVerified: z.boolean().optional().nullable(),
     centreHeight: z.string().optional().nullable(),
+    waterSupply: z.enum(['NONE', 'BOREWELL', 'PIPELINE', 'TANKER', 'OTHERS']).optional().nullable(),
 
     status: z.enum(['Under construction', 'Build to suit', 'Ready to move']).optional().nullable(),
     handoverDate: z.coerce.date().optional().nullable(),
