@@ -134,9 +134,6 @@ model Warehouse {
   listing_type                String?
   photosWebp                  String?
   handoverDate                DateTime?            @db.Date
-  handoverType                HandoverType?
-  handoverLeadValue           Int?
-  handoverLeadUnit            HandoverLeadUnit?
   lockInDate                  DateTime?            @db.Date
   status                      String?
   cam                         String?
@@ -147,8 +144,11 @@ model Warehouse {
   passengerLiftCount          String?
   serviceLiftCount            String?
   totalFloors                 String?
-  hasBorewell                 Boolean?
   micromarket                 String[]             @default([])
+  handoverLeadUnit            HandoverLeadUnit?
+  handoverLeadValue           Int?
+  handoverType                HandoverType?
+  waterSupply                 WaterSupply?
   WarehouseData               WarehouseData?
   WarehouseVisitNote          WarehouseVisitNote[]
 
@@ -340,6 +340,8 @@ model Ticket {
   updatedAt        DateTime
   approvedAmount   Decimal?      @db.Decimal(12, 2)
   expenseDate      DateTime?     @db.Date
+  clientName       String?
+  dealName         String?
   Attachment       Attachment[]
   Employee         Employee      @relation(fields: [submittedByEmpID], references: [empID])
   TicketEvent      TicketEvent[]
@@ -437,9 +439,6 @@ model StagedWarehouse {
   listing_type                String?
   status                      String?
   handoverDate                DateTime?         @db.Date
-  handoverType                HandoverType?
-  handoverLeadValue           Int?
-  handoverLeadUnit            HandoverLeadUnit?
   lockInDate                  DateTime?         @db.Date
   cam                         String?
   chargeableArea              Int?
@@ -460,7 +459,10 @@ model StagedWarehouse {
   passengerLiftCount          String?
   serviceLiftCount            String?
   totalFloors                 String?
-  hasBorewell                 Boolean?
+  handoverLeadUnit            HandoverLeadUnit?
+  handoverLeadValue           Int?
+  handoverType                HandoverType?
+  waterSupply                 WaterSupply?
 
   @@index([reviewStatus, submittedAt])
 }
@@ -571,6 +573,29 @@ model sync_checkpoints {
   last_error      String?
 }
 
+model Guide {
+  id              Int         @id @default(autoincrement())
+  slug            String      @unique
+  title           String
+  seoTitle        String
+  description     String
+  summary         String
+  keywords        String[]    @default([])
+  blocks          Json
+  faqs            Json
+  related         String[]    @default([])
+  datePublished   DateTime?   @db.Date
+  dateModified    DateTime    @db.Date
+  sortOrder       Int         @default(0)
+  status          GuideStatus @default(DRAFT)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime
+  deployedAt      DateTime?
+  deployedContent Json?
+
+  @@index([status, sortOrder])
+}
+
 enum AttachmentKind {
   IMAGE
   DOCUMENT
@@ -592,14 +617,14 @@ enum StagingStatus {
   REJECTED
 }
 
-// How a warehouse's handover timing is expressed. FIXED means a precise calendar
-// date (handoverDate); VARIABLE means a lead time relative to today
-// (handoverLeadValue + handoverLeadUnit, e.g. "~2 months").
-//
-// handoverType selects which side is READ — it does not clear the other. Both are
-// kept so that toggling the mode back restores whatever was there before, the same
-// way the RCC-only columns survive a warehouseType change. Null on legacy rows,
-// which the UI reads as FIXED.
+/// How a warehouse's handover timing is expressed. FIXED means a precise calendar
+/// date (handoverDate); VARIABLE means a lead time relative to today
+/// (handoverLeadValue + handoverLeadUnit, e.g. "~2 months").
+///
+/// handoverType selects which side is READ — it does not clear the other. Both are
+/// kept so that toggling the mode back restores whatever was there before, the same
+/// way the RCC-only columns survive a warehouseType change. Null on legacy rows,
+/// which the UI reads as FIXED.
 enum HandoverType {
   FIXED
   VARIABLE
@@ -609,4 +634,21 @@ enum HandoverLeadUnit {
   DAYS
   WEEKS
   MONTHS
+}
+
+enum GuideStatus {
+  DRAFT
+  PUBLISHED
+}
+
+/// Water supply available on site. Replaced a hasBorewell boolean, now dropped: true
+/// rows were backfilled to BOREWELL, while false rows were left null because "no
+/// borewell" said nothing about pipeline or tanker supply — which is why plenty of
+/// rows are null. NONE means genuinely no supply on site, not "unanswered".
+enum WaterSupply {
+  NONE
+  BOREWELL
+  PIPELINE
+  TANKER
+  OTHERS
 }

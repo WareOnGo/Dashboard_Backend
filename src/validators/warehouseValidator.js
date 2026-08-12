@@ -96,7 +96,7 @@ class WarehouseValidator extends BaseValidator {
         insulationPresent: z.string().optional().nullable(),
         insulationType: z.string().optional().nullable(),
         lightingDetails: z.string().optional().nullable(),
-        hasBorewell: z.boolean().optional().nullable(),
+        waterSupply: z.enum(['NONE', 'BOREWELL', 'PIPELINE', 'TANKER', 'OTHERS']).optional().nullable(),
         wogVerified: z.boolean().optional().nullable(),
         centreHeight: z.string().optional().nullable(),
 
