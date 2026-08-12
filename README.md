@@ -295,7 +295,7 @@ Backend_Repository/
 ├── prisma/schema.prisma
 ├── tests/                       # Jest + Supertest
 ├── docs/                        # staging spec, frontend integration, Docker/ECR setup
-├── scripts/                     # backfillEmpIds.js, approve-all-pending.js
+├── scripts/                     # backfillMicroMarkets.js
 └── routes/warehouse.js          # ⚠ legacy, NOT mounted — superseded by src/routes/warehouse.js
 ```
 
@@ -484,8 +484,9 @@ schema to read.
 scripts are restored. Build and run the image directly in the meantime; the intended
 workflow is described in `docs/DOCKER_DEPLOYMENT.md` and `docs/SETUP_GUIDE.md`.
 
-`scripts/` currently holds two one-off maintenance jobs: `backfillEmpIds.js`
-(`npm run backfill:empids`) and `approve-all-pending.js`.
+`scripts/` currently holds one maintenance job: `backfillMicroMarkets.js`
+(`npm run backfill:micromarkets`), which re-tags warehouses against the
+reviewer-drawn polygons — needed with `--all` whenever a polygon is renamed or moved.
 
 `SIGINT`/`SIGTERM`/`uncaughtException`/`unhandledRejection` all route through
 `gracefulShutdown`, which disconnects Prisma before exiting.
