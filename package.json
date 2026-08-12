@@ -15,7 +15,6 @@
     "docker:down": "./scripts/docker-dev.sh compose-down",
     "docker:logs": "./scripts/docker-dev.sh logs",
     "deploy:ecr": "./scripts/deploy-ecr.sh",
-    "backfill:empids": "node scripts/backfillEmpIds.js",
     "backfill:micromarkets": "node scripts/backfillMicroMarkets.js",
     "postinstall": "prisma generate"
   },
