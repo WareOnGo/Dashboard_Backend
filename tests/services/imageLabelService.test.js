@@ -23,6 +23,8 @@ const makeModels = ({ unlabelled = [], inFlight = null } = {}) => {
         }),
         countByClassification: jest.fn(async () => [{ classification: 'INDOOR', count: 2 }]),
         countAll: jest.fn(async () => 2),
+        pruneStale: jest.fn(async () => 0),
+        countStale: jest.fn(async () => 0),
     };
     const cronRunLogModel = {
         findInFlight: jest.fn(async () => inFlight),
@@ -98,6 +100,40 @@ describe('ImageLabelService.sweep', () => {
         await svc.sweep({ limit: 99999 });
 
         expect(imageLabelModel.findUnlabelled).toHaveBeenCalledWith(500); // MAX_LIMIT
+    });
+
+    it('prunes stale rows and reports the count', async () => {
+        const { imageLabelModel, cronRunLogModel } = makeModels({ unlabelled: images(2) });
+        imageLabelModel.pruneStale.mockResolvedValueOnce(7);
+        const svc = new ImageLabelService(imageLabelModel, cronRunLogModel);
+
+        const res = await svc.sweep();
+
+        expect(res.pruned).toBe(7);
+        expect(res.labelled).toBe(2);
+    });
+
+    it('prunes BEFORE labelling, so a stale row cannot block a live url', async () => {
+        const { imageLabelModel, cronRunLogModel } = makeModels({ unlabelled: images(1) });
+        const order = [];
+        imageLabelModel.pruneStale.mockImplementation(async () => { order.push('prune'); return 1; });
+        imageLabelModel.findUnlabelled.mockImplementation(async () => { order.push('find'); return images(1); });
+        const svc = new ImageLabelService(imageLabelModel, cronRunLogModel);
+
+        await svc.sweep();
+
+        expect(order).toEqual(['prune', 'find']);
+    });
+
+    it('dry run reports what would be pruned without deleting', async () => {
+        const { imageLabelModel, cronRunLogModel } = makeModels({ unlabelled: images(5) });
+        imageLabelModel.countStale.mockResolvedValueOnce(4);
+        const svc = new ImageLabelService(imageLabelModel, cronRunLogModel);
+
+        const res = await svc.sweep({ dryRun: true });
+
+        expect(res.wouldPrune).toBe(4);
+        expect(imageLabelModel.pruneStale).not.toHaveBeenCalled();
     });
 
     it('dry run reports the backlog without calling the API or writing', async () => {
