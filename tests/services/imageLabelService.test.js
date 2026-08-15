@@ -25,6 +25,7 @@ const makeModels = ({ unlabelled = [], inFlight = null } = {}) => {
         countAll: jest.fn(async () => 2),
         pruneStale: jest.fn(async () => 0),
         countStale: jest.fn(async () => 0),
+        findForWarehouse: jest.fn(async () => []),
     };
     const cronRunLogModel = {
         findInFlight: jest.fn(async () => inFlight),
@@ -165,6 +166,53 @@ describe('ImageLabelService.sweep', () => {
 
         await expect(svc.sweep()).rejects.toThrow('db exploded');
         expect(cronRunLogModel.finish).toHaveBeenCalledWith(1n, 'FAILED', expect.any(Number), null, 'db exploded');
+    });
+});
+
+describe('ImageLabelService.getForWarehouse', () => {
+    it('keys labels by url and omits unlabelled images', async () => {
+        const { imageLabelModel, cronRunLogModel } = makeModels();
+        imageLabelModel.findForWarehouse.mockResolvedValueOnce([
+            { imageUrl: 'a.jpg', classification: 'INDOOR', description: 'inside', confidence: 0.99 },
+            { imageUrl: 'b.jpg', classification: null, description: null, confidence: null },
+        ]);
+        const svc = new ImageLabelService(imageLabelModel, cronRunLogModel);
+
+        const res = await svc.getForWarehouse(42);
+
+        expect(res.warehouseId).toBe(42);
+        expect(res.total).toBe(2);
+        expect(res.labelled).toBe(1);
+        expect(res.labels['a.jpg'].classification).toBe('INDOOR');
+        // Absent, not null — the consumer falls back per-image.
+        expect(res.labels['b.jpg']).toBeUndefined();
+    });
+
+    it('accepts a numeric string id, as it arrives from a route param', async () => {
+        const { imageLabelModel, cronRunLogModel } = makeModels();
+        const svc = new ImageLabelService(imageLabelModel, cronRunLogModel);
+
+        const res = await svc.getForWarehouse('42');
+
+        expect(res.warehouseId).toBe(42);
+        expect(imageLabelModel.findForWarehouse).toHaveBeenCalledWith(42);
+    });
+
+    it('rejects a non-numeric id as a validation error, not a database error', async () => {
+        const { imageLabelModel, cronRunLogModel } = makeModels();
+        const svc = new ImageLabelService(imageLabelModel, cronRunLogModel);
+
+        await expect(svc.getForWarehouse('abc')).rejects.toMatchObject({ name: 'ValidationError' });
+        expect(imageLabelModel.findForWarehouse).not.toHaveBeenCalled();
+    });
+
+    it('returns an empty map for a warehouse with no images', async () => {
+        const { imageLabelModel, cronRunLogModel } = makeModels();
+        const svc = new ImageLabelService(imageLabelModel, cronRunLogModel);
+
+        const res = await svc.getForWarehouse(7);
+
+        expect(res).toMatchObject({ warehouseId: 7, total: 0, labelled: 0, labels: {} });
     });
 });
 

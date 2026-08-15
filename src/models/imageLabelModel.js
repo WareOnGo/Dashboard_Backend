@@ -1,4 +1,5 @@
 // src/models/imageLabelModel.js
+const { Prisma } = require('@prisma/client');
 const BaseModel = require('./baseModel');
 
 /**
@@ -89,6 +90,75 @@ class ImageLabelModel extends BaseModel {
         try {
             const { count } = await this.model.createMany({ data: rows, skipDuplicates: true });
             return count;
+        } catch (error) {
+            this.handleDatabaseError(error);
+        }
+    }
+
+    /**
+     * Labels for one warehouse's images, in media order.
+     *
+     * Joins on imageUrl rather than warehouseId: rows are deduped by URL, so a
+     * label's warehouseId is whichever listing the image was first seen on. If
+     * two warehouses share an image, filtering by warehouseId would silently
+     * drop the label for one of them.
+     *
+     * LEFT JOIN so unlabelled images still come back (with nulls), letting the
+     * caller distinguish "not labelled yet" from "not an image".
+     *
+     * @param {number} warehouseId
+     * @returns {Promise<Array<{imageUrl: string, classification: string|null, description: string|null, confidence: number|null}>>}
+     */
+    async findForWarehouse(warehouseId) {
+        try {
+            return await this.prisma.$queryRaw`
+                SELECT img #>> '{}'   AS "imageUrl",
+                       l.classification,
+                       l.description,
+                       l.confidence
+                FROM "Warehouse" w
+                CROSS JOIN LATERAL jsonb_array_elements(COALESCE(w.media::jsonb->'images', '[]'::jsonb))
+                     WITH ORDINALITY AS t(img, ord)
+                LEFT JOIN labeled_warehouse_images l ON l."imageUrl" = img #>> '{}'
+                WHERE w.id = ${warehouseId}
+                  AND jsonb_typeof(img) = 'string'
+                ORDER BY t.ord
+            `;
+        } catch (error) {
+            this.handleDatabaseError(error);
+        }
+    }
+
+    /**
+     * Labels for several warehouses at once, in media order within each.
+     *
+     * Exists so a list view can warm its cache in one round trip instead of one
+     * per row — the query itself costs ~0.2ms, so N requests would be paying
+     * ~245ms of network latency N times over for nothing.
+     *
+     * Same URL join as findForWarehouse, for the same reason: label rows are
+     * deduped by imageUrl, so warehouseId on the row is not reliable.
+     *
+     * @param {number[]} warehouseIds
+     * @returns {Promise<Array<{warehouseId: number, imageUrl: string, classification: string|null, description: string|null, confidence: number|null}>>}
+     */
+    async findForWarehouses(warehouseIds) {
+        if (!warehouseIds.length) return [];
+        try {
+            return await this.prisma.$queryRaw`
+                SELECT w.id AS "warehouseId",
+                       img #>> '{}'   AS "imageUrl",
+                       l.classification,
+                       l.description,
+                       l.confidence
+                FROM "Warehouse" w
+                CROSS JOIN LATERAL jsonb_array_elements(COALESCE(w.media::jsonb->'images', '[]'::jsonb))
+                     WITH ORDINALITY AS t(img, ord)
+                LEFT JOIN labeled_warehouse_images l ON l."imageUrl" = img #>> '{}'
+                WHERE w.id IN (${Prisma.join(warehouseIds)})
+                  AND jsonb_typeof(img) = 'string'
+                ORDER BY w.id, t.ord
+            `;
         } catch (error) {
             this.handleDatabaseError(error);
         }

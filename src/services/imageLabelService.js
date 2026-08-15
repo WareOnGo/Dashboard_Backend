@@ -26,6 +26,13 @@ const MAX_LIMIT = 500;
 /** Parallel API requests within a sweep. */
 const DEFAULT_CONCURRENCY = 8;
 
+/**
+ * Warehouses per bulk label lookup. Comfortably above the dashboard's largest
+ * page size (100) so a full page is always one request, while still bounding
+ * what a single caller can pull.
+ */
+const MAX_BULK_IDS = 120;
+
 /** Rows per database write. Chunked so a mid-sweep failure keeps earlier work. */
 const CHUNK = 50;
 
@@ -207,6 +214,100 @@ class ImageLabelService extends BaseService {
             }),
         );
         return out;
+    }
+
+    /**
+     * Labels for one warehouse's images, keyed by URL.
+     *
+     * Returns a map rather than groups so the caller stays authoritative about
+     * which images exist and in what order — media is the source of truth, and
+     * labels are decoration over it. Unlabelled images are simply absent from
+     * the map, so a consumer can fall back per-image rather than all-or-nothing.
+     *
+     * @param {number|string} warehouseId
+     * @returns {Promise<{warehouseId: number, total: number, labelled: number, labels: Object}>}
+     */
+    async getForWarehouse(warehouseId) {
+        return this.executeOperation(async () => {
+            const id = Number(warehouseId);
+            if (!Number.isInteger(id) || id < 1) {
+                const error = new Error('warehouseId must be a positive integer');
+                error.name = 'ValidationError';
+                error.issues = [{ path: ['id'], message: 'must be a positive integer' }];
+                throw error;
+            }
+
+            const rows = await this.imageLabelModel.findForWarehouse(id);
+            const labels = {};
+            for (const r of rows) {
+                if (!r.classification) continue;
+                labels[r.imageUrl] = {
+                    classification: r.classification,
+                    description: r.description,
+                    confidence: r.confidence,
+                };
+            }
+            return {
+                warehouseId: id,
+                total: rows.length,
+                labelled: Object.keys(labels).length,
+                labels,
+            };
+        });
+    }
+
+    /**
+     * Labels for several warehouses, keyed by warehouseId then by image URL.
+     *
+     * Used by GET /api/warehouses?includeImageLabels=true to attach labels to a
+     * page of rows in one query, so the client never needs a second request.
+     * Capped so a caller cannot pull the whole table in one go.
+     *
+     * @param {Array<number|string>} warehouseIds
+     * @returns {Promise<{requested: number, warehouses: Object}>}
+     */
+    async getForWarehouses(warehouseIds) {
+        return this.executeOperation(async () => {
+            const ids = [...new Set(
+                (Array.isArray(warehouseIds) ? warehouseIds : [])
+                    .map(Number)
+                    .filter((n) => Number.isInteger(n) && n > 0),
+            )];
+
+            if (!ids.length) {
+                const error = new Error('ids must contain at least one positive integer warehouse id');
+                error.name = 'ValidationError';
+                error.issues = [{ path: ['ids'], message: 'must contain at least one positive integer' }];
+                throw error;
+            }
+            if (ids.length > MAX_BULK_IDS) {
+                const error = new Error(`ids is limited to ${MAX_BULK_IDS} warehouses per request`);
+                error.name = 'ValidationError';
+                error.issues = [{ path: ['ids'], message: `at most ${MAX_BULK_IDS}` }];
+                throw error;
+            }
+
+            const rows = await this.imageLabelModel.findForWarehouses(ids);
+            const warehouses = {};
+            for (const r of rows) {
+                const key = String(r.warehouseId);
+                if (!warehouses[key]) warehouses[key] = { total: 0, labelled: 0, labels: {} };
+                warehouses[key].total += 1;
+                if (!r.classification) continue;
+                warehouses[key].labelled += 1;
+                warehouses[key].labels[r.imageUrl] = {
+                    classification: r.classification,
+                    description: r.description,
+                    confidence: r.confidence,
+                };
+            }
+            // Ids with no images at all still get an entry, so a caller can cache
+            // "this one has nothing" instead of re-requesting it forever.
+            for (const id of ids) {
+                if (!warehouses[String(id)]) warehouses[String(id)] = { total: 0, labelled: 0, labels: {} };
+            }
+            return { requested: ids.length, warehouses };
+        });
     }
 
     /**
