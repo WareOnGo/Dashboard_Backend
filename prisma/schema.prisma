@@ -592,8 +592,38 @@ model Guide {
   updatedAt       DateTime
   deployedAt      DateTime?
   deployedContent Json?
+  author          String?
 
   @@index([status, sortOrder])
+}
+
+/// Scene-type labels for warehouse listing images, produced by the vision
+/// classification experiment (scripts/classifyWarehouseImagesSample.js).
+///
+/// warehouseId is a logical reference to Warehouse.id. It is deliberately NOT a
+/// Prisma @relation, so the Warehouse model stays untouched and this table can
+/// be dropped without touching anything else — the trade-off is that there is
+/// no database-level foreign key constraint.
+model LabeledWarehouseImage {
+  id             Int        @id @default(autoincrement())
+  warehouseId    Int
+  imageUrl       String     @unique
+  classification ImageClass
+  description    String?
+  model          String
+  confidence     Float?
+  createdAt      DateTime   @default(now())
+
+  @@index([warehouseId])
+  @@index([classification])
+  @@map("labeled_warehouse_images")
+}
+
+enum ImageClass {
+  INDOOR
+  OUTDOOR
+  DOCUMENT
+  UNKNOWN
 }
 
 enum AttachmentKind {

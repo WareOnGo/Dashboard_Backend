@@ -142,6 +142,12 @@ app.use('/api/warehouses', require('./routes/warehouse'));
 app.use('/api/staging', require('./routes/staging'));
 
 /**
+ * Warehouse image classification (forward-fill)
+ * POST /sweep is cron-triggered via CRON_SECRET; GET /stats is reviewer-gated.
+ */
+app.use('/api/image-labels', require('./routes/imageLabels'));
+
+/**
  * Micro-market mapping routes (reviewer-gated)
  * Reviewer-drawn polygon areas under /api/micro-markets
  */
