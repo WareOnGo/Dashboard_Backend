@@ -9,6 +9,8 @@ const MicroMarketModel = require('./models/microMarketModel');
 const AppSettingModel = require('./models/appSettingModel');
 const VerifiedNumberModel = require('./models/verifiedNumberModel');
 const VisitNoteModel = require('./models/visitNoteModel');
+const ImageLabelModel = require('./models/imageLabelModel');
+const CronRunLogModel = require('./models/cronRunLogModel');
 
 // Import Services
 const WarehouseService = require('./services/warehouseService');
@@ -18,6 +20,7 @@ const StagingService = require('./services/stagingService');
 const MicroMarketService = require('./services/microMarketService');
 const SettingsService = require('./services/settingsService');
 const VisitNoteService = require('./services/visitNoteService');
+const ImageLabelService = require('./services/imageLabelService');
 
 // Import Controllers
 const WarehouseController = require('./controllers/warehouseController');
@@ -25,6 +28,7 @@ const StagingController = require('./controllers/stagingController');
 const MicroMarketController = require('./controllers/microMarketController');
 const VerifiedNumberController = require('./controllers/verifiedNumberController');
 const VisitNoteController = require('./controllers/visitNoteController');
+const ImageLabelController = require('./controllers/imageLabelController');
 
 /**
  * Dependency Injection Container
@@ -243,6 +247,23 @@ class Container {
             return new StagingService(stagedWarehouseModel, warehouseService, settingsService);
         });
 
+        // Image classification (forward-fill sweep)
+        this.registerSingleton('imageLabelModel', () => {
+            const prismaClient = database.getClient();
+            return new ImageLabelModel(prismaClient);
+        });
+
+        this.registerSingleton('cronRunLogModel', () => {
+            const prismaClient = database.getClient();
+            return new CronRunLogModel(prismaClient);
+        });
+
+        this.registerSingleton('imageLabelService', (container) => {
+            const imageLabelModel = container.resolve('imageLabelModel');
+            const cronRunLogModel = container.resolve('cronRunLogModel');
+            return new ImageLabelService(imageLabelModel, cronRunLogModel);
+        });
+
         // Register Controllers (transient - new instance per request if needed)
         // Controllers handle HTTP requests and may benefit from fresh instances
         this.register('warehouseController', (container) => {
@@ -250,6 +271,11 @@ class Container {
             const fileUploadService = container.resolve('fileUploadService');
             const stagingService = container.resolve('stagingService');
             return new WarehouseController(warehouseService, fileUploadService, stagingService);
+        });
+
+        this.register('imageLabelController', (container) => {
+            const imageLabelService = container.resolve('imageLabelService');
+            return new ImageLabelController(imageLabelService);
         });
 
         this.register('stagingController', (container) => {
