@@ -38,6 +38,14 @@ class ErrorHandler {
             return ErrorHandler.handleValidationError(error, req, res);
         }
 
+        // Handle missing/blank server configuration (e.g. an unset API key).
+        // Surfaced rather than swallowed into a generic 500: the message names
+        // the missing setting, which is the whole point of raising it. Safe to
+        // return because these are operator-facing config names, never secrets.
+        if (error.name === 'ConfigurationError') {
+            return ErrorHandler.handleConfigurationError(error, req, res);
+        }
+
         // Handle generic errors
         return ErrorHandler.handleGenericError(error, req, res);
     }
@@ -91,6 +99,27 @@ class ErrorHandler {
         );
 
         return res.status(400).json(errorResponse);
+    }
+
+    /**
+     * Handle server misconfiguration (unset env var, missing credential).
+     *
+     * 503 rather than 500: the request was well-formed and the service is simply
+     * not configured to serve it yet — the same fail-closed semantics the
+     * shared-secret middleware uses when its secret is unset.
+     *
+     * @param {Error} error - Error with name 'ConfigurationError'
+     * @param {Object} req - Express request object
+     * @param {Object} res - Express response object
+     */
+    static handleConfigurationError(error, req, res) {
+        const errorResponse = ErrorHandler.createErrorResponse(
+            error.message,
+            'CONFIGURATION_ERROR',
+            req.path
+        );
+
+        return res.status(503).json(errorResponse);
     }
 
     /**
