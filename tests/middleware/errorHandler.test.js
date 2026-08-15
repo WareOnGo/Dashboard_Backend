@@ -89,6 +89,23 @@ describe('ErrorHandler', () => {
         path: '/test'
       });
     });
+
+    it('surfaces configuration errors as 503 with the reason intact', () => {
+      // A missing env var used to fall through to a generic 500, which hid the
+      // one detail an operator needs: which setting is missing.
+      const error = new Error('OPENAI_API_KEY is not configured; image labelling is disabled.');
+      error.name = 'ConfigurationError';
+
+      ErrorHandler.handle(error, req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(503);
+      expect(res.json).toHaveBeenCalledWith({
+        error: 'OPENAI_API_KEY is not configured; image labelling is disabled.',
+        code: 'CONFIGURATION_ERROR',
+        timestamp: expect.any(String),
+        path: '/test'
+      });
+    });
   });
 
   describe('getPrismaErrorMessage', () => {
