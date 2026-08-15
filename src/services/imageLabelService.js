@@ -71,10 +71,16 @@ class ImageLabelService extends BaseService {
             const effectiveLimit = Math.min(Math.max(1, Number(limit) || DEFAULT_LIMIT), MAX_LIMIT);
 
             if (dryRun) {
-                const remaining = await this.imageLabelModel.countUnlabelled();
+                const [remaining, stale] = await Promise.all([
+                    this.imageLabelModel.countUnlabelled(),
+                    this.imageLabelModel.countStale(),
+                ]);
                 return {
                     status: 'DRY_RUN', model, limit: effectiveLimit,
-                    processed: 0, labelled: 0, failed: 0, remaining, durationMs: 0,
+                    processed: 0, labelled: 0, failed: 0,
+                    // What a real run would prune, without deleting anything.
+                    wouldPrune: stale,
+                    remaining, durationMs: 0,
                 };
             }
 
@@ -128,9 +134,13 @@ class ImageLabelService extends BaseService {
      * @private
      */
     async processBatch(limit, model) {
+        // Prune first, so a stale row can never block a URL that is still in use
+        // from being re-labelled in this same run.
+        const pruned = await this.imageLabelModel.pruneStale();
+
         const todo = await this.imageLabelModel.findUnlabelled(limit);
         if (!todo.length) {
-            return { processed: 0, labelled: 0, failed: 0, remaining: 0, costUsd: 0, errors: [] };
+            return { processed: 0, labelled: 0, failed: 0, pruned, remaining: 0, costUsd: 0, errors: [] };
         }
 
         let labelled = 0, failed = 0, inTok = 0, outTok = 0;
@@ -173,6 +183,7 @@ class ImageLabelService extends BaseService {
             processed: todo.length,
             labelled,
             failed,
+            pruned,
             remaining: await this.imageLabelModel.countUnlabelled(),
             costUsd: costUsd === null ? null : Number(costUsd.toFixed(4)),
             errors,

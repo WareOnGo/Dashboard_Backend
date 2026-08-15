@@ -95,6 +95,58 @@ class ImageLabelModel extends BaseModel {
     }
 
     /**
+     * How many rows pruneStale() would remove. Used by the dry run so the prune
+     * can be inspected before it deletes anything.
+     * @returns {Promise<number>}
+     */
+    async countStale() {
+        try {
+            const rows = await this.prisma.$queryRaw`
+                SELECT COUNT(*)::int AS n FROM labeled_warehouse_images l
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM "Warehouse" w,
+                         LATERAL jsonb_array_elements(COALESCE(w.media::jsonb->'images', '[]'::jsonb)) img
+                    WHERE img #>> '{}' = l."imageUrl"
+                )
+            `;
+            return rows[0]?.n ?? 0;
+        } catch (error) {
+            this.handleDatabaseError(error);
+        }
+    }
+
+    /**
+     * Delete label rows whose imageUrl no longer appears in any Warehouse.media
+     * images array.
+     *
+     * Covers both ways a row goes stale — the warehouse was deleted, or the
+     * image was removed from the listing during an edit — because it keys on the
+     * URL still being referenced rather than on the warehouse still existing. A
+     * foreign key would only catch the first.
+     *
+     * Safe by construction: a URL that is still referenced anywhere is kept, and
+     * if a deleted image is later re-added the sweep simply re-labels it.
+     *
+     * @returns {Promise<number>} Rows deleted
+     */
+    async pruneStale() {
+        try {
+            return await this.prisma.$executeRaw`
+                DELETE FROM labeled_warehouse_images l
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM "Warehouse" w,
+                         LATERAL jsonb_array_elements(COALESCE(w.media::jsonb->'images', '[]'::jsonb)) img
+                    WHERE img #>> '{}' = l."imageUrl"
+                )
+            `;
+        } catch (error) {
+            this.handleDatabaseError(error);
+        }
+    }
+
+    /**
      * Label counts by classification, for the stats endpoint.
      * @returns {Promise<Array<{classification: string, count: number}>>}
      */
