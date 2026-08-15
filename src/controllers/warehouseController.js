@@ -11,12 +11,38 @@ class WarehouseController extends BaseController {
      * @param {WarehouseService} warehouseService - Warehouse service instance
      * @param {FileUploadService} fileUploadService - File upload service instance
      * @param {StagingService} stagingService - Staging/validation layer service instance
+     * @param {ImageLabelService} [imageLabelService] - Optional; enables ?includeImageLabels=true
      */
-    constructor(warehouseService, fileUploadService, stagingService) {
+    constructor(warehouseService, fileUploadService, stagingService, imageLabelService = null) {
         super();
         this.warehouseService = warehouseService;
         this.fileUploadService = fileUploadService;
         this.stagingService = stagingService;
+        this.imageLabelService = imageLabelService;
+    }
+
+    /**
+     * Attach `imageLabels` (keyed by image URL) to each row, in one bulk query.
+     *
+     * Best-effort by design: labels are decoration over media, so a failure here
+     * must never turn a working warehouse list into an error. Rows simply go out
+     * without labels and the client falls back to its own lookup.
+     *
+     * @param {Array<Object>} rows - Mutated in place
+     * @private
+     */
+    async attachImageLabels(rows) {
+        if (!this.imageLabelService) return;
+        try {
+            const ids = rows.map((r) => r.id).filter((id) => Number.isInteger(id));
+            if (!ids.length) return;
+            const { warehouses } = await this.imageLabelService.getForWarehouses(ids);
+            for (const row of rows) {
+                row.imageLabels = warehouses[String(row.id)]?.labels ?? {};
+            }
+        } catch (error) {
+            console.error('attachImageLabels failed; returning rows without labels:', error.message);
+        }
     }
 
     /**
@@ -31,6 +57,15 @@ class WarehouseController extends BaseController {
             // The service validates/coerces the query params and returns a paginated
             // envelope: { data, pagination: { page, limit, total, totalPages } }.
             const result = await this.warehouseService.getAllWarehouses(req.query);
+
+            // Opt-in: attach scene-type labels for each row's images, so a client
+            // that will open a details view already has them and never needs a
+            // second round trip. Off by default because the full-table consumers
+            // (PPT builder, itinerary, micro-market mapping) call this with
+            // all=true and would pay ~3MB for data they never render.
+            if (req.query.includeImageLabels === 'true' && Array.isArray(result?.data) && result.data.length) {
+                await this.attachImageLabels(result.data);
+            }
 
             req.audit('READ', 'warehouse', null, 'Listed warehouses', {
                 filters: {

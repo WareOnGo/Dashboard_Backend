@@ -43,7 +43,19 @@ router.post('/sweep',
     imageLabelController.sweep,
 );
 
-// --- Everything below is dashboard-facing (JWT + capability), not machine-to-machine ---
+/**
+ * GET /api/image-labels/warehouse/:id
+ *
+ * Labels for one warehouse's images. Gated by JWT only — deliberately matching
+ * GET /api/warehouses, since anyone who can see a listing can see how its own
+ * photos were categorised. Registered before the REVIEW gate below.
+ */
+router.get('/warehouse/:id',
+    authMiddleware.authenticateJWT,
+    imageLabelController.byWarehouse,
+);
+
+// --- Everything below is ops-facing (JWT + REVIEW capability) ---
 router.use(authMiddleware.authenticateJWT, authMiddleware.requireAccess(CAPS.REVIEW));
 
 /**
