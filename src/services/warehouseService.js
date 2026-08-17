@@ -135,7 +135,7 @@ class WarehouseService extends BaseService {
      * @private
      */
     async resolveWhere(filters) {
-        const where = this.buildWhere(filters);
+        const where = await this.buildWhere(filters);
 
         const ranges = {
             areaMin: filters.minArea,
@@ -335,10 +335,10 @@ class WarehouseService extends BaseService {
      * are handled in a later step.
      *
      * @param {Object} filters - Validated query params
-     * @returns {Object} Prisma where clause ({} = match all)
+     * @returns {Promise<Object>} Prisma where clause ({} = match all)
      * @private
      */
-    buildWhere(filters) {
+    async buildWhere(filters) {
         const where = {};
         // Relation filters and multi-clause conditions go in an AND array so they
         // compose cleanly with the top-level keys and the search OR.
@@ -356,6 +356,15 @@ class WarehouseService extends BaseService {
                 { warehouseOwnerType: { contains: term, mode: 'insensitive' } },
             ];
             if (/^\d+$/.test(term)) or.push({ id: Number(term) });
+
+            // Micro-market is a text[], and Prisma can only match scalar lists by
+            // exact equality — so resolve the term to real tag names first (spelling-
+            // tolerant, see MicroMarketService.namesMatching) and match those.
+            const microMarkets = this.microMarketService
+                ? await this.microMarketService.namesMatching(term)
+                : [];
+            if (microMarkets.length > 0) or.push({ micromarket: { hasSome: microMarkets } });
+
             where.OR = or;
         }
 
