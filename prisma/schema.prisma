@@ -597,6 +597,57 @@ model Guide {
   @@index([status, sortOrder])
 }
 
+/// Points of interest imported from OpenStreetMap.
+///
+/// REFERENCE DATA, not ours: every row is reproducible from a public extract, so
+/// this table is a cache. It can be truncated and re-imported at any time and
+/// nothing else in the database depends on it. Never edited by hand — corrections
+/// belong upstream in OSM, or in PointOfInterest as our own override.
+///
+/// lat/lng are the source of truth; a generated `geog` geography column (added in
+/// the migration, invisible to Prisma) is maintained automatically for spatial
+/// queries. See scripts/importOsmPois.js.
+model OsmPoi {
+  id         Int      @id @default(autoincrement())
+  osmType    String   @db.Char(1) // n(ode) | w(ay) | r(elation)
+  osmId      BigInt
+  category   String
+  name       String?
+  lat        Float
+  lng        Float
+  tags       Json?
+  sourceFile String?
+  importedAt DateTime @default(now())
+
+  // One row per OSM feature per category — a feature can legitimately match more
+  // than one category, and re-imports upsert rather than duplicate.
+  @@unique([osmType, osmId, category])
+  @@index([category])
+  @@index([lat, lng])
+  @@map("osm_poi")
+}
+
+/// Our own points of interest — the point-geometry sibling of MicroMarket.
+///
+/// Business data: hand-placed by the team, never overwritten by an import. Kept
+/// in a separate table from OsmPoi precisely so a re-import can never touch it.
+model PointOfInterest {
+  id        String   @id @default(uuid())
+  name      String
+  category  String
+  lat       Float
+  lng       Float
+  notes     String?
+  city      String?
+  createdBy String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([category])
+  @@index([lat, lng])
+  @@map("point_of_interest")
+}
+
 /// Scene-type labels for warehouse listing images, produced by the vision
 /// classification experiment (scripts/classifyWarehouseImagesSample.js).
 ///

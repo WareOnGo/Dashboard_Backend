@@ -11,6 +11,7 @@ const VerifiedNumberModel = require('./models/verifiedNumberModel');
 const VisitNoteModel = require('./models/visitNoteModel');
 const ImageLabelModel = require('./models/imageLabelModel');
 const CronRunLogModel = require('./models/cronRunLogModel');
+const GeoModel = require('./models/geoModel');
 
 // Import Services
 const WarehouseService = require('./services/warehouseService');
@@ -21,6 +22,7 @@ const MicroMarketService = require('./services/microMarketService');
 const SettingsService = require('./services/settingsService');
 const VisitNoteService = require('./services/visitNoteService');
 const ImageLabelService = require('./services/imageLabelService');
+const GeoService = require('./services/geoService');
 
 // Import Controllers
 const WarehouseController = require('./controllers/warehouseController');
@@ -29,6 +31,7 @@ const MicroMarketController = require('./controllers/microMarketController');
 const VerifiedNumberController = require('./controllers/verifiedNumberController');
 const VisitNoteController = require('./controllers/visitNoteController');
 const ImageLabelController = require('./controllers/imageLabelController');
+const GeoController = require('./controllers/geoController');
 
 /**
  * Dependency Injection Container
@@ -264,6 +267,17 @@ class Container {
             return new ImageLabelService(imageLabelModel, cronRunLogModel);
         });
 
+        // Map view (POIs, warehouses as points)
+        this.registerSingleton('geoModel', () => {
+            const prismaClient = database.getClient();
+            return new GeoModel(prismaClient);
+        });
+
+        this.registerSingleton('geoService', (container) => {
+            const geoModel = container.resolve('geoModel');
+            return new GeoService(geoModel);
+        });
+
         // Register Controllers (transient - new instance per request if needed)
         // Controllers handle HTTP requests and may benefit from fresh instances
         this.register('warehouseController', (container) => {
@@ -277,6 +291,11 @@ class Container {
         this.register('imageLabelController', (container) => {
             const imageLabelService = container.resolve('imageLabelService');
             return new ImageLabelController(imageLabelService);
+        });
+
+        this.register('geoController', (container) => {
+            const geoService = container.resolve('geoService');
+            return new GeoController(geoService);
         });
 
         this.register('stagingController', (container) => {
