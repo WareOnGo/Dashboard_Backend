@@ -7,6 +7,7 @@ const makeModel = (rows = []) => ({
     osmCategories: jest.fn(async () => [{ category: 'fuel', count: 3 }]),
     ownCategories: jest.fn(async () => []),
     createOwnPoi: jest.fn(async (d) => ({ id: 'new-id', ...d })),
+    findOwnPoi: jest.fn(async (id) => ({ id, name: 'Depot', createdBy: 'alice@wareongo.com' })),
     updateOwnPoi: jest.fn(async (id, d) => ({ id, ...d })),
     deleteOwnPoi: jest.fn(async () => ({})),
 });
@@ -110,13 +111,75 @@ describe('GeoService own points', () => {
         const model = makeModel();
         const svc = new GeoService(model);
 
-        await svc.updateOwnPoi('abc', { name: 'Renamed' });
+        await svc.updateOwnPoi('abc', { name: 'Renamed' }, ALICE);
 
         expect(model.updateOwnPoi).toHaveBeenCalledWith('abc', { name: 'Renamed' });
     });
 
     it('rejects an update that would change nothing', async () => {
         const svc = new GeoService(makeModel());
-        await expect(svc.updateOwnPoi('abc', {})).rejects.toMatchObject({ name: 'ValidationError' });
+        await expect(svc.updateOwnPoi('abc', {}, ALICE)).rejects.toMatchObject({ name: 'ValidationError' });
+    });
+});
+
+const ALICE = { email: 'alice@wareongo.com', isAdmin: false };
+const BOB = { email: 'bob@wareongo.com', isAdmin: false };
+const ADMIN = { email: 'admin@wareongo.com', isAdmin: true };
+
+describe('GeoService point ownership', () => {
+    // The UI hides these controls for other people's points, but hiding a button
+    // stops nobody from calling the endpoint — so the guard has to hold here.
+    it('lets the author edit and delete their own point', async () => {
+        const model = makeModel();
+        const svc = new GeoService(model);
+
+        await svc.updateOwnPoi('p1', { name: 'Renamed' }, ALICE);
+        await svc.deleteOwnPoi('p1', ALICE);
+
+        expect(model.updateOwnPoi).toHaveBeenCalled();
+        expect(model.deleteOwnPoi).toHaveBeenCalled();
+    });
+
+    it.each([
+        ['update', (svc, user) => svc.updateOwnPoi('p1', { name: 'Hijacked' }, user)],
+        ['delete', (svc, user) => svc.deleteOwnPoi('p1', user)],
+    ])('refuses a %s from anyone else, without touching the row', async (_label, act) => {
+        const model = makeModel();
+        const svc = new GeoService(model);
+
+        await expect(act(svc, BOB)).rejects.toMatchObject({ name: 'ForbiddenError', statusCode: 403 });
+        expect(model.updateOwnPoi).not.toHaveBeenCalled();
+        expect(model.deleteOwnPoi).not.toHaveBeenCalled();
+    });
+
+    it('refuses when there is no authenticated user at all', async () => {
+        const svc = new GeoService(makeModel());
+        await expect(svc.deleteOwnPoi('p1', undefined)).rejects.toMatchObject({ name: 'ForbiddenError' });
+    });
+
+    it('lets an admin through, so a departed colleague’s point is still removable', async () => {
+        const model = makeModel();
+        const svc = new GeoService(model);
+
+        await svc.deleteOwnPoi('p1', ADMIN);
+
+        expect(model.deleteOwnPoi).toHaveBeenCalledWith('p1');
+    });
+
+    it('reports a missing point as not-found rather than forbidden', async () => {
+        const model = makeModel();
+        model.findOwnPoi.mockResolvedValueOnce(null);
+        const svc = new GeoService(model);
+
+        await expect(svc.deleteOwnPoi('nope', ALICE)).rejects.toMatchObject({ name: 'NotFoundError', statusCode: 404 });
+    });
+
+    it('never lets an update reassign authorship', async () => {
+        const model = makeModel();
+        const svc = new GeoService(model);
+
+        await svc.updateOwnPoi('p1', { name: 'Renamed', createdBy: 'bob@wareongo.com' }, ALICE);
+
+        expect(model.updateOwnPoi.mock.calls[0][1]).not.toHaveProperty('createdBy');
     });
 });
