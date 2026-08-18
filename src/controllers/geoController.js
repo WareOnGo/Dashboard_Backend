@@ -47,13 +47,13 @@ class GeoController extends BaseController {
 
     /** PUT /api/geo/points/:id */
     updatePoint = this.asyncHandler(async (req, res) => {
-        const data = await this.geoService.updateOwnPoi(req.params.id, req.body);
+        const data = await this.geoService.updateOwnPoi(req.params.id, req.body, req.user);
         return res.status(200).json({ success: true, data });
     });
 
     /** DELETE /api/geo/points/:id */
     deletePoint = this.asyncHandler(async (req, res) => {
-        const data = await this.geoService.deleteOwnPoi(req.params.id);
+        const data = await this.geoService.deleteOwnPoi(req.params.id, req.user);
         return res.status(200).json({ success: true, data });
     });
 }

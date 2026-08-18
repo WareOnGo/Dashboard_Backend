@@ -173,6 +173,37 @@ class GeoService extends BaseService {
         return out;
     }
 
+    /**
+     * Load a point and confirm the caller may change it.
+     *
+     * Enforced here rather than in the UI: hiding a button stops nobody from
+     * calling the endpoint directly, so ownership has to be checked on the
+     * server or it is not a guard at all.
+     *
+     * Admins are allowed through — they can already delete warehouses, and
+     * without an override the only way to remove a bad point left by someone
+     * who has left the company would be raw SQL.
+     *
+     * @private
+     */
+    async loadOwnedPoi(id, user) {
+        const row = await this.geoModel.findOwnPoi(id);
+        if (!row) {
+            const error = new Error(`Point ${id} not found`);
+            error.name = 'NotFoundError';
+            error.statusCode = 404;
+            throw error;
+        }
+        const email = user?.email;
+        if (!user?.isAdmin && row.createdBy !== email) {
+            const error = new Error('You can only change points you added.');
+            error.name = 'ForbiddenError';
+            error.statusCode = 403;
+            throw error;
+        }
+        return row;
+    }
+
     async createOwnPoi(body, user) {
         return this.executeOperation(async () => {
             const data = this.validatePoiPayload(body);
@@ -181,16 +212,21 @@ class GeoService extends BaseService {
         });
     }
 
-    async updateOwnPoi(id, body) {
+    async updateOwnPoi(id, body, user) {
         return this.executeOperation(async () => {
+            await this.loadOwnedPoi(id, user);
             const data = this.validatePoiPayload(body, { partial: true });
             if (!Object.keys(data).length) throw this.validationError('no updatable fields supplied');
+            // createdBy is never updatable: a point's author is a fact about who
+            // added it, not a field its author can hand off.
+            delete data.createdBy;
             return this.geoModel.updateOwnPoi(id, data);
         });
     }
 
-    async deleteOwnPoi(id) {
+    async deleteOwnPoi(id, user) {
         return this.executeOperation(async () => {
+            await this.loadOwnedPoi(id, user);
             await this.geoModel.deleteOwnPoi(id);
             return { id };
         });

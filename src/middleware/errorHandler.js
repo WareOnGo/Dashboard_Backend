@@ -38,6 +38,20 @@ class ErrorHandler {
             return ErrorHandler.handleValidationError(error, req, res);
         }
 
+        // Authorisation failures. Without this they fall through to a generic
+        // 500, which tells the caller nothing and looks like a server fault
+        // rather than a refusal.
+        if (error.name === 'ForbiddenError') {
+            return ErrorHandler.handleStatusError(error, req, res, 403, 'FORBIDDEN');
+        }
+
+        // Handled by name rather than by honouring any statusCode: several
+        // services set one, and quietly changing what they all return is a
+        // bigger behaviour change than this fix warrants.
+        if (error.name === 'NotFoundError') {
+            return ErrorHandler.handleStatusError(error, req, res, 404, 'NOT_FOUND');
+        }
+
         // Handle missing/blank server configuration (e.g. an unset API key).
         // Surfaced rather than swallowed into a generic 500: the message names
         // the missing setting, which is the whole point of raising it. Safe to
@@ -99,6 +113,23 @@ class ErrorHandler {
         );
 
         return res.status(400).json(errorResponse);
+    }
+
+    /**
+     * Emit an error response with an explicit status and code, keeping the
+     * service's own message — these are user-facing refusals ("you can only
+     * change points you added"), not internal detail.
+     *
+     * @param {Error} error
+     * @param {Object} req
+     * @param {Object} res
+     * @param {number} status
+     * @param {string} code
+     */
+    static handleStatusError(error, req, res, status, code) {
+        return res.status(status).json(
+            ErrorHandler.createErrorResponse(error.message, code, req.path)
+        );
     }
 
     /**

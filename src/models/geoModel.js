@@ -111,6 +111,15 @@ class GeoModel extends BaseModel {
         }
     }
 
+    /** One point by id, or null. Used to check ownership before a mutation. */
+    async findOwnPoi(id) {
+        try {
+            return await this.prisma.pointOfInterest.findUnique({ where: { id: String(id) } });
+        } catch (error) {
+            this.handleDatabaseError(error);
+        }
+    }
+
     async updateOwnPoi(id, data) {
         try {
             return await this.prisma.pointOfInterest.update({ where: { id: String(id) }, data });
