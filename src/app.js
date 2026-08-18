@@ -148,6 +148,12 @@ app.use('/api/staging', require('./routes/staging'));
 app.use('/api/image-labels', require('./routes/imageLabels'));
 
 /**
+ * Map view (POI plotting)
+ * OSM reference points, our own points of interest, and warehouses as geometry.
+ */
+app.use('/api/geo', require('./routes/geo'));
+
+/**
  * Micro-market mapping routes (reviewer-gated)
  * Reviewer-drawn polygon areas under /api/micro-markets
  */
