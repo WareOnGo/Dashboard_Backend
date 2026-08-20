@@ -3,6 +3,30 @@ const { z } = require('zod');
 const BaseValidator = require('./baseValidator');
 
 /**
+ * Use-cases a warehouse suits, stored in Warehouse.suitableFor.
+ *
+ * Stored as stable codes with the display label kept in the clients, matching
+ * how waterSupply works: renaming "FnB" to "Food & Beverage" then costs a string
+ * change in the UI rather than a data migration across every row.
+ *
+ * The column is a plain text array rather than a Postgres enum precisely so this
+ * list can grow without a migration — adding an entry here and to the two client
+ * label maps is the whole change.
+ */
+const SUITABLE_FOR = [
+    'PHARMA',
+    'FMCG',
+    'FNB',
+    'RETAIL',
+    'ECOMMERCE',
+    'LOGISTICS',
+    'TRANSSHIPMENT_COURIER',
+    'FACTORY_INDUSTRIAL',
+    'KITCHEN',
+    'DARK_STORE',
+];
+
+/**
  * Warehouse-specific validation schemas and utilities
  */
 class WarehouseValidator extends BaseValidator {
@@ -97,6 +121,13 @@ class WarehouseValidator extends BaseValidator {
         insulationType: z.string().optional().nullable(),
         lightingDetails: z.string().optional().nullable(),
         waterSupply: z.enum(['NONE', 'BOREWELL', 'PIPELINE', 'TANKER', 'OTHERS']).optional().nullable(),
+        // Validated against the known list even though the column is free text:
+        // it is a fixed multi-select, so anything else is a client bug rather
+        // than data. Duplicates are dropped so the array stays a set.
+        suitableFor: z.array(z.enum(SUITABLE_FOR))
+            .transform((v) => [...new Set(v)])
+            .optional()
+            .nullable(),
         wogVerified: z.boolean().optional().nullable(),
         centreHeight: z.string().optional().nullable(),
 
@@ -282,3 +313,6 @@ class WarehouseValidator extends BaseValidator {
 }
 
 module.exports = WarehouseValidator;
+// Exported so a route or script can serve the canonical list rather than
+// hard-coding a second copy of it server-side.
+module.exports.SUITABLE_FOR = SUITABLE_FOR;
