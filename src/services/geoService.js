@@ -16,6 +16,21 @@ const MAX_LIMIT = 5000;
 const MAX_BBOX_SPAN_DEG = 30;
 
 /**
+ * Types a point of interest may have. The dashboard renders these as a dropdown
+ * and gives each one its own map glyph; the list is duplicated there because the
+ * two need different shapes (codes here, codes plus labels and glyphs there).
+ * Add to both, and only ever append — an existing code is stored on live rows.
+ */
+const POI_CATEGORIES = [
+    'POTENTIAL_CLIENT',
+    'POTENTIAL_WAREHOUSE',
+    'FOOD_PLACE',
+    'HOTEL_RESTAURANT',
+    'LABOR_QUARTERS',
+    'OPEN_YARD_BTS',
+];
+
+/**
  * GeoService — assembles GeoJSON for the map view.
  *
  * Returns GeoJSON FeatureCollections because that is what Mapbox consumes
@@ -155,7 +170,16 @@ class GeoService extends BaseService {
 
         if (!partial) { need('name'); need('category'); }
         if (body.name !== undefined) out.name = String(body.name).trim();
-        if (body.category !== undefined) out.category = String(body.category).trim();
+        if (body.category !== undefined) {
+            const cat = String(body.category).trim();
+            // The UI offers these as a dropdown; enforcing the same list here is
+            // what actually keeps the column a usable facet, since the endpoint
+            // is reachable without the UI.
+            if (!POI_CATEGORIES.includes(cat)) {
+                throw this.validationError(`category must be one of: ${POI_CATEGORIES.join(', ')}`);
+            }
+            out.category = cat;
+        }
         if (body.notes !== undefined) out.notes = body.notes === null ? null : String(body.notes);
         if (body.city !== undefined) out.city = body.city === null ? null : String(body.city);
 
