@@ -145,6 +145,12 @@ model Warehouse {
   serviceLiftCount            String?
   totalFloors                 String?
   micromarket                 String[]             @default([])
+  /// Use-cases a site suits (e-commerce, cold storage, 3PL, manufacturing…).
+  /// A free-form text array rather than an enum: the list is a commercial
+  /// judgement that will change faster than a schema migration, and the UI
+  /// drives it as a multi-select. Defaults to empty so existing rows need no
+  /// backfill and the column is never null.
+  suitableFor                 String[]             @default([])
   handoverLeadUnit            HandoverLeadUnit?
   handoverLeadValue           Int?
   handoverType                HandoverType?
@@ -161,11 +167,11 @@ model Warehouse {
 }
 
 model WarehouseData {
-  id                  Int                    @id @default(autoincrement())
+  id                  Int                       @id @default(autoincrement())
   latitude            Float?
   longitude           Float?
   embedding           Unsupported("vector")?
-  warehouseId         Int                    @unique
+  warehouseId         Int                       @unique
   fireNocAvailable    Boolean?
   fireSafetyMeasures  String?
   landType            String?
@@ -175,7 +181,10 @@ model WarehouseData {
   pollutionZone       String?
   powerKva            String?
   vaastuCompliance    String?
-  Warehouse           Warehouse              @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  geog                Unsupported("geography")? @default(dbgenerated("\nCASE\n    WHEN ((longitude IS NOT NULL) AND (latitude IS NOT NULL)) THEN (st_setsrid(st_makepoint(longitude, latitude), 4326))::geography\n    ELSE NULL::geography\nEND"))
+  Warehouse           Warehouse                 @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+
+  @@index([geog], map: "WarehouseData_geog_gist", type: Gist)
 }
 
 model AuditLog {
@@ -463,6 +472,11 @@ model StagedWarehouse {
   handoverLeadValue           Int?
   handoverType                HandoverType?
   waterSupply                 WaterSupply?
+  /// Mirrors Warehouse.suitableFor. Every submitted field needs a column here
+  /// or it is dropped at staging and never reaches the promoted warehouse —
+  /// the mirror-drift test in stagingService.test.js exists to catch exactly
+  /// that.
+  suitableFor                 String[]             @default([])
 
   @@index([reviewStatus, submittedAt])
 }
@@ -604,12 +618,19 @@ model Guide {
 /// nothing else in the database depends on it. Never edited by hand — corrections
 /// belong upstream in OSM, or in PointOfInterest as our own override.
 ///
-/// lat/lng are the source of truth; a generated `geog` geography column (added in
-/// the migration, invisible to Prisma) is maintained automatically for spatial
-/// queries. See scripts/importOsmPois.js.
+/// lat/lng are the source of truth; `geog` is maintained automatically from them
+/// for spatial queries — see scripts/setupGeoColumns.js.
+///
+/// NOTE: `geog` is GENERATED ALWAYS ... STORED in the database. Prisma has no
+/// way to express that, so introspection renders it as @default(dbgenerated(...)).
+/// Do not "fix" that by hand and do not let a push recreate the column from this
+/// declaration: a DEFAULT is applied only on insert, whereas GENERATED ALWAYS
+/// recomputes on every write, which is the whole reason lat/lng and geog cannot
+/// drift apart.
 model OsmPoi {
-  id         Int      @id @default(autoincrement())
-  osmType    String   @db.Char(1) // n(ode) | w(ay) | r(elation)
+  id         Int                       @id @default(autoincrement())
+  /// n(ode) | w(ay) | r(elation)
+  osmType    String                    @db.Char(1)
   osmId      BigInt
   category   String
   name       String?
@@ -617,13 +638,15 @@ model OsmPoi {
   lng        Float
   tags       Json?
   sourceFile String?
-  importedAt DateTime @default(now())
+  importedAt DateTime                  @default(now())
+  geog       Unsupported("geography")? @default(dbgenerated("\nCASE\n    WHEN ((lng IS NOT NULL) AND (lat IS NOT NULL)) THEN (st_setsrid(st_makepoint(lng, lat), 4326))::geography\n    ELSE NULL::geography\nEND"))
 
-  // One row per OSM feature per category — a feature can legitimately match more
-  // than one category, and re-imports upsert rather than duplicate.
+  /// One row per OSM feature per category — a feature can legitimately match
+  /// more than one category, and re-imports upsert rather than duplicate.
   @@unique([osmType, osmId, category])
   @@index([category])
   @@index([lat, lng])
+  @@index([geog], map: "osm_poi_geog_gist", type: Gist)
   @@map("osm_poi")
 }
 
@@ -632,7 +655,7 @@ model OsmPoi {
 /// Business data: hand-placed by the team, never overwritten by an import. Kept
 /// in a separate table from OsmPoi precisely so a re-import can never touch it.
 model PointOfInterest {
-  id        String   @id @default(uuid())
+  id        String                    @id @default(uuid())
   name      String
   category  String
   lat       Float
@@ -640,11 +663,13 @@ model PointOfInterest {
   notes     String?
   city      String?
   createdBy String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime                  @default(now())
+  updatedAt DateTime                  @updatedAt
+  geog      Unsupported("geography")? @default(dbgenerated("\nCASE\n    WHEN ((lng IS NOT NULL) AND (lat IS NOT NULL)) THEN (st_setsrid(st_makepoint(lng, lat), 4326))::geography\n    ELSE NULL::geography\nEND"))
 
   @@index([category])
   @@index([lat, lng])
+  @@index([geog], map: "point_of_interest_geog_gist", type: Gist)
   @@map("point_of_interest")
 }
 
@@ -668,6 +693,15 @@ model LabeledWarehouseImage {
   @@index([warehouseId])
   @@index([classification])
   @@map("labeled_warehouse_images")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model spatial_ref_sys {
+  srid      Int     @id
+  auth_name String? @db.VarChar(256)
+  auth_srid Int?
+  srtext    String? @db.VarChar(2048)
+  proj4text String? @db.VarChar(2048)
 }
 
 enum ImageClass {
