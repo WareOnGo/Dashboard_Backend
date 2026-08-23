@@ -1,5 +1,6 @@
 // src/controllers/visitNoteController.js
 const BaseController = require('./baseController');
+const { changeMetadata } = require('../utils/auditDiff');
 
 /**
  * VisitNoteController — CRUD for warehouse visit notes, nested under
@@ -61,11 +62,17 @@ class VisitNoteController extends BaseController {
         try {
             const warehouseId = this.extractId(req);
             const noteId = this.extractId(req, 'noteId');
-            const note = await this.visitNoteService.update(warehouseId, noteId, req.body);
+            const { note, changes } = await this.visitNoteService.update(warehouseId, noteId, req.body);
 
-            req.audit('UPDATE', 'visit_note', noteId, `Updated visit note ${noteId} on warehouse ${warehouseId}`, {
-                warehouseId,
-            });
+            req.audit(
+                'UPDATE',
+                'visit_note',
+                noteId,
+                changes.length
+                    ? `Updated visit note ${noteId} on warehouse ${warehouseId} — ${changes.map((c) => c.field).join(', ')}`
+                    : `Updated visit note ${noteId} on warehouse ${warehouseId} — no field changed`,
+                changeMetadata(changes, { warehouseId })
+            );
 
             this.sendSuccess(res, note);
         } catch (error) {

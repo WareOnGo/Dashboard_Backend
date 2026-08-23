@@ -1,6 +1,7 @@
 // src/controllers/stagingController.js
 const BaseController = require('./baseController');
 const gupshupService = require('../services/gupshupService');
+const { changeMetadata } = require('../utils/auditDiff');
 
 /**
  * StagingController — admin-facing review API for the validation layer.
@@ -34,9 +35,15 @@ class StagingController extends BaseController {
             if (typeof req.body?.enabled !== 'boolean') {
                 return this.sendError(res, 'Body must include a boolean "enabled".', 400);
             }
+            // Read the prior value first so the audit entry carries a real before/after.
+            const previous = await this.settingsService.getAutoApprove();
             const enabled = await this.settingsService.setAutoApprove(req.body.enabled, req.user.email);
+            const changes = previous === enabled
+                ? []
+                : [{ field: 'enabled', from: previous, to: enabled }];
             req.audit('UPDATE', 'app_setting', 'auto_approve_submissions',
-                `Auto-approve ${enabled ? 'ENABLED' : 'DISABLED'}`, { enabled });
+                `Auto-approve ${enabled ? 'ENABLED' : 'DISABLED'}`,
+                changeMetadata(changes, { enabled }));
             this.sendSuccess(res, { enabled });
         } catch (error) {
             this.handleServiceError(res, error, next);
@@ -120,9 +127,15 @@ class StagingController extends BaseController {
         try {
             const { submission, changes } = await this.stagingService.editSubmission(req.params.id, req.body);
 
-            req.audit('UPDATE', 'staged_warehouse', req.params.id, `Edited staged warehouse ${req.params.id}`, {
-                changes,
-            });
+            req.audit(
+                'UPDATE',
+                'staged_warehouse',
+                req.params.id,
+                changes.length
+                    ? `Edited staged warehouse ${req.params.id} — ${changes.map((c) => c.field).join(', ')}`
+                    : `Edited staged warehouse ${req.params.id} — no field changed`,
+                changeMetadata(changes)
+            );
 
             this.sendSuccess(res, submission);
         } catch (error) {

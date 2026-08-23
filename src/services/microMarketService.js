@@ -2,6 +2,7 @@
 const BaseService = require('./baseService');
 const { resolveTags, labelFor } = require('../utils/microMarketGeometry');
 const { fuzzyMatches, DEFAULT_THRESHOLD } = require('../utils/fuzzyMatch');
+const { computeChanges } = require('../utils/auditDiff');
 
 const clientError = (message, statusCode) => {
     const err = new Error(message);
@@ -134,6 +135,11 @@ class MicroMarketService extends BaseService {
         });
     }
 
+    /**
+     * Edit a polygon area.
+     * @returns {Promise<{market: Object, changes: Array<{field: string, from: *, to: *}>}>}
+     *   The updated row plus the field-level diff applied, for audit logging.
+     */
     update(id, { name, city, geometry, reviewer }) {
         return this.executeOperation(async () => {
             const data = {};
@@ -143,10 +149,17 @@ class MicroMarketService extends BaseService {
             // Stamp the last editor so attribution reflects who touched it most recently.
             if (reviewer?.email) data.reviewerEmail = reviewer.email;
             if (reviewer?.name) data.reviewerName = reviewer.name;
+
+            // Read the pre-edit row for the audit diff. A missing row still has to
+            // 404, so a null here just falls through to the P2025 path below.
+            const existing = await this.microMarketModel.getById(id);
+            // Polygon geometry is large, so the differ records it as a summary
+            // ({ __summary: 'object', ... }) rather than inlining both versions.
+            const changes = computeChanges(existing || {}, data);
             try {
                 const updated = await this.microMarketModel.updateById(id, data);
                 this.invalidatePolygonCache();
-                return updated;
+                return { market: updated, changes };
             } catch (err) {
                 if (err.code === 'P2025') throw clientError('not found', 404);
                 throw err;

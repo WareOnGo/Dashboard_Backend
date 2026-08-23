@@ -1,5 +1,6 @@
 // src/controllers/microMarketController.js
 const BaseController = require('./baseController');
+const { changeMetadata } = require('../utils/auditDiff');
 
 /**
  * MicroMarketController — reviewer-facing CRUD for drawn polygon areas.
@@ -75,11 +76,19 @@ class MicroMarketController extends BaseController {
     update = this.asyncHandler(async (req, res, next) => {
         try {
             const { name, city, geometry } = req.body || {};
-            const row = await this.microMarketService.update(req.params.id, {
+            const { market: row, changes } = await this.microMarketService.update(req.params.id, {
                 name, city, geometry, reviewer: this.reviewerFrom(req),
             });
             if (typeof req.audit === 'function') {
-                req.audit('UPDATE', 'micro_market', row.id, `Updated micro-market ${row.id}`);
+                req.audit(
+                    'UPDATE',
+                    'micro_market',
+                    row.id,
+                    changes.length
+                        ? `Updated micro-market ${row.id} — ${changes.map((c) => c.field).join(', ')}`
+                        : `Updated micro-market ${row.id} — no field changed`,
+                    changeMetadata(changes)
+                );
             }
             this.sendSuccess(res, this.toFeature(row));
         } catch (error) {

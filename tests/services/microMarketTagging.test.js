@@ -25,6 +25,8 @@ const makeModel = (polygons = POLYGONS) => ({
         return Promise.resolve(polygons);
     }),
     createOne: jest.fn((data) => Promise.resolve({ id: 'new', ...data })),
+    // Read by update() to build the audit diff's "before" side.
+    getById: jest.fn((id) => Promise.resolve(polygons.find((p) => p.id === id) || null)),
     updateById: jest.fn((id, data) => Promise.resolve({ id, ...data })),
     deleteById: jest.fn(() => Promise.resolve()),
 });
@@ -93,9 +95,11 @@ describe('MicroMarketService cache invalidation on writes', () => {
         const model = makeModel();
         const svc = new MicroMarketService(model);
         await svc.tagsForPoint(17, 77);
-        await svc.update('p1', { name: 'Renamed', reviewer });
+        const { changes } = await svc.update('p1', { name: 'Renamed', reviewer });
         await svc.tagsForPoint(17, 77);
         expect(model.listForTagging).toHaveBeenCalledTimes(2);
+        // The rename is reported as a before/after pair for the audit entry.
+        expect(changes).toEqual([{ field: 'name', from: 'Nelamangala', to: 'Renamed' }]);
     });
 
     it('busts the cache when a polygon is deleted', async () => {

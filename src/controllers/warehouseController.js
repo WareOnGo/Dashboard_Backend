@@ -1,5 +1,6 @@
 // src/controllers/warehouseController.js
 const BaseController = require('./baseController');
+const { changeMetadata } = require('../utils/auditDiff');
 
 /**
  * WarehouseController class for handling warehouse HTTP requests
@@ -232,12 +233,19 @@ class WarehouseController extends BaseController {
                 lastModified: new Date()
             };
             
-            // Update warehouse through service
-            const updatedWarehouse = await this.warehouseService.updateWarehouse(id, updateData);
+            // Update warehouse through service. `changes` is the field-level diff
+            // the service computed against the pre-update row.
+            const { warehouse: updatedWarehouse, changes } = await this.warehouseService.updateWarehouse(id, updateData);
 
-            req.audit('UPDATE', 'warehouse', id, `Updated warehouse ${id}`, {
-                updatedFields: Object.keys(req.body)
-            });
+            req.audit(
+                'UPDATE',
+                'warehouse',
+                id,
+                changes.length
+                    ? `Updated warehouse ${id} — ${changes.map((c) => c.field).join(', ')}`
+                    : `Updated warehouse ${id} — no field changed`,
+                changeMetadata(changes, { requestedFields: Object.keys(req.body) })
+            );
 
             // Send successful response
             this.sendSuccess(res, updatedWarehouse);

@@ -1,6 +1,7 @@
 // src/services/warehouseService.js
 const BaseService = require('./baseService');
 const WarehouseValidator = require('../validators/warehouseValidator');
+const { computeChanges } = require('../utils/auditDiff');
 
 /** Server-side pagination defaults for the warehouse list. */
 const DEFAULT_PAGE_SIZE = 20;
@@ -202,7 +203,8 @@ class WarehouseService extends BaseService {
      * Update an existing warehouse
      * @param {number} id - Warehouse ID
      * @param {Object} updateData - Data to update
-     * @returns {Object} Updated warehouse
+     * @returns {{warehouse: Object, changes: Array<{field: string, from: *, to: *}>}}
+     *   The updated warehouse plus the field-level diff that was applied, for audit logging
      */
     async updateWarehouse(id, updateData) {
         return this.executeOperation(async () => {
@@ -212,9 +214,10 @@ class WarehouseService extends BaseService {
             // Validate update data
             const validatedData = this.validateData(updateData, (data) => WarehouseValidator.validateUpdate(data));
             
-            // Check if warehouse exists
-            const exists = await this.warehouseModel.exists(id);
-            if (!exists) {
+            // Fetch the pre-update row rather than just checking existence: it is
+            // the "before" side of the audit diff, and it costs the same round trip.
+            const existing = await this.warehouseModel.findById(id);
+            if (!existing) {
                 const error = new Error(`Warehouse with ID ${id} not found`);
                 error.name = 'NotFoundError';
                 error.statusCode = 404;
@@ -227,11 +230,22 @@ class WarehouseService extends BaseService {
             // doesn't touch location keeps whatever tag the row already has.
             await this.applyMicroMarketTags(processedData);
 
+            // Diff before the write, against the processed payload — so the audit
+            // trail records the values actually being persisted (normalized contact
+            // number, derived micro-market tags), not the raw request body.
+            const changes = computeChanges(
+                // Prisma exposes the relation as `WarehouseData`; the update payload
+                // uses `warehouseData`. Align them so nested edits diff correctly.
+                { ...existing, warehouseData: existing.WarehouseData || {} },
+                processedData,
+                { nested: ['warehouseData'] },
+            );
+
             // Update warehouse through model
             const updatedWarehouse = await this.warehouseModel.update(id, processedData);
             
             // Apply post-update business logic
-            return this.transformWarehouse(updatedWarehouse);
+            return { warehouse: this.transformWarehouse(updatedWarehouse), changes };
         });
     }
 

@@ -3,6 +3,7 @@ const BaseService = require('./baseService');
 const WarehouseValidator = require('../validators/warehouseValidator');
 const { geocodeUrl } = require('../utils/googleMaps');
 const { deriveZone } = require('../utils/deriveZone');
+const { computeChanges } = require('../utils/auditDiff');
 
 /**
  * The nested WarehouseData fields, flattened onto the StagedWarehouse mirror.
@@ -472,17 +473,14 @@ class StagingService extends BaseService {
 
     /**
      * Field-level before/after diff between a staged row and proposed edits.
+     *
+     * The staged mirror is flat, so no nested handling is needed. Delegates to
+     * the shared audit differ, which masks phone-like fields and summarizes
+     * oversized values (photos, media, rawPayload) before they reach an audit row.
      * @private
      */
     computeDiff(row, edits) {
-        const changes = [];
-        for (const [field, to] of Object.entries(edits)) {
-            const from = row[field];
-            if (JSON.stringify(from ?? null) !== JSON.stringify(to ?? null)) {
-                changes.push({ field, from, to });
-            }
-        }
-        return changes;
+        return computeChanges(row, edits);
     }
 }
 

@@ -1,5 +1,6 @@
 // src/services/visitNoteService.js
 const BaseService = require('./baseService');
+const { computeChanges } = require('../utils/auditDiff');
 
 const clientError = (message, statusCode) => {
     const err = new Error(message);
@@ -47,6 +48,11 @@ class VisitNoteService extends BaseService {
         });
     }
 
+    /**
+     * Edit a note, scoped to its warehouse.
+     * @returns {Promise<{note: Object, changes: Array<{field: string, from: *, to: *}>}>}
+     *   The updated note plus the field-level diff applied, for audit logging.
+     */
     update(warehouseId, noteId, updates) {
         return this.executeOperation(async () => {
             const existing = await this.visitNoteModel.getById(noteId);
@@ -59,8 +65,11 @@ class VisitNoteService extends BaseService {
             for (const field of ['client', 'clientPoc', 'wareOnGoPoc', 'visitDate', 'clientFeedback', 'pocFeedback']) {
                 if (updates[field] !== undefined) data[field] = updates[field];
             }
+            // Diffed against the row we just read, before the write.
+            const changes = computeChanges(existing, data);
             try {
-                return await this.visitNoteModel.updateById(noteId, data);
+                const note = await this.visitNoteModel.updateById(noteId, data);
+                return { note, changes };
             } catch (err) {
                 if (err.code === 'P2025') throw clientError('Visit note not found', 404);
                 throw err;
