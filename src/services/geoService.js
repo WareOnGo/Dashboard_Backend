@@ -257,4 +257,8 @@ class GeoService extends BaseService {
     }
 }
 
+// Exposed so callers and tests assert against the real list rather than
+// re-typing it and drifting out of sync.
+GeoService.POI_CATEGORIES = POI_CATEGORIES;
+
 module.exports = GeoService;

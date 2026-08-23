@@ -1,5 +1,8 @@
 const GeoService = require('../../src/services/geoService');
 
+/** A category the service actually accepts, taken from the enum it validates against. */
+const [VALID_CATEGORY] = GeoService.POI_CATEGORIES;
+
 const makeModel = (rows = []) => ({
     osmPoisInBbox: jest.fn(async () => rows),
     ownPoisInBbox: jest.fn(async () => rows),
@@ -89,22 +92,35 @@ describe('GeoService own points', () => {
         const svc = new GeoService(model);
 
         await svc.createOwnPoi(
-            { name: 'Site', category: 'logistics_node', lat: 12.9, lng: 77.6, createdBy: 'attacker@evil.com' },
+            { name: 'Site', category: VALID_CATEGORY, lat: 12.9, lng: 77.6, createdBy: 'attacker@evil.com' },
             { email: 'real@wareongo.com' },
         );
 
         expect(model.createOwnPoi.mock.calls[0][0].createdBy).toBe('real@wareongo.com');
     });
 
+    // Each case carries a valid category so the enum guard — which runs first —
+    // can't be what rejects it; the asserted message pins the real reason.
     it.each([
-        ['latitude out of range', { name: 'a', category: 'b', lat: 999, lng: 77 }],
-        ['longitude out of range', { name: 'a', category: 'b', lat: 12, lng: 999 }],
-        ['missing name', { category: 'b', lat: 12, lng: 77 }],
-        ['missing category', { name: 'a', lat: 12, lng: 77 }],
-        ['non-numeric lat', { name: 'a', category: 'b', lat: 'north', lng: 77 }],
-    ])('rejects %s', async (_label, body) => {
+        ['latitude out of range', { name: 'a', category: VALID_CATEGORY, lat: 999, lng: 77 }, /lat must be a number/],
+        ['longitude out of range', { name: 'a', category: VALID_CATEGORY, lat: 12, lng: 999 }, /lng must be a number/],
+        ['missing latitude', { name: 'a', category: VALID_CATEGORY, lng: 77 }, /lat is required/],
+        ['missing name', { category: VALID_CATEGORY, lat: 12, lng: 77 }, /name is required/],
+        ['missing category', { name: 'a', lat: 12, lng: 77 }, /category is required/],
+        ['non-numeric lat', { name: 'a', category: VALID_CATEGORY, lat: 'north', lng: 77 }, /lat must be a number/],
+        ['a category outside the allowed list', { name: 'a', category: 'logistics_node', lat: 12, lng: 77 }, /category must be one of/],
+    ])('rejects %s', async (_label, body, message) => {
         const svc = new GeoService(makeModel());
-        await expect(svc.createOwnPoi(body, { email: 'x@y.z' })).rejects.toMatchObject({ name: 'ValidationError' });
+        await expect(svc.createOwnPoi(body, { email: 'x@y.z' }))
+            .rejects.toMatchObject({ name: 'ValidationError', message: expect.stringMatching(message) });
+    });
+
+    it('accepts every category the service publishes', async () => {
+        for (const category of GeoService.POI_CATEGORIES) {
+            const model = makeModel();
+            await new GeoService(model).createOwnPoi({ name: 'Site', category, lat: 12.9, lng: 77.6 }, { email: 'x@y.z' });
+            expect(model.createOwnPoi.mock.calls[0][0].category).toBe(category);
+        }
     });
 
     it('allows a partial update without requiring every field', async () => {
