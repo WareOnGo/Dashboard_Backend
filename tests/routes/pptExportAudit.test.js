@@ -6,6 +6,13 @@
  * assertions cover the actual wiring without any test row reaching the
  * production audit_logs table.
  */
+// CI has no .env, so this suite must not depend on an ambient JWT_SECRET —
+// signing with an undefined secret throws and takes the whole suite down.
+// Set unconditionally and before any require that reads config: utils/config.js
+// snapshots process.env when it loads, and dotenv never overrides an existing
+// value, so this wins locally too and keeps the suite deterministic.
+process.env.JWT_SECRET = 'test-only-secret-for-the-ppt-export-audit-suite';
+
 const express = require('express');
 const request = require('supertest');
 const JWTService = require('../../src/services/jwtService');
