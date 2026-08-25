@@ -165,6 +165,13 @@ app.use('/api/micro-markets', require('./routes/microMarkets'));
  */
 app.use('/api/verified-numbers', require('./routes/verifiedNumbers'));
 
+/**
+ * Client-reported audit routes
+ * PPT exports go straight from the browser to the proposal engine, so the
+ * backend never sees them and the client reports its own under /api/audit.
+ */
+app.use('/api/audit', require('./routes/audit'));
+
 // --- Basic Test Route ---
 
 /**

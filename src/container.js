@@ -32,6 +32,7 @@ const VerifiedNumberController = require('./controllers/verifiedNumberController
 const VisitNoteController = require('./controllers/visitNoteController');
 const ImageLabelController = require('./controllers/imageLabelController');
 const GeoController = require('./controllers/geoController');
+const AuditController = require('./controllers/auditController');
 
 /**
  * Dependency Injection Container
@@ -345,6 +346,12 @@ class Container {
         this.register('visitNoteController', (container) => {
             const visitNoteService = container.resolve('visitNoteService');
             return new VisitNoteController(visitNoteService);
+        });
+
+        // Writes through req.audit() (attached by auditMiddleware), so it needs
+        // no injected service of its own.
+        this.register('auditController', () => {
+            return new AuditController();
         });
     }
 
