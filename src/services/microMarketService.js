@@ -1,6 +1,6 @@
 // src/services/microMarketService.js
 const BaseService = require('./baseService');
-const { resolveTags, labelFor } = require('../utils/microMarketGeometry');
+const { resolveTags, labelsFor } = require('../utils/microMarketGeometry');
 const { fuzzyMatches, DEFAULT_THRESHOLD } = require('../utils/fuzzyMatch');
 const { computeChanges } = require('../utils/auditDiff');
 
@@ -101,8 +101,12 @@ class MicroMarketService extends BaseService {
         if (!needle) return [];
         try {
             const markets = await this.getPolygons();
+            // Matched per alternate name, not against the whole slashed name, so
+            // searching "Kalyan" resolves the "Bhiwandi/Kalyan" polygon — and
+            // resolves to the tag actually stored on the warehouse, since the
+            // column is filtered by exact equality.
             const hits = markets
-                .map(labelFor)
+                .flatMap(labelsFor)
                 .filter((label) => fuzzyMatches(needle, label, threshold));
             return [...new Set(hits)].sort();
         } catch (err) {

@@ -73,18 +73,40 @@ function contains(geometry, lon, lat) {
 }
 
 /**
- * The tag stored on Warehouse.micromarket for a polygon: its name, falling back
- * to its id so an unnamed polygon still produces a usable tag.
+ * The tags stored on Warehouse.micromarket for one polygon.
+ *
+ * A slash in a polygon's name means alternate names for the same bounding box
+ * ("Bhiwandi/Kalyan" is one area known by either name), so it yields one tag per
+ * alternate rather than a single literal "Bhiwandi/Kalyan" tag. A warehouse in
+ * that polygon is then found by a search for either name, which is the point —
+ * the column is filtered by exact equality (Postgres text[] has no
+ * case-insensitive `contains` for arrays), so an unsplit tag is unfindable by
+ * either half of its own name.
+ *
+ * The polygon's own `name` is left untouched; this only affects what gets tagged.
+ *
+ * Caveat worth knowing: any slash is treated as a separator, so a name that uses
+ * one for something else ("24/7 Park") would split oddly. Run the backfill with
+ * --dry-run to see exactly which polygons this affects before writing.
+ *
  * @param {{id: string, name?: string}} market
- * @returns {string}
+ * @returns {string[]} one or more tags, de-duplicated, order preserved
  */
-function labelFor(market) {
-    return (market.name || '').trim() || market.id;
+function labelsFor(market) {
+    const parts = (market.name || '')
+        .split('/')
+        .map((part) => part.trim())
+        .filter(Boolean);
+    // Blank, or nothing but slashes: fall back to the id so the tag is never
+    // empty and never a bare separator.
+    if (!parts.length) return [market.id];
+    return [...new Set(parts)];
 }
 
 /**
  * Tags for a point: every polygon containing it, de-duplicated and sorted so the
- * stored array is stable and comparable across runs.
+ * stored array is stable and comparable across runs. A polygon whose name carries
+ * alternates contributes one tag per alternate.
  * @param {Array<{id: string, name?: string, geometry: Object}>} markets
  * @param {number} lat
  * @param {number} lon
@@ -94,7 +116,7 @@ function resolveTags(markets, lat, lon) {
     if (lat == null || lon == null || Number.isNaN(lat) || Number.isNaN(lon)) return [];
     const labels = markets
         .filter((m) => contains(m.geometry, lon, lat))
-        .map(labelFor);
+        .flatMap(labelsFor);
     return [...new Set(labels)].sort();
 }
 
@@ -103,6 +125,6 @@ module.exports = {
     inPolygon,
     contains,
     isSupported,
-    labelFor,
+    labelsFor,
     resolveTags,
 };

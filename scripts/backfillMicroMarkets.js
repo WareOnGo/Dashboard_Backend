@@ -15,14 +15,26 @@
  *
  * Polygons with a blank name fall back to their id so the tag is never empty.
  *
+ * A slash in a polygon's name means alternate names for one bounding box
+ * ("Bhiwandi/Kalyan"), and is stored as one tag per alternate — so re-running
+ * with --all is also how that split is applied to rows tagged before it existed.
+ * The polygons themselves are never modified; only Warehouse.micromarket is.
+ * Every polygon carrying alternates is listed on startup, so check that list on
+ * a --dry-run first: a name using a slash for something else ("24/7 Park") would
+ * split oddly, and this is where you would see it.
+ *
  * Usage:
  *   node scripts/backfillMicroMarkets.js [--dry-run] [--all]
  *     --dry-run  report what would change, write nothing
  *     --all      also recompute warehouses that already have a tag
  *                (default: only rows whose micromarket is currently empty)
+ *
+ *   To apply the alternate-name split to existing rows:
+ *     node scripts/backfillMicroMarkets.js --dry-run --all   # inspect first
+ *     node scripts/backfillMicroMarkets.js --all             # then write
  */
 const { PrismaClient } = require('@prisma/client');
-const { resolveTags, isSupported } = require('../src/utils/microMarketGeometry');
+const { resolveTags, isSupported, labelsFor } = require('../src/utils/microMarketGeometry');
 
 const prisma = new PrismaClient();
 
@@ -44,6 +56,20 @@ async function main() {
         );
     }
     console.log(`Loaded ${markets.length} micro-market polygon(s).`);
+
+    // Surface the alternate-name splits explicitly: this is the one step that
+    // turns one polygon into several tags, so it should be eyeballed rather than
+    // trusted, especially on a first run.
+    const withAlternates = markets
+        .map((m) => ({ name: m.name, tags: labelsFor(m) }))
+        .filter((m) => m.tags.length > 1);
+    if (withAlternates.length) {
+        console.log(`\n${withAlternates.length} polygon(s) carry alternate names, tagged as each:`);
+        for (const m of withAlternates) {
+            console.log(`  ${m.name}  →  ${m.tags.join(', ')}`);
+        }
+        console.log('  (check these read as genuine alternates, not a slash used for something else)');
+    }
 
     const warehouses = await prisma.warehouse.findMany({
         where: ALL ? {} : { micromarket: { isEmpty: true } },

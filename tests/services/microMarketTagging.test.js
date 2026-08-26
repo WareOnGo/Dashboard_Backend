@@ -164,6 +164,7 @@ const SEARCH_POLYGONS = [
     { id: 'p2', name: 'Peenya Industrial Area', geometry: box(75, 15) },
     { id: 'p3', name: 'Whitefield', geometry: box(80, 20) },
     { id: 'p4', name: '', geometry: box(85, 25) }, // unnamed → tagged by id
+    { id: 'p5', name: 'Bhiwandi/Kalyan', geometry: box(90, 30) }, // alternate names, one box
 ];
 
 describe('MicroMarketService.namesMatching', () => {
@@ -193,6 +194,19 @@ describe('MicroMarketService.namesMatching', () => {
 
     it('falls back to the polygon id for an unnamed polygon', async () => {
         await expect(svc().namesMatching('p4')).resolves.toEqual(['p4']);
+    });
+
+    // A slashed polygon name is alternates for one box, so either half must
+    // resolve — and resolve to the individual tag stored on the warehouse, since
+    // the micromarket column is filtered by exact equality.
+    it('resolves each alternate of a slashed name separately', async () => {
+        await expect(svc().namesMatching('Bhiwandi')).resolves.toEqual(['Bhiwandi']);
+        await expect(svc().namesMatching('Kalyan')).resolves.toEqual(['Kalyan']);
+    });
+
+    it('never returns the unsplit slashed name, which would match no warehouse', async () => {
+        const hits = await svc().namesMatching('Bhiwandi');
+        expect(hits).not.toContain('Bhiwandi/Kalyan');
     });
 
     it('returns nothing for an unrelated term', async () => {
@@ -229,6 +243,15 @@ describe('MicroMarketService.namesMatching', () => {
     });
 });
 
+describe('MicroMarketService.tagsForPoint alternate names', () => {
+    it('tags a point with both alternates of a slashed polygon', async () => {
+        const svc = new MicroMarketService(makeModel(SEARCH_POLYGONS));
+        // lon 97, lat 37 is inside p5 (lon 90..100, lat 30..40) and outside every
+        // other box — p4 stops at lon 95, so this isolates the alternates.
+        await expect(svc.tagsForPoint(37, 97)).resolves.toEqual(['Bhiwandi', 'Kalyan']);
+    });
+});
+
 describe('WarehouseService.buildWhere micro-market search', () => {
     const svc = () => new WarehouseService({}, new MicroMarketService(makeModel(SEARCH_POLYGONS)));
 
@@ -240,6 +263,11 @@ describe('WarehouseService.buildWhere micro-market search', () => {
         expect(mmClause(where)).toEqual({
             micromarket: { hasSome: ['Bommasandra Industrial Area'] },
         });
+    });
+
+    it('searches by one alternate of a slashed polygon', async () => {
+        const where = await svc().buildWhere({ search: 'kalyan' });
+        expect(mmClause(where)).toEqual({ micromarket: { hasSome: ['Kalyan'] } });
     });
 
     it('keeps the existing free-text columns alongside it', async () => {

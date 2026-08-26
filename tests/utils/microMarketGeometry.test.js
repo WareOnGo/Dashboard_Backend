@@ -1,7 +1,7 @@
 const {
     contains,
     isSupported,
-    labelFor,
+    labelsFor,
     resolveTags,
 } = require('../../src/utils/microMarketGeometry');
 
@@ -79,19 +79,43 @@ describe('microMarketGeometry', () => {
         });
     });
 
-    describe('labelFor', () => {
+    describe('labelsFor', () => {
         it('uses the name when present', () => {
-            expect(labelFor({ id: 'abc', name: 'Nelamangala' })).toBe('Nelamangala');
+            expect(labelsFor({ id: 'abc', name: 'Nelamangala' })).toEqual(['Nelamangala']);
         });
 
         it('falls back to the id for blank or whitespace-only names', () => {
-            expect(labelFor({ id: 'abc', name: '' })).toBe('abc');
-            expect(labelFor({ id: 'abc', name: '   ' })).toBe('abc');
-            expect(labelFor({ id: 'abc' })).toBe('abc');
+            expect(labelsFor({ id: 'abc', name: '' })).toEqual(['abc']);
+            expect(labelsFor({ id: 'abc', name: '   ' })).toEqual(['abc']);
+            expect(labelsFor({ id: 'abc' })).toEqual(['abc']);
         });
 
         it('trims surrounding whitespace off a real name', () => {
-            expect(labelFor({ id: 'abc', name: '  Hoskote ' })).toBe('Hoskote');
+            expect(labelsFor({ id: 'abc', name: '  Hoskote ' })).toEqual(['Hoskote']);
+        });
+
+        // A slash means alternate names for the same bounding box.
+        it('splits a slashed name into one tag per alternate', () => {
+            expect(labelsFor({ id: 'abc', name: 'Bhiwandi/Kalyan' })).toEqual(['Bhiwandi', 'Kalyan']);
+        });
+
+        it('trims around the separator and handles more than two alternates', () => {
+            expect(labelsFor({ id: 'abc', name: 'A / B /C' })).toEqual(['A', 'B', 'C']);
+        });
+
+        it('ignores empty segments from stray separators', () => {
+            expect(labelsFor({ id: 'abc', name: 'A//B' })).toEqual(['A', 'B']);
+            expect(labelsFor({ id: 'abc', name: '/Hoskote' })).toEqual(['Hoskote']);
+            expect(labelsFor({ id: 'abc', name: 'Hoskote/' })).toEqual(['Hoskote']);
+        });
+
+        it('de-duplicates repeated alternates', () => {
+            expect(labelsFor({ id: 'abc', name: 'Hoskote/Hoskote' })).toEqual(['Hoskote']);
+        });
+
+        it('falls back to the id when the name is nothing but separators', () => {
+            expect(labelsFor({ id: 'abc', name: '/' })).toEqual(['abc']);
+            expect(labelsFor({ id: 'abc', name: ' / / ' })).toEqual(['abc']);
         });
     });
 
@@ -131,6 +155,19 @@ describe('microMarketGeometry', () => {
                 { id: 'y', name: 'Same', geometry: box(0, 0) },
             ];
             expect(resolveTags(dupes, 5, 5)).toEqual(['Same']);
+        });
+
+        it('tags a point with every alternate name of a slashed polygon', () => {
+            const alt = [{ id: 'x', name: 'Bhiwandi/Kalyan', geometry: box(0, 0) }];
+            expect(resolveTags(alt, 5, 5)).toEqual(['Bhiwandi', 'Kalyan']);
+        });
+
+        it('merges alternates with overlapping polygons, sorted and de-duplicated', () => {
+            const overlapping = [
+                { id: 'x', name: 'Bhiwandi/Kalyan', geometry: box(0, 0) },
+                { id: 'y', name: 'Kalyan/Dombivli', geometry: box(0, 0) },
+            ];
+            expect(resolveTags(overlapping, 5, 5)).toEqual(['Bhiwandi', 'Dombivli', 'Kalyan']);
         });
     });
 });
