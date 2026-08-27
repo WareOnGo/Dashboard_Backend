@@ -17,6 +17,7 @@ const GeoModel = require('./models/geoModel');
 const WarehouseService = require('./services/warehouseService');
 const FileUploadService = require('./services/fileUploadService');
 const AuditLogService = require('./services/auditLogService');
+const PptGenerationService = require('./services/pptGenerationService');
 const StagingService = require('./services/stagingService');
 const MicroMarketService = require('./services/microMarketService');
 const SettingsService = require('./services/settingsService');
@@ -33,6 +34,7 @@ const VisitNoteController = require('./controllers/visitNoteController');
 const ImageLabelController = require('./controllers/imageLabelController');
 const GeoController = require('./controllers/geoController');
 const AuditController = require('./controllers/auditController');
+const PptController = require('./controllers/pptController');
 
 /**
  * Dependency Injection Container
@@ -227,6 +229,12 @@ class Container {
             return new AuditLogService(auditLogModel);
         });
 
+        // Warehouse proposal decks (merged in from the Warehouse Proposal Engine)
+        this.registerSingleton('pptGenerationService', (container) => {
+            const warehouseModel = container.resolve('warehouseModel');
+            return new PptGenerationService(warehouseModel);
+        });
+
         // Staging / validation layer
         this.registerSingleton('stagedWarehouseModel', () => {
             const prismaClient = database.getClient();
@@ -352,6 +360,14 @@ class Container {
         // no injected service of its own.
         this.register('auditController', () => {
             return new AuditController();
+        });
+
+        // Writes its audit row through auditLogService directly rather than
+        // req.audit(); see PptController.recordExport for why.
+        this.register('pptController', (container) => {
+            const pptGenerationService = container.resolve('pptGenerationService');
+            const auditLogService = container.resolve('auditLogService');
+            return new PptController(pptGenerationService, auditLogService);
         });
     }
 

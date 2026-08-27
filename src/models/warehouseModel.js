@@ -385,6 +385,27 @@ class WarehouseModel extends BaseModel {
             this.handleDatabaseError(error);
         }
     }
+
+    /**
+     * Find warehouses by ID for PPT generation.
+     *
+     * Deliberately separate from findAll/findById: the deck builders need the
+     * WarehouseData relation and nothing else, with no ordering applied here
+     * (PptGenerationService re-sorts to the caller's chosen slide order).
+     *
+     * @param {number[]} ids - Warehouse IDs
+     * @returns {Array} Matching warehouses with nested WarehouseData
+     */
+    async findManyForPpt(ids) {
+        try {
+            return await this.model.findMany({
+                where: { id: { in: ids } },
+                include: { WarehouseData: true }
+            });
+        } catch (error) {
+            this.handleDatabaseError(error);
+        }
+    }
 }
 
 module.exports = WarehouseModel;

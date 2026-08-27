@@ -172,6 +172,13 @@ app.use('/api/verified-numbers', require('./routes/verifiedNumbers'));
  */
 app.use('/api/audit', require('./routes/audit'));
 
+/**
+ * Warehouse proposal deck generation (merged in from the Warehouse Proposal Engine)
+ * Mounted flat under /api so the paths stay exactly as the frontend calls them:
+ * /api/generate-ppt, -v2, -godamwale, -tci, /api/generate-detailed-ppt
+ */
+app.use('/api', require('./routes/ppt'));
+
 // --- Basic Test Route ---
 
 /**
@@ -321,6 +328,25 @@ const server = app.listen(PORT, () => {
     console.log(`📊 Health Check: http://localhost:${PORT}/health`);
     console.log(`🔧 Environment: ${process.env.NODE_ENV || 'development'}`);
 });
+
+/**
+ * Request timeouts.
+ *
+ * App Runner terminates any request at ~120s and exposes no setting to change
+ * it (verified against CloudWatch: RequestLatency maxes at exactly 125,000ms
+ * across months of traffic, and a longer run has a matching 5xx at ~120s).
+ *
+ * These are set just *under* that ceiling so Node gives up when the platform
+ * does. The proposal engine used 600s, which was unreachable — it only meant a
+ * detailed deck kept generating for up to 18 minutes on a socket that had been
+ * dead for 16 of them, then logged success for a response nobody received.
+ *
+ * headersTimeout must exceed keepAliveTimeout, or Node can close a connection
+ * mid-request.
+ */
+server.timeout = 115000;
+server.keepAliveTimeout = 115000;
+server.headersTimeout = 120000;
 
 /**
  * Server error handler
