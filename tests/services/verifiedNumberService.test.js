@@ -24,7 +24,7 @@ const ACTOR = { email: 'admin@wareongo.com', name: 'The Admin' };
 const row = (overrides = {}) => ({
     id: 1,
     name: 'Asha',
-    phone_number: '91XXXXXXXXXX',
+    phone_number: '919800000001',
     email: 'asha@wareongo.com',
     empID: 'AB12CD',
     role: 'EMPLOYEE',
@@ -82,13 +82,13 @@ describe('create', () => {
     it('normalizes email to lowercase and phone to the form the bot looks up', async () => {
         const { model, service } = make();
         await service.create(
-            { name: 'New Hire', email: 'New.Hire@WareOnGo.com', phone_number: '91XXXXXXXXXX' },
+            { name: 'New Hire', email: 'New.Hire@WareOnGo.com', phone_number: '+91 98000-00001' },
             ACTOR
         );
 
         const written = model.createOne.mock.calls[0][0];
         expect(written.email).toBe('new.hire@wareongo.com');
-        expect(written.phone_number).toBe('91XXXXXXXXXX');
+        expect(written.phone_number).toBe('919800000001');
     });
 
     it('rejects an email that differs only in case from an existing row', async () => {
@@ -106,7 +106,7 @@ describe('create', () => {
         const { service } = make({ findByPhone: jest.fn(async () => ({ id: 9 })) });
 
         await expectStatus(
-            service.create({ name: 'Dup', phone_number: '91XXXXXXXXXX' }, ACTOR),
+            service.create({ name: 'Dup', phone_number: '919800000001' }, ACTOR),
             409
         );
     });
@@ -139,7 +139,7 @@ describe('update — identity keys', () => {
     it('does not treat a same-value phone_number as a change', async () => {
         const { model, service } = make();
         // Denormalized spelling of the number already stored.
-        await service.update(1, { phone_number: '91XXXXXXXXXX' }, ACTOR);
+        await service.update(1, { phone_number: '+91 9800000001' }, ACTOR);
 
         expect(model.countDependents).not.toHaveBeenCalled();
         expect(model.updateById).toHaveBeenCalled();
