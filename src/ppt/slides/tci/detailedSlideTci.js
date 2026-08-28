@@ -95,27 +95,9 @@ const photoLayouts = {
     4: () => gridRows([2, 2]),
 };
 
-/**
- * Place the photographs, or the template's stand-in note when there are none.
- *
- * The note is deliberate client-facing copy, so a property without photographs
- * still gets its slide rather than quietly vanishing from the deck.
- */
+/** Place the photographs. Callers must pass at least one. */
 const layoutPhotos = async (pptx, slide, photos) => {
-    if (photos.length === 0) {
-        // Framed rather than floated in white space: the note used to sit beside
-        // a full table, but on its own slide bare centred text reads as a broken
-        // slide. Same panel treatment a failed image download gets.
-        slide.addShape('rect', {
-            ...PHOTO_REGION,
-            fill: { color: 'F7F7F7' }, line: { color: 'D0D0D0', width: 0.5 },
-        });
-        slide.addText('Photos not available.\nCan be provided upon request.', {
-            ...PHOTO_REGION,
-            fontFace: FONT, fontSize: 16, color: '808080', align: 'center', valign: 'middle',
-        });
-        return;
-    }
+    if (photos.length === 0) return;
     const boxes = photoLayouts[Math.min(photos.length, 4)]();
     await Promise.all(photos.slice(0, 4).map((url, i) => addImageOrPlaceholder(pptx, slide, url, boxes[i])));
 };
@@ -137,13 +119,25 @@ function startOptionSlide(pptx, optionIndex, subtitle) {
 /**
  * An option's photographs, on their own slide.
  *
- * Carries the same "Option N" title as the details slide it follows, so a reader
- * landing on it knows which property they are looking at.
+ * Carries the same "Option N" title as the details slide it precedes, so a
+ * reader landing on it knows which property they are looking at.
+ *
+ * Adds nothing when the property has no usable photograph — a slide holding only
+ * a "not available" note reads as an unfinished deck, and this one goes to
+ * clients. That also drops the template's old "can be provided upon request"
+ * copy, which only ever existed to fill the right-hand column of the combined
+ * slide. Deciding here rather than in the caller keeps "what counts as a
+ * photograph" in one place.
+ *
+ * @returns {Promise<boolean>} whether a slide was added
  */
 async function generatePhotosSlideTci(pptx, warehouse, selectedPhotoUrls, optionIndex) {
-    const slide = startOptionSlide(pptx, optionIndex, 'Photos');
     const imagePhotos = (selectedPhotoUrls || []).filter(isImageUrl).slice(0, 4);
+    if (imagePhotos.length === 0) return false;
+
+    const slide = startOptionSlide(pptx, optionIndex, 'Photos');
     await layoutPhotos(pptx, slide, imagePhotos);
+    return true;
 }
 
 /**

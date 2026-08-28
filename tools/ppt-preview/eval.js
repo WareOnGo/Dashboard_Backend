@@ -321,6 +321,47 @@ function skip(name, reason) {
 
   console.log('');
 
+  // ── TCI: photographs live on their own slide, and only when they exist ────
+  currentGroup = 'tci: ';
+  console.log('tci slide split');
+
+  const withPhotos = await session.build('tci', { ids: [1000] });          // 1 photograph
+  const withPhotosInspection = await inspect(withPhotos.buffer);
+  const photoSlides = (inspection) => inspection.slides.filter((sl) => /– Photos/.test(sl.joined));
+
+  check(
+    'a property with photographs gets a details slide and a photos slide',
+    withPhotosInspection.slideCount === 4 && photoSlides(withPhotosInspection).length === 1,
+    `${withPhotosInspection.slideCount} slides, ${photoSlides(withPhotosInspection).length} photos slide(s)`,
+  );
+
+  check(
+    'the photographs are not on the details slide any more',
+    !/– Photos/.test(withPhotosInspection.slides[1]?.joined || '')
+      && /Property Details/.test(withPhotosInspection.slides[1]?.joined || ''),
+    `slide 2 reads "${(withPhotosInspection.slides[1]?.joined || '').slice(0, 60)}"`,
+  );
+
+  // 1004 is the fixture with no photographs at all.
+  const noPhotos = await session.build('tci', { ids: [1004] });
+  const noPhotosInspection = await inspect(noPhotos.buffer);
+  check(
+    'a property with no photographs gets no photos slide',
+    noPhotosInspection.slideCount === 3 && photoSlides(noPhotosInspection).length === 0,
+    `${noPhotosInspection.slideCount} slides, ${photoSlides(noPhotosInspection).length} photos slide(s)`,
+  );
+
+  // The table now spans the content box; the label column carries the longest
+  // label on one line, which is why it was widened.
+  check(
+    'the details table still carries every row',
+    /Building Stability Certificate/.test(withPhotosInspection.slides[1]?.joined || '')
+      && /Handover timeline/.test(withPhotosInspection.slides[1]?.joined || ''),
+    'a table row went missing when the layout changed',
+  );
+
+  console.log('');
+
   // ── Report ───────────────────────────────────────────────────────────────
   const failed = results.filter((r) => !r.pass && !r.skipped);
   const skipped = results.filter((r) => r.skipped);

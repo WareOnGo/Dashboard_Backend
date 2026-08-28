@@ -21,12 +21,22 @@ const backendRoot = path.resolve(harnessRoot, '..', '..');
  *   standard   3 + n            title + index + n property slides + contact
  *   v2         3 + n            title + index + n property slides + POC
  *   godamwale  2 + n            title + index + n property slides
- *   tci        2 + 2n           baked title + a details and a photos slide per
- *                               property + baked thank-you
+ *   tci        2 + n + p        baked title + a details slide per property, plus a
+ *                               photos slide for each of the p with photographs,
+ *                               + baked thank-you
  *   detailed   2 + 3a + 2b      title + closing, then three pages per warehouse
  *                               with photos (a) and two for one without (b)
  */
-const hasPhotos = (w) => typeof w.photos === 'string' && w.photos.trim().length > 0;
+// Mirrors isImageUrl in src/ppt/slides/tci/detailedSlideTci.js: a row can carry a
+// photos value that holds no usable image (a PDF, say), and the deck builders
+// count images, not URLs.
+const IMAGE_URL_RE = /\.(jpe?g|png|gif|webp|bmp)(?:$|\?)/i;
+const imagePhotoCount = (w) => String(w.photos || '')
+    .split(',')
+    .map((u) => u.trim())
+    .filter((u) => IMAGE_URL_RE.test(u))
+    .length;
+const hasPhotos = (w) => imagePhotoCount(w) > 0;
 
 const VARIANTS = {
   standard: {
@@ -46,9 +56,9 @@ const VARIANTS = {
   },
   tci: {
     label: 'TCI',
-    // Two slides per property: the full-width specification table, then the
-    // photographs. The photos slide is emitted even when a property has none.
-    slides: (warehouses) => 2 + 2 * warehouses.length,
+    // A details slide per property, plus a photos slide only for those that have
+    // photographs — a property without any contributes one slide, not two.
+    slides: (warehouses) => 2 + warehouses.length + warehouses.filter(hasPhotos).length,
     network: false,
   },
   detailed: {

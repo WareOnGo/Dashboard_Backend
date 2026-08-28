@@ -35,7 +35,7 @@ const COUNTS = [1, 2, 3, 4, 5, 6];
 
   const photoCounts = session.fixtures.map((w) => (w.photos ? w.photos.split(',').length : 0));
   console.log(`\nfixture photos per warehouse: [${photoCounts.join(', ')}]`);
-  console.log('(a warehouse with 0 photos changes the detailed deck\'s page count)\n');
+  console.log("(a warehouse with 0 photos changes the detailed and TCI page counts)\n");
 
   console.log(`${'variant'.padEnd(11)}${COUNTS.map((n) => `n=${n}`.padStart(7)).join('')}   formula`);
   for (const variant of VARIANT_NAMES) {
