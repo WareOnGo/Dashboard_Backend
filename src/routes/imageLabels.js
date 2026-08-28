@@ -46,12 +46,13 @@ router.post('/sweep',
 /**
  * GET /api/image-labels/warehouse/:id
  *
- * Labels for one warehouse's images. Gated by JWT only — deliberately matching
+ * Labels for one warehouse's images. Gated on DASHBOARD — deliberately matching
  * GET /api/warehouses, since anyone who can see a listing can see how its own
  * photos were categorised. Registered before the REVIEW gate below.
  */
 router.get('/warehouse/:id',
     authMiddleware.authenticateJWT,
+    authMiddleware.requireAccess(CAPS.DASHBOARD),
     imageLabelController.byWarehouse,
 );
 

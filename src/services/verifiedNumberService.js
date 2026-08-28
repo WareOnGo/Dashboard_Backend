@@ -4,6 +4,7 @@ const { computeChanges } = require('../utils/auditDiff');
 const { normalizePhone } = require('./gupshupService');
 const { generateUniqueEmpId } = require('../utils/empIdGenerator');
 const { isAdmin } = require('../utils/admin');
+const { invalidateCapabilities } = require('../utils/access');
 const database = require('../utils/database');
 
 const clientError = (message, statusCode, details = null) => {
@@ -198,7 +199,11 @@ class VerifiedNumberService extends BaseService {
             data.empID = await generateUniqueEmpId(database.getClient());
 
             try {
-                return await this.verifiedNumberModel.createOne(data);
+                const created = await this.verifiedNumberModel.createOne(data);
+                // A brand-new row can already be cached as "no access" if that email
+                // was refused a moment ago, so drop the entry rather than wait it out.
+                invalidateCapabilities(created.email);
+                return created;
             } catch (err) {
                 if (err.code === 'P2002') {
                     throw clientError(
@@ -237,6 +242,10 @@ class VerifiedNumberService extends BaseService {
 
             try {
                 const row = await this.verifiedNumberModel.updateById(id, data);
+                // Grants and revokes must take effect on the next request, not after
+                // the capability TTL. Both addresses matter when the email changed.
+                invalidateCapabilities(existing.email);
+                invalidateCapabilities(row.email);
                 return { row, changes };
             } catch (err) {
                 if (err.code === 'P2025') throw clientError(`Employee with ID ${id} not found`, 404);

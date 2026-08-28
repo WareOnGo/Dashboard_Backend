@@ -38,6 +38,7 @@ const scoutUploadRateLimiter = rateLimit({
  */
 router.get('/', 
     authMiddleware.authenticateJWT,
+    authMiddleware.requireAccess(CAPS.DASHBOARD),
     warehouseController.getAllWarehouses
 );
 
@@ -46,6 +47,7 @@ router.get('/',
  */
 router.get('/search', 
     authMiddleware.authenticateJWT,
+    authMiddleware.requireAccess(CAPS.DASHBOARD),
     warehouseController.searchWarehouses
 );
 
@@ -54,6 +56,7 @@ router.get('/search',
  */
 router.get('/statistics',
     authMiddleware.authenticateJWT,
+    authMiddleware.requireAccess(CAPS.DASHBOARD),
     warehouseController.getWarehouseStatistics
 );
 
@@ -64,6 +67,7 @@ router.get('/statistics',
  */
 router.get('/coordinates',
     authMiddleware.authenticateJWT,
+    authMiddleware.requireAccess(CAPS.DASHBOARD),
     warehouseController.getWarehouseCoordinates
 );
 
@@ -75,6 +79,7 @@ router.get('/coordinates',
  */
 router.get('/:id/contact-number',
     authMiddleware.authenticateJWT,
+    authMiddleware.requireAccess(CAPS.DASHBOARD),
     validationMiddleware.validateContactReveal,
     warehouseController.getContactNumber
 );
@@ -86,6 +91,7 @@ router.get('/:id/contact-number',
  */
 router.get('/:id/visit-notes',
     authMiddleware.authenticateJWT,
+    authMiddleware.requireAccess(CAPS.DASHBOARD),
     visitNoteController.list
 );
 
@@ -94,6 +100,7 @@ router.get('/:id/visit-notes',
  */
 router.post('/:id/visit-notes',
     authMiddleware.authenticateJWT,
+    authMiddleware.requireAccess(CAPS.DASHBOARD),
     validationMiddleware.validateVisitNoteCreate,
     visitNoteController.create
 );
@@ -103,6 +110,7 @@ router.post('/:id/visit-notes',
  */
 router.put('/:id/visit-notes/:noteId',
     authMiddleware.authenticateJWT,
+    authMiddleware.requireAccess(CAPS.DASHBOARD),
     validationMiddleware.validateVisitNoteUpdate,
     visitNoteController.update
 );
@@ -122,6 +130,7 @@ router.delete('/:id/visit-notes/:noteId',
  */
 router.get('/:id',
     authMiddleware.authenticateJWT,
+    authMiddleware.requireAccess(CAPS.DASHBOARD),
     warehouseController.getWarehouseById
 );
 
@@ -130,6 +139,7 @@ router.get('/:id',
  */
 router.post('/', 
     authMiddleware.authenticateJWT,
+    authMiddleware.requireAccess(CAPS.DASHBOARD),
     validationMiddleware.validateWarehouseCreate,
     warehouseController.createWarehouse
 );
@@ -150,6 +160,7 @@ router.post('/scout',
  */
 router.put('/:id', 
     authMiddleware.authenticateJWT,
+    authMiddleware.requireAccess(CAPS.DASHBOARD),
     validationMiddleware.validateWarehouseUpdate,
     warehouseController.updateWarehouse
 );
@@ -170,6 +181,7 @@ router.delete('/:id',
  */
 router.post('/presigned-url', 
     authMiddleware.authenticateJWT,
+    authMiddleware.requireAccess(CAPS.DASHBOARD),
     validationMiddleware.validateFileUpload,
     warehouseController.generatePresignedUrl
 );
@@ -190,6 +202,7 @@ router.post('/scout/presigned-url',
  */
 router.post('/presigned-urls/batch', 
     authMiddleware.authenticateJWT,
+    authMiddleware.requireAccess(CAPS.DASHBOARD),
     validationMiddleware.validateBatchFileUpload,
     warehouseController.generateMultiplePresignedUrls
 );
@@ -199,6 +212,7 @@ router.post('/presigned-urls/batch',
  */
 router.post('/files/:fileName/validate', 
     authMiddleware.authenticateJWT,
+    authMiddleware.requireAccess(CAPS.DASHBOARD),
     warehouseController.validateUploadedFile
 );
 
@@ -216,6 +230,7 @@ router.delete('/files/:fileName',
  */
 router.get('/files/:fileName', 
     authMiddleware.authenticateJWT,
+    authMiddleware.requireAccess(CAPS.DASHBOARD),
     warehouseController.getFileInfo
 );
 

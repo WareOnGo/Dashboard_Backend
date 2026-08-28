@@ -3,19 +3,20 @@ const express = require('express');
 const router = express.Router();
 const container = require('../container');
 const { authMiddleware } = require('../middleware/authMiddleware');
+const { CAPS } = require('../utils/access');
 
 const geoController = container.resolve('geoController');
 
 /**
  * Map view routes.
  *
- * Gated by JWT only, matching GET /api/warehouses — anyone who can see the
+ * Gated on DASHBOARD, matching GET /api/warehouses — anyone who can see the
  * warehouse list can see it on a map. Creating and editing our own points is a
  * normal dashboard action, not a reviewer-only one, so it sits behind the same
  * gate rather than requiring the REVIEW capability (unlike micro-market polygons,
  * which drive automated tagging and therefore need review).
  */
-router.use(authMiddleware.authenticateJWT);
+router.use(authMiddleware.authenticateJWT, authMiddleware.requireAccess(CAPS.DASHBOARD));
 
 /** Categories + counts, for building layer toggles. */
 router.get('/layers', geoController.layers);

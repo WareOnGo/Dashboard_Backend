@@ -3,6 +3,7 @@ const express = require('express');
 const router = express.Router();
 const container = require('../container');
 const { authMiddleware } = require('../middleware/authMiddleware');
+const { CAPS } = require('../utils/access');
 
 const pptController = container.resolve('pptController');
 
@@ -15,17 +16,16 @@ const pptController = container.resolve('pptController');
  * could generate a deck for any warehouse ID. They now sit behind the same gate
  * as the rest of the dashboard.
  *
- * JWT only, no capability check. Exporting a proposal is normal dashboard work
- * available to anyone signed in, and this matches how GET /api/warehouses and
- * POST /api/audit/ppt-export are already gated — if you can see the warehouses,
- * you can put them in a deck.
+ * Gated on DASHBOARD, matching GET /api/warehouses — if you can see the
+ * warehouses, you can put them in a deck.
  *
- * These briefly required CAPS.DASHBOARD, which broke every non-admin: that
- * column is set on nobody (0 of 19 VerifiedNumber rows), so the only accounts
- * that still worked were the five admins, via the admin master-override. Do not
- * reintroduce a capability gate here without first provisioning the column and
- * hiding the export button for users who lack it — otherwise it fails as an
- * opaque 403 at the end of a deck the user already waited for.
+ * These briefly required CAPS.DASHBOARD once before and broke every non-admin,
+ * because the column was set on nobody (0 of 19 VerifiedNumber rows) and only
+ * the admin master-override still worked. The precondition that failure implies
+ * is now met: the column was backfilled for every active employee first, and a
+ * user who lacks it cannot load the warehouse list either, so they never reach
+ * an export button — rather than being refused at the end of a deck they had
+ * already waited for. Do not reintroduce the gate on a column nobody holds.
  *
  * Paths are mounted flat under /api (not /api/ppt) to preserve the exact URLs
  * the frontend already calls, so cutover is a config change, not a code change.
@@ -33,7 +33,7 @@ const pptController = container.resolve('pptController');
 // Applied per-route rather than via router.use(): this router is mounted flat
 // at /api, so router-level middleware would also run for every unmatched /api/*
 // path and turn what should be a 404 into a 401.
-const gate = [authMiddleware.authenticateJWT];
+const gate = [authMiddleware.authenticateJWT, authMiddleware.requireAccess(CAPS.DASHBOARD)];
 
 router.post('/generate-ppt', ...gate,
     pptController.handleGenerate({ variant: 'standard', label: 'standard' }));

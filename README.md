@@ -247,6 +247,19 @@ router.use(authMiddleware.authenticateJWT, authMiddleware.requireAccess(CAPS.REV
 - Lookup is case-insensitive (OAuth emails are lowercase; stored emails may not be).
 - `requireAccess` also stashes `req.user.capabilities` / `isAdmin` / `isReviewer` for
   downstream handlers.
+- Resolved capability sets are cached in memory for 30s, so a gated request is not one DB
+  round trip per page load. Writes through the admin panel invalidate the entry
+  immediately (`invalidateCapabilities`), so the TTL only bounds staleness for changes made
+  out-of-band. Failed lookups are never cached: a DB blip must retry on the next request
+  rather than pin "no access" for the whole window.
+- `DASHBOARD` gates the dashboard-facing surface — `/api/warehouses`, `/api/geo`,
+  `/api/ppt`, and `GET /api/image-labels/warehouse/:id`. Grant it with the admin panel
+  (`/admin`, backed by `/api/verified-numbers/admin`) or, for a bulk cutover,
+  `npm run backfill:dashboard-access`. Never enable a gate on a column nobody holds — see
+  the comment in `routes/ppt.js` for what that costs.
+- `GET /api/verified-numbers` stays JWT-only on purpose: it backs the PPT modal's POC
+  picker for every user, so a capability gate there would break export for anyone without
+  the flag.
 
 Adding a service: add a `CAPS` key, a `CAP_COLUMN` entry + Prisma column, and gate the
 routes. No other call site changes.

@@ -2,6 +2,25 @@ const { isAdmin } = require('./admin');
 const database = require('./database');
 
 /**
+ * How long a resolved capability set is trusted, in ms.
+ *
+ * Every gated request resolves capabilities, which was one DB round trip per
+ * request. That was tolerable while only the review panel was gated; once the
+ * main dashboard is, the same query sits in front of every page load, and a
+ * momentary DB failure logs the whole company out (resolveCapabilities fails
+ * closed by design). A short TTL keeps that window small without making the
+ * lookup a per-request cost.
+ *
+ * Writes made through the admin panel invalidate the entry immediately, so the
+ * TTL only bounds staleness for changes made out-of-band (direct SQL, another
+ * instance). Kept short for that reason: a revoke must not linger.
+ */
+const CAPABILITY_TTL_MS = 30 * 1000;
+
+/** email (lowercased) -> { caps, at } */
+const capabilityCache = new Map();
+
+/**
  * Capability-based (service-based) access control.
  *
  * Access is a set of independent capabilities rather than a single role, so a user can
@@ -39,6 +58,16 @@ const allCaps = (value) =>
     Object.values(CAPS).reduce((acc, cap) => ({ ...acc, [cap]: value }), {});
 
 /**
+ * Drop a cached capability set so the next request re-reads from the DB.
+ * Called with no argument, clears the whole cache.
+ * @param {string} [email]
+ */
+function invalidateCapabilities(email) {
+    if (typeof email === 'string') capabilityCache.delete(email.toLowerCase());
+    else capabilityCache.clear();
+}
+
+/**
  * Resolve a user's capability set from their email.
  *
  * Returns a plain map { DASHBOARD, CALL_DASHBOARD, REVIEW, ADMIN } of booleans. Env-admins and
@@ -52,6 +81,10 @@ async function resolveCapabilities(email) {
     if (isAdmin(email)) return allCaps(true); // env master override
     if (!email || typeof email !== 'string') return allCaps(false);
 
+    const key = email.toLowerCase();
+    const hit = capabilityCache.get(key);
+    if (hit && Date.now() - hit.at < CAPABILITY_TTL_MS) return hit.caps;
+
     try {
         const prisma = database.getClient();
         const row = await prisma.verifiedNumber.findFirst({
@@ -60,16 +93,21 @@ async function resolveCapabilities(email) {
             where: { email: { equals: email, mode: 'insensitive' } },
             select: COLUMN_SELECT,
         });
-        if (!row) return allCaps(false);
+        const caps = !row
+            ? allCaps(false)
+            : row.adminAccess
+                ? allCaps(true) // DB admin implies everything
+                : {
+                    [CAPS.DASHBOARD]: !!row.dashboardAccess,
+                    [CAPS.CALL_DASHBOARD]: !!row.callDashboardAccess,
+                    [CAPS.REVIEW]: !!row.reviewerAccess,
+                    [CAPS.ADMIN]: false,
+                };
 
-        if (row.adminAccess) return allCaps(true); // DB admin implies everything
-
-        return {
-            [CAPS.DASHBOARD]: !!row.dashboardAccess,
-            [CAPS.CALL_DASHBOARD]: !!row.callDashboardAccess,
-            [CAPS.REVIEW]: !!row.reviewerAccess,
-            [CAPS.ADMIN]: false,
-        };
+        // Only successful lookups are cached. A DB failure must retry on the next
+        // request rather than pin "no access" for the whole TTL.
+        capabilityCache.set(key, { caps, at: Date.now() });
+        return caps;
     } catch (err) {
         console.error('resolveCapabilities lookup failed:', err.message);
         return allCaps(false); // fail closed
@@ -79,4 +117,4 @@ async function resolveCapabilities(email) {
 /** Whether a resolved capability map grants the given capability. */
 const can = (caps, capability) => !!caps?.[capability];
 
-module.exports = { CAPS, CAP_COLUMN, resolveCapabilities, can };
+module.exports = { CAPS, CAP_COLUMN, resolveCapabilities, can, invalidateCapabilities };
