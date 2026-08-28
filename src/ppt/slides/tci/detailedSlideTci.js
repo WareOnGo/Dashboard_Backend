@@ -1,4 +1,4 @@
-const { COLORS, FONT } = require('./themeTci');
+const { COLORS, LAYOUT, FONT } = require('./themeTci');
 const { addOptionSlideChrome } = require('./chromeTci');
 const { fetchImage } = require('../../utils/image');
 
@@ -52,44 +52,64 @@ const addImageOrPlaceholder = async (pptx, slide, url, box) => {
     }
 };
 
-// Photo column on the right matches the source template's split: table fills
-// the left half, two large photos stack vertically on the right.
-const PHOTO_REGION = { x: 5.30, y: 1.25, w: 4.45, h: 5.85 };
+/**
+ * Photographs get the whole content box on their own slide.
+ *
+ * Every cell is one quarter of that box, so a cell's aspect (~1.67) matches the
+ * box's own — meaning no arrangement crops a landscape photo harder than any
+ * other. Fewer than four photos use the same cells and centre what they have
+ * vertically, rather than stretching two photos over an area shaped for four.
+ */
+const PHOTO_REGION = {
+    x: LAYOUT.MARGIN,
+    y: LAYOUT.CONTENT_TOP,
+    w: LAYOUT.CONTENT_W,
+    h: LAYOUT.CONTENT_H,
+};
 const GAP = 0.12;
 
-const photoLayouts = {
-    1: () => [{ ...PHOTO_REGION }],
-    2: () => {
-        const h = (PHOTO_REGION.h - GAP) / 2;
-        return [
-            { x: PHOTO_REGION.x, y: PHOTO_REGION.y, w: PHOTO_REGION.w, h },
-            { x: PHOTO_REGION.x, y: PHOTO_REGION.y + h + GAP, w: PHOTO_REGION.w, h },
-        ];
-    },
-    3: () => {
-        const topH = (PHOTO_REGION.h - GAP) * 0.55;
-        const botH = PHOTO_REGION.h - topH - GAP;
-        const botW = (PHOTO_REGION.w - GAP) / 2;
-        return [
-            { x: PHOTO_REGION.x, y: PHOTO_REGION.y, w: PHOTO_REGION.w, h: topH },
-            { x: PHOTO_REGION.x, y: PHOTO_REGION.y + topH + GAP, w: botW, h: botH },
-            { x: PHOTO_REGION.x + botW + GAP, y: PHOTO_REGION.y + topH + GAP, w: botW, h: botH },
-        ];
-    },
-    4: () => {
-        const w = (PHOTO_REGION.w - GAP) / 2;
-        const h = (PHOTO_REGION.h - GAP) / 2;
-        return [
-            { x: PHOTO_REGION.x, y: PHOTO_REGION.y, w, h },
-            { x: PHOTO_REGION.x + w + GAP, y: PHOTO_REGION.y, w, h },
-            { x: PHOTO_REGION.x, y: PHOTO_REGION.y + h + GAP, w, h },
-            { x: PHOTO_REGION.x + w + GAP, y: PHOTO_REGION.y + h + GAP, w, h },
-        ];
-    },
+const CELL_W = (PHOTO_REGION.w - GAP) / 2;
+const CELL_H = (PHOTO_REGION.h - GAP) / 2;
+
+/** Rows of cells, centred vertically in the region. */
+const gridRows = (counts) => {
+    const rowCount = counts.length;
+    const totalH = rowCount * CELL_H + (rowCount - 1) * GAP;
+    const top = PHOTO_REGION.y + (PHOTO_REGION.h - totalH) / 2;
+
+    return counts.flatMap((inRow, rowIndex) => {
+        const y = top + rowIndex * (CELL_H + GAP);
+        const rowW = inRow * CELL_W + (inRow - 1) * GAP;
+        const left = PHOTO_REGION.x + (PHOTO_REGION.w - rowW) / 2;
+        return Array.from({ length: inRow }, (_, i) => ({
+            x: left + i * (CELL_W + GAP), y, w: CELL_W, h: CELL_H,
+        }));
+    });
 };
 
+const photoLayouts = {
+    // A lone photo takes the full box, which has the same shape as a cell.
+    1: () => [{ ...PHOTO_REGION }],
+    2: () => gridRows([2]),
+    3: () => gridRows([2, 1]),
+    4: () => gridRows([2, 2]),
+};
+
+/**
+ * Place the photographs, or the template's stand-in note when there are none.
+ *
+ * The note is deliberate client-facing copy, so a property without photographs
+ * still gets its slide rather than quietly vanishing from the deck.
+ */
 const layoutPhotos = async (pptx, slide, photos) => {
     if (photos.length === 0) {
+        // Framed rather than floated in white space: the note used to sit beside
+        // a full table, but on its own slide bare centred text reads as a broken
+        // slide. Same panel treatment a failed image download gets.
+        slide.addShape('rect', {
+            ...PHOTO_REGION,
+            fill: { color: 'F7F7F7' }, line: { color: 'D0D0D0', width: 0.5 },
+        });
         slide.addText('Photos not available.\nCan be provided upon request.', {
             ...PHOTO_REGION,
             fontFace: FONT, fontSize: 16, color: '808080', align: 'center', valign: 'middle',
@@ -100,16 +120,40 @@ const layoutPhotos = async (pptx, slide, photos) => {
     await Promise.all(photos.slice(0, 4).map((url, i) => addImageOrPlaceholder(pptx, slide, url, boxes[i])));
 };
 
-async function generateDetailedSlideTci(pptx, warehouse, selectedPhotoUrls, optionIndex) {
+/** Title + chrome, shared by both of an option's slides. */
+function startOptionSlide(pptx, optionIndex, subtitle) {
     const slide = pptx.addSlide();
     slide.background = { color: COLORS.bg };
 
-    slide.addText(`${optionIndex}. Option ${optionIndex} – Property Details & Photos`, {
+    slide.addText(`${optionIndex}. Option ${optionIndex} – ${subtitle}`, {
         x: 0.32, y: 0.38, w: 7.0, h: 0.55,
         fontFace: FONT, fontSize: 22, bold: true, color: COLORS.text,
     });
 
     addOptionSlideChrome(slide);
+    return slide;
+}
+
+/**
+ * An option's photographs, on their own slide.
+ *
+ * Carries the same "Option N" title as the details slide it follows, so a reader
+ * landing on it knows which property they are looking at.
+ */
+async function generatePhotosSlideTci(pptx, warehouse, selectedPhotoUrls, optionIndex) {
+    const slide = startOptionSlide(pptx, optionIndex, 'Photos');
+    const imagePhotos = (selectedPhotoUrls || []).filter(isImageUrl).slice(0, 4);
+    await layoutPhotos(pptx, slide, imagePhotos);
+}
+
+/**
+ * An option's specification table, full width.
+ *
+ * The table used to share the slide with the photographs, taking the left half;
+ * the photographs now have their own slide, so it spans the content box.
+ */
+async function generateDetailedSlideTci(pptx, warehouse, selectedPhotoUrls, optionIndex) {
+    const slide = startOptionSlide(pptx, optionIndex, 'Property Details');
 
     const projectName = warehouse.projectName
         || warehouse.address
@@ -229,15 +273,15 @@ async function generateDetailedSlideTci(pptx, warehouse, selectedPhotoUrls, opti
         return [{ text: label, options: labelOpts }, valueCell];
     });
 
+    // Label column widened with the extra room: "Building Stability Certificate"
+    // wrapped to two lines at the old 1.85".
+    const LABEL_W = 2.60;
     slide.addTable(cells, {
-        x: 0.20, y: 1.30, w: 4.95,
-        colW: [1.85, 3.10],
+        x: LAYOUT.MARGIN, y: LAYOUT.CONTENT_TOP, w: LAYOUT.CONTENT_W,
+        colW: [LABEL_W, LAYOUT.CONTENT_W - LABEL_W],
         rowH: 0.27,
         border: { type: 'solid', pt: 0.5, color: COLORS.border },
     });
-
-    const imagePhotos = (selectedPhotoUrls || []).filter(isImageUrl).slice(0, 4);
-    await layoutPhotos(pptx, slide, imagePhotos);
 }
 
-module.exports = { generateDetailedSlideTci };
+module.exports = { generateDetailedSlideTci, generatePhotosSlideTci };

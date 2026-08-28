@@ -1,7 +1,7 @@
 const PptxGenJS = require('pptxgenjs');
 
 const { generateTitleSlideTci } = require('../slides/tci/titleSlideTci');
-const { generateDetailedSlideTci } = require('../slides/tci/detailedSlideTci');
+const { generateDetailedSlideTci, generatePhotosSlideTci } = require('../slides/tci/detailedSlideTci');
 const { generateThankYouSlideTci } = require('../slides/tci/thankYouSlideTci');
 
 // Placeholder warehouses used when the caller doesn't supply real data yet —
@@ -58,7 +58,12 @@ const createPptBufferTci = async (warehouses, selectedImages = {}, customDetails
         const photos = selectedImages[w.id] || (typeof w.photos === 'string' && w.photos.trim()
             ? w.photos.split(',').map((s) => s.trim()).filter(Boolean)
             : []);
+        // Two slides per option: the full-width specification table, then the
+        // photographs. The photos slide is always present — when a property has
+        // none it carries the "can be provided upon request" note the template
+        // has always shown, rather than silently dropping out of the deck.
         await generateDetailedSlideTci(pptx, w, photos, i + 1);
+        await generatePhotosSlideTci(pptx, w, photos, i + 1);
     }
 
     generateThankYouSlideTci(pptx);

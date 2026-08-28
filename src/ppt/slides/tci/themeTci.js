@@ -11,6 +11,24 @@ const COLORS = {
     hyperlink: '0563C1',
 };
 
+// Option-slide content box. Every element below the title — the grey rules, the
+// spec table, the photo grid — is laid out against this, so the slide reads as
+// one column with equal left/right margins.
+//
+// The traced rules were very slightly asymmetric (0.17 in from the left, 0.28
+// from the right); they now use MARGIN like everything else.
+const LAYOUT = {
+    SLIDE_W: 10,
+    SLIDE_H: 7.5,
+    MARGIN: 0.20,
+    /** Top of the content area, just below the rules. */
+    CONTENT_TOP: 1.30,
+    /** Bottom of the content area. */
+    CONTENT_BOTTOM: 7.10,
+};
+LAYOUT.CONTENT_W = LAYOUT.SLIDE_W - 2 * LAYOUT.MARGIN;
+LAYOUT.CONTENT_H = LAYOUT.CONTENT_BOTTOM - LAYOUT.CONTENT_TOP;
+
 const FONT = 'Calibri';
 const FONT_BOLD = 'Calibri';
 
@@ -26,6 +44,7 @@ const formatDate = (d = new Date()) => {
 
 module.exports = {
     COLORS,
+    LAYOUT,
     FONT,
     FONT_BOLD,
     TCI_LOGO_PATH,

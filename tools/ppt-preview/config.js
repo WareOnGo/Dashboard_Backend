@@ -21,7 +21,8 @@ const backendRoot = path.resolve(harnessRoot, '..', '..');
  *   standard   3 + n            title + index + n property slides + contact
  *   v2         3 + n            title + index + n property slides + POC
  *   godamwale  2 + n            title + index + n property slides
- *   tci        2 + n            baked title + n property slides + baked thank-you
+ *   tci        2 + 2n           baked title + a details and a photos slide per
+ *                               property + baked thank-you
  *   detailed   2 + 3a + 2b      title + closing, then three pages per warehouse
  *                               with photos (a) and two for one without (b)
  */
@@ -45,7 +46,9 @@ const VARIANTS = {
   },
   tci: {
     label: 'TCI',
-    slides: (warehouses) => 2 + warehouses.length,
+    // Two slides per property: the full-width specification table, then the
+    // photographs. The photos slide is emitted even when a property has none.
+    slides: (warehouses) => 2 + 2 * warehouses.length,
     network: false,
   },
   detailed: {
