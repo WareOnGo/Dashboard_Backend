@@ -20,6 +20,10 @@ tests/
 coverage/
 jest.config.js
 
+# Local deck preview / eval harness. Dev-only: it drives the generators in
+# process, needs LibreOffice and poppler, and never runs in a container.
+tools/ppt-preview/
+
 # Development files
 .vscode/
 .idea/

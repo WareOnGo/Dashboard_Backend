@@ -145,3 +145,6 @@ vite.config.ts.timestamp-*
 locality_warehouse_within_2km.csv
 fetch_warehouse_coords.js
 match_localities_2km.js
+
+# Local deck preview artefacts (rendered slides, pdfs, decks)
+tools/ppt-preview/out/
