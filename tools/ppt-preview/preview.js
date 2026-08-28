@@ -170,7 +170,9 @@ async function buildAll(session, dir) {
 
   console.log(`\nppt-preview — ${wanted.join(', ')}`);
   console.log(`  source: ${options.useDb ? 'database (Prisma)' : `${options.count} fixture warehouses`}`);
-  console.log(`  network: ${options.offline ? 'blocked except the fixture photo origin' : 'open'}`);
+  console.log(`  network: ${options.offline
+    ? "photos from the loaded rows' own hosts only — enrichment APIs refused (--online to allow)"
+    : 'open'}`);
   console.log(`  output: ${dir}\n`);
 
   let session = await createSession({

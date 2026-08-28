@@ -163,7 +163,7 @@ function renderContactSheet({ decks, dir, meta, results }) {
   <div class="top">
     <div>
       <h1>PPT preview</h1>
-      <div class="dim">${escapeHtml(meta.source)} · ${escapeHtml(String(meta.dpi))} dpi · network ${meta.offline ? 'blocked' : 'open'}${flags ? ` · ${escapeHtml(flags)}` : ''}</div>
+      <div class="dim">${escapeHtml(meta.source)} · ${escapeHtml(String(meta.dpi))} dpi · ${meta.offline ? 'photos only, enrichment refused' : 'network open'}${flags ? ` · ${escapeHtml(flags)}` : ''}</div>
       <div class="note">${escapeHtml(dir)}</div>
       ${blocked}
       <div class="note">${meta.photoRequests} fixture photo request(s) · built ${escapeHtml(meta.generatedAt)}</div>

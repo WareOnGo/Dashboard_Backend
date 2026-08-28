@@ -21,6 +21,17 @@ const PptGenerationService = require(path.join(backendRoot, 'src/services/pptGen
  * ~120s cap does not exist here.
  */
 
+/** Hostnames appearing in these rows' photo URLs. */
+function photoHosts(warehouses) {
+  const hosts = new Set();
+  for (const warehouse of warehouses) {
+    for (const url of String(warehouse.photos || '').split(',')) {
+      try { hosts.add(new URL(url.trim()).hostname); } catch { /* not a URL */ }
+    }
+  }
+  return hosts;
+}
+
 /**
  * Set up a session: photo origin, network guard, warehouses, service.
  *
@@ -81,6 +92,14 @@ async function createSession({ count = 6, imagePort = 0, offline = true, useDb =
 
       const wanted = ids && ids.length ? ids : fixtures.map((w) => w.id);
       const warehouses = await service.findWarehousesByIds(wanted);
+
+      // Let the photographs these rows actually reference through. For fixtures
+      // that is the local origin, which was already allowed; for `--db` it is
+      // wherever the real media lives (R2 today). Without this, a `--db` preview
+      // renders every photo frame empty — the deck is real but unreviewable.
+      if (guard) {
+        for (const host of photoHosts(warehouses)) guard.allow(host);
+      }
 
       // TCI is the one variant that tolerates an empty set, falling back to its
       // own placeholder warehouses.

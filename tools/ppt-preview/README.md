@@ -34,12 +34,17 @@ Two things are substituted:
 - **Warehouses** come from `lib/fixtures.js` — deterministic rows in exactly the
   shape `WarehouseModel.findManyForPpt` returns (flat columns plus an included
   `WarehouseData`). `--db` swaps in real rows through Prisma.
-- **The network** is refused except a local photo origin. The deck builders fetch
-  every photograph over HTTP through `src/ppt/utils/image.js`, so the harness
-  *serves* fixture photos rather than stubbing that module — the real fetch, the
-  real EXIF handling and the real header parsing all run. Everything else is
-  blocked at the `http`/`https` module and **recorded**, which is how a run can
-  report that a detailed deck makes 7 third-party calls per warehouse.
+- **The network** is refused apart from the photographs the loaded rows actually
+  reference. The deck builders fetch every photo over HTTP through
+  `src/ppt/utils/image.js`, so the harness *serves* fixture photos rather than
+  stubbing that module — the real fetch, the real EXIF handling and the real
+  header parsing all run. With `--db` the same rule allows the real media host,
+  because a deck of empty photo frames is not a preview of real data.
+
+  Everything else — the detailed deck's Google Maps, Mapbox, Nominatim and
+  Overpass enrichment — is blocked at the `http`/`https` module and **recorded**,
+  which is how a run can report that a detailed deck makes 7 third-party calls
+  per warehouse. `--online` lifts that.
 
 ## Preview
 

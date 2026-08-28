@@ -64,6 +64,24 @@ function installNetGuard({ allowHosts = ['127.0.0.1', 'localhost'] } = {}) {
 
   return {
     attempts,
+
+    /**
+     * Add a host to the allow-list mid-run.
+     *
+     * Used for the hosts the loaded rows' own photographs live on: with `--db`
+     * you are previewing real data, and a deck of empty photo frames is not that
+     * data. Enrichment APIs stay refused unless the caller asked for `--online`,
+     * so the slow, non-deterministic part is still off by default.
+     */
+    allow(host) {
+      if (host) allowed.add(String(host).replace(/:\d+$/, ''));
+    },
+
+    /** Hosts currently permitted. */
+    allowedHosts() {
+      return [...allowed];
+    },
+
     /** Blocked hosts with a count each, most-contacted first. */
     summary() {
       const counts = new Map();
