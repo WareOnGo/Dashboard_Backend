@@ -123,3 +123,69 @@ describe('a v2 deck built with commercials off carries no rent anywhere', () => 
         expect(await slidesShowingRent({ commercials: false })).toEqual([]);
     });
 }, 30_000);
+
+describe('the flag survives the HTTP layer', () => {
+    /**
+     * The last link the checks above do not cover: express parsing the body, the
+     * controller destructuring `customDetails` off it, and the generation service
+     * handing it to the deck builder. Mounts the real controller over the real
+     * generation service with a fixture warehouse model, so everything between
+     * the request body and the returned bytes is the production path — only the
+     * database and the audit sink are substituted.
+     */
+    const express = require('express');
+    const request = require('supertest');
+    const PptController = require('../../src/controllers/pptController');
+    const PptGenerationService = require('../../src/services/pptGenerationService');
+
+    function makeApp() {
+        const model = { findManyForPpt: async () => [WAREHOUSE] };
+        const controller = new PptController(new PptGenerationService(model), { log: () => {} });
+        const app = express();
+        app.use(express.json({ limit: '10mb' }));
+        app.post('/api/generate-ppt-v2', controller.handleGenerate({ variant: 'v2', label: 'v2' }));
+        return app;
+    }
+
+    /** POST the route and return the .pptx bytes. */
+    const generate = (customDetails) => request(makeApp())
+        .post('/api/generate-ppt-v2')
+        .send({ ids: String(WAREHOUSE.id), selectedImages: {}, customDetails })
+        .buffer(true)
+        .parse((res, cb) => {
+            const chunks = [];
+            res.on('data', (c) => chunks.push(c));
+            res.on('end', () => cb(null, Buffer.concat(chunks)));
+        });
+
+    async function slidesShowingRentInBuffer(buffer) {
+        const JSZip = require('jszip');
+        const zip = await JSZip.loadAsync(buffer);
+        const found = [];
+        const names = Object.keys(zip.files)
+            .filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name))
+            .sort();
+        for (const name of names) {
+            const xml = await zip.file(name).async('string');
+            const runs = [...xml.matchAll(/<a:t>([\s\S]*?)<\/a:t>/g)].map((m) => m[1].trim());
+            if (runs.some((run) => run === RATE || run === `${RATE}/-`)) found.push(name);
+        }
+        return found;
+    }
+
+    test('a request with commercials on returns a deck that shows the rent', async () => {
+        const res = await generate({ clientName: 'Acme Logistics' });
+
+        expect(res.status).toBe(200);
+        expect(res.headers['content-type']).toContain('presentationml.presentation');
+        // Control: the index slide and the property slide.
+        expect(await slidesShowingRentInBuffer(res.body)).toHaveLength(2);
+    });
+
+    test('a request with commercials off returns a deck with no rent on it', async () => {
+        const res = await generate({ clientName: 'Acme Logistics', commercials: false });
+
+        expect(res.status).toBe(200);
+        expect(await slidesShowingRentInBuffer(res.body)).toEqual([]);
+    });
+}, 30_000);
