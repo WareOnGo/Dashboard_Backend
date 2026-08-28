@@ -104,22 +104,29 @@ signature takes the warehouse array, not a count — the detailed deck emits thr
 pages for a warehouse with photographs and two for one without, so its page count
 is not a multiple of anything.
 
-## Known issue
+## Regression guards
 
-`npm run ppt:eval` reports one check as a known issue rather than a failure: it
-stays quiet while the defect stands and turns into a failure once the behaviour is
-fixed, so whoever fixes it is told to drop the annotation and keep the check.
+One real defect surfaced by this harness has since been fixed; the checks that
+found it are kept:
 
-- **`--no-commercials` does not redact the index slide.** `pptServiceV2` calls
+- **`--no-commercials` did not redact the index slide.** `pptServiceV2` called
   `generateIndexSlideV2(pptx, warehouses)` without the display flags, and
-  `indexSlideV2.js` renders `ratePerSqft` unconditionally under "Quoted Monthly
-  Rental". So a v2 deck built with "Include rent / commercials" unticked in the
-  dashboard's PPT modal redacts the rent on each property slide but still prints
-  every rate on page 2. v2 is the only variant the frontend sends these flags for
-  (`PptConfigModal.jsx`), so this is reachable in production.
+  `indexSlideV2.js` rendered `ratePerSqft` unconditionally under "Quoted Monthly
+  Rental". A v2 deck built with "Include rent / commercials" unticked in the
+  dashboard's PPT modal therefore redacted the rent on each property slide and
+  then printed every rate on the page right after the title. v2 is the only
+  variant the frontend sends these flags for (`PptConfigModal.jsx`), so it was
+  reachable in production. Fixed by threading `flags` through to the index slide.
 
-  Fix shape: thread `flags` into `generateIndexSlideV2` and show
-  "Available on Demand" in that column when `commercials === false`.
+  Guarded in two places, because they fail on different mistakes:
+  `tests/ppt/commercialsRedaction.test.js` in the repo's own jest suite (so CI
+  catches it — this harness is local-only), and `ppt:eval` end to end.
+
+Note the shape of those checks. Each redaction check is paired with a **control**
+asserting the rate *is* present when the flag is on: without it, a redaction check
+could pass simply because the matcher never finds the rate anywhere. They also
+match whole table cells rather than substrings, since a rate of 55 appears inside
+an area of 155,000.
 
 ## Layout
 

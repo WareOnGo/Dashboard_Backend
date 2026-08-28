@@ -208,9 +208,33 @@ function skip(name, reason) {
   console.log('v2 display flags and photo handling');
 
   const rate = session.fixtures[0].ratePerSqft;
+
+  /**
+   * Slides where the rent is printed, found by matching a whole text run rather
+   * than a substring.
+   *
+   * A table cell is its own run in the XML, so an exact match cannot be fooled by
+   * a rate that happens to appear inside an unrelated figure (an area of 155,000
+   * contains "55"). The property slide prints the bare value and the index slide
+   * suffixes it, so both spellings count.
+   */
+  const slidesShowingRent = (inspection) => inspection.slides
+    .filter((sl) => sl.text.some((run) => run.trim() === String(rate) || run.trim() === `${rate}/-`))
+    .map((sl) => sl.index);
+
   const open = await session.build('v2', { ids: [session.fixtures[0].id] });
-  const openText = (await inspect(open.buffer)).text;
-  check('shows the rent when commercials are on', openText.includes(rate), `rate ${rate} missing`);
+  const openInspection = await inspect(open.buffer);
+  const openText = openInspection.text;
+  const rentSlides = slidesShowingRent(openInspection);
+
+  // The control for the two checks below. Without it, a redaction check could
+  // pass simply because the matcher never finds the rate anywhere — the deck is
+  // supposed to print it twice, on the index slide and on the property slide.
+  check(
+    'prints the rent on two slides when commercials are on',
+    rentSlides.length === 2,
+    `rate ${rate} found on slide(s) ${rentSlides.join(', ') || 'none'} — expected the index and property slides`,
+  );
 
   const redacted = await session.build('v2', {
     ids: [session.fixtures[0].id],
@@ -219,25 +243,31 @@ function skip(name, reason) {
   const redactedInspection = await inspect(redacted.buffer);
   const propertySlide = redactedInspection.slides.find((sl) => /Option 1/.test(sl.joined));
   const indexSlide = redactedInspection.slides.find((sl) => /Quoted Monthly Rental/.test(sl.joined));
+  const onDemand = (slide) => /available on demand/i.test(slide?.joined || '');
 
   check(
     '--no-commercials withholds the rent on the property slide',
-    !new RegExp(`\\b${rate}/-`).test(propertySlide?.joined || '')
-      && /available on demand/i.test(propertySlide?.joined || ''),
+    !propertySlide?.text.some((run) => run.trim() === String(rate)) && onDemand(propertySlide),
     'the rate is still on the property slide, or the placeholder text is missing',
   );
 
-  // Asserted separately from the property slide because only one of the two is
-  // actually redacted — see the known issue.
+  // Regression guard. The index slide used to keep the whole rate table: the
+  // flags were never passed to generateIndexSlideV2, so a deck built with
+  // commercials off redacted each property slide and then printed every rate on
+  // the page right after the title.
   check(
     '--no-commercials withholds the rent on the index slide',
-    !new RegExp(`\\b${rate}/-`).test(indexSlide?.joined || ''),
+    !indexSlide?.text.some((run) => run.trim() === `${rate}/-`) && onDemand(indexSlide),
     `the index slide still lists "${rate}/-" under Quoted Monthly Rental`,
-    {
-      knownIssue: 'pptServiceV2 calls generateIndexSlideV2(pptx, warehouses) without the display '
-        + 'flags, and indexSlideV2 renders ratePerSqft unconditionally — so a deck built with '
-        + 'commercials off still prints every rate on the index slide',
-    },
+  );
+
+  // The invariant the user is actually relying on when they untick the box: the
+  // number appears nowhere in the deck, whichever slide might carry it.
+  const leakedOn = slidesShowingRent(redactedInspection);
+  check(
+    '--no-commercials leaves the rent on no slide at all',
+    leakedOn.length === 0,
+    `rate ${rate} still appears on slide(s) ${leakedOn.join(', ')}`,
   );
 
   const noMaps = await session.build('v2', {

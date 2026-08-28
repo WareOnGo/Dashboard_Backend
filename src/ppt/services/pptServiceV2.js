@@ -11,7 +11,7 @@ const createPptBufferV2 = async (warehouses, selectedImages = {}, customDetails 
 
     // Display flags. Each defaults to true so existing callers that omit them
     // keep the full proposal. Set to false to redact the corresponding content:
-    //   commercials  -> rent shows "Available on Demand"
+    //   commercials  -> rent shows "Available on Demand" (index slide included)
     //   mapsLocation -> Google Maps shows "Available on Demand"
     //   pocSlide     -> the final WareOnGo POC slide is omitted
     const flags = {
@@ -21,7 +21,7 @@ const createPptBufferV2 = async (warehouses, selectedImages = {}, customDetails 
     };
 
     await generateTitleSlideV2(pptx, warehouses, customDetails);
-    generateIndexSlideV2(pptx, warehouses);
+    generateIndexSlideV2(pptx, warehouses, flags);
 
     for (let i = 0; i < warehouses.length; i++) {
         const w = warehouses[i];

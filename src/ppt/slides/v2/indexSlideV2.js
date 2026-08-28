@@ -3,7 +3,13 @@ const { addFooter, addTopRightLogo } = require('./chromeV2');
 const { formatLocationText } = require('../../utils/textFormat');
 const { formatHandover } = require('../../utils/handover');
 
-function generateIndexSlideV2(pptx, warehouses) {
+function generateIndexSlideV2(pptx, warehouses, flags = {}) {
+    // Same contract as generateDetailedSlideV2: flags default to true (show real
+    // data), and `commercials: false` redacts the rent to "Available on Demand".
+    // The index slide lists every warehouse's rent, so it has to honour this too
+    // — redacting only the per-property slides left the whole rate table on the
+    // page immediately after the title.
+    const showCommercials = flags.commercials !== false;
     const slide = pptx.addSlide();
     slide.background = { color: COLORS.bg };
 
@@ -28,7 +34,12 @@ function generateIndexSlideV2(pptx, warehouses) {
             { text: String(i + 1), options: bodyCellBase },
             { text: String(w.id), options: bodyCellBase },
             { text: location, options: bodyCellBase },
-            { text: w.ratePerSqft != null ? `${w.ratePerSqft}/-` : 'On request', options: bodyCellBase },
+            {
+                text: showCommercials
+                    ? (w.ratePerSqft != null ? `${w.ratePerSqft}/-` : 'On request')
+                    : 'Available on Demand',
+                options: bodyCellBase,
+            },
             { text: String(area), options: bodyCellBase },
             { text: formatHandover(w), options: bodyCellBase },
         ];
