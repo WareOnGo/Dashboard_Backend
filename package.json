@@ -16,6 +16,7 @@
     "docker:logs": "./scripts/docker-dev.sh logs",
     "deploy:ecr": "./scripts/deploy-ecr.sh",
     "backfill:micromarkets": "node scripts/backfillMicroMarkets.js",
+    "backfill:dashboard-access": "node scripts/backfillDashboardAccess.js",
     "ppt:preview": "node tools/ppt-preview/preview.js",
     "ppt:eval": "node tools/ppt-preview/eval.js",
     "ppt:slides": "node tools/ppt-preview/slides.js",

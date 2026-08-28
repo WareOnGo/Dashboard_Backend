@@ -17,6 +17,7 @@ const GeoModel = require('./models/geoModel');
 const WarehouseService = require('./services/warehouseService');
 const FileUploadService = require('./services/fileUploadService');
 const AuditLogService = require('./services/auditLogService');
+const VerifiedNumberService = require('./services/verifiedNumberService');
 const PptGenerationService = require('./services/pptGenerationService');
 const StagingService = require('./services/stagingService');
 const MicroMarketService = require('./services/microMarketService');
@@ -329,15 +330,20 @@ class Container {
             return new MicroMarketController(microMarketService);
         });
 
-        // Verified numbers (WareOnGo POCs — read-only lookup for pickers)
+        // Verified numbers (WareOnGo POCs — picker lookup + admin access management)
         this.registerSingleton('verifiedNumberModel', () => {
             const prismaClient = database.getClient();
             return new VerifiedNumberModel(prismaClient);
         });
 
-        this.register('verifiedNumberController', (container) => {
+        this.registerSingleton('verifiedNumberService', (container) => {
             const verifiedNumberModel = container.resolve('verifiedNumberModel');
-            return new VerifiedNumberController(verifiedNumberModel);
+            return new VerifiedNumberService(verifiedNumberModel);
+        });
+
+        this.register('verifiedNumberController', (container) => {
+            const verifiedNumberService = container.resolve('verifiedNumberService');
+            return new VerifiedNumberController(verifiedNumberService);
         });
 
         // Visit notes (site-visit log per warehouse)
