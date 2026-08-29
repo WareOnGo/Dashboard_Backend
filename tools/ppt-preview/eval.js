@@ -375,6 +375,14 @@ function skip(name, reason) {
   const missing = tciOnlyLabels.filter((label) => !v3Details.joined.includes(label));
   check('carries the TCI field set', missing.length === 0, `missing: ${missing.join(', ')}`);
 
+  // Dropped from v3 only — the slide title already identifies the property, and
+  // the TCI deck still carries it.
+  check(
+    'omits the project-name row',
+    !/Project name/.test(v3.text),
+    'the project-name band is back on the v3 details slide',
+  );
+
   check(
     'photographs are on their own slide',
     /Option 1 - ID 1000 — Photos/.test(v3.slides[3]?.joined || ''),
@@ -410,6 +418,26 @@ function skip(name, reason) {
   })).buffer);
   check('--no-poc drops exactly one slide', v3NoPoc.slideCount === v3.slideCount - 1,
     `${v3.slideCount} with, ${v3NoPoc.slideCount} without`);
+
+  // The overview map is fetched from Mapbox, which this run refuses. A deck
+  // without its map is a lesser deck, not a failed one, so the slide drops out
+  // and everything else is unaffected — the behaviour every export gets when
+  // Mapbox is slow, down, or the token is missing.
+  check(
+    'survives the overview map being unreachable',
+    !/Location Overview/.test(v3.text) && v3.slideCount === VARIANTS.v3.slides([session.fixtures[0]]),
+    `${v3.slideCount} slides; map slide ${/Location Overview/.test(v3.text) ? 'present' : 'absent'}`,
+  );
+  // Counted as a delta around one build: `attempts` accumulates over the whole
+  // session, and this section builds several decks.
+  const mapBefore = session.guard.attempts.filter((a) => a.host === 'api.mapbox.com').length;
+  await session.build('v3', { ids: [1000, 1001, 1002, 1003] });
+  const mapForFourProperties = session.guard.attempts.filter((a) => a.host === 'api.mapbox.com').length - mapBefore;
+  check(
+    'asks Mapbox once for the whole deck, not once per property',
+    mapForFourProperties === 1,
+    `${mapForFourProperties} attempts for a 4-property deck`,
+  );
 
   // Derived from the variant's own formula rather than hardcoded: v3 has a cover,
   // an index and a POC slide that the TCI deck does not, so the count differs.

@@ -22,7 +22,10 @@ const backendRoot = path.resolve(harnessRoot, '..', '..');
  *   v2         3 + n            title + index + n property slides + POC
  *   v3         3 + n + p        title + index + a details slide per property,
  *                               plus a photos slide for each of the p with
- *                               photographs, + POC
+ *                               photographs, + POC.
+ *                               The overview map adds one more, but only when
+ *                               Mapbox is reachable — these runs block it, so
+ *                               the counts here are the offline shape.
  *   godamwale  2 + n            title + index + n property slides
  *   tci        2 + n + p        baked title + a details slide per property, plus a
  *                               photos slide for each of the p with photographs,
@@ -55,7 +58,10 @@ const VARIANTS = {
   v3: {
     label: 'v3 (TCI columns, dedicated photos slide)',
     slides: (warehouses) => 3 + warehouses.length + warehouses.filter(hasPhotos).length,
-    network: false,
+    // Fetches one overview map from Mapbox for the whole deck. Refused in these
+    // runs, so the counts above are the offline shape and the deck is asserted to
+    // survive without it.
+    network: true,
   },
   godamwale: {
     label: 'Godamwale',

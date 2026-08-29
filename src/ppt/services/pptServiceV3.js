@@ -12,6 +12,30 @@ const { generateContactSlideV2 } = require('../slides/v2/contactSlideV2');
 
 const { generateDetailedSlideV3 } = require('../slides/v3/detailedSlideV3');
 const { generatePhotosSlideV3 } = require('../slides/v3/photosSlideV3');
+const { fetchOverviewMap, generateMapSlideV3 } = require('../slides/v3/mapSlideV3');
+
+// Where the overview map belongs: after the cover and the index, so the reader
+// sees the geography before the individual options.
+const MAP_SLIDE_POSITION = 2;
+
+/**
+ * Re-sync each slide's relationship id with its position in the deck.
+ *
+ * pptxgenjs writes the slide files and `presentation.xml.rels` from the array's
+ * order, but writes `sldIdLst` — the list that actually determines slide order —
+ * from each slide's `_rId`, which was assigned when the slide was created. Move a
+ * slide without fixing that and the two disagree: the deck opens with slides in
+ * an order matching neither, which is how this was first caught (LibreOffice
+ * rendered the last photos slide third).
+ *
+ * `_slideNum` is deliberately left alone: media filenames were baked from it at
+ * addImage time, so renumbering it would orphan every image.
+ */
+function renumberSlideRelationships(pptx) {
+    // rId1 is the slide master, so slides start at 2 — matching
+    // makeXmlPresentationRels, which numbers them the same way.
+    pptx.slides.forEach((slide, index) => { slide._rId = index + 2; });
+}
 
 const createPptBufferV3 = async (warehouses, selectedImages = {}, customDetails = {}) => {
     const pptx = new PptxGenJS();
@@ -28,6 +52,12 @@ const createPptBufferV3 = async (warehouses, selectedImages = {}, customDetails 
         pocSlide: customDetails.pocSlide !== false,
     };
 
+    // Started before anything is drawn and awaited after the property loop, so a
+    // request that takes a second or two runs alongside the photo downloads
+    // instead of adding itself to the total. Never rejects — a deck without its
+    // map is a lesser deck, not a failed one.
+    const mapPending = fetchOverviewMap(warehouses, flags);
+
     await generateTitleSlideV2(pptx, warehouses, customDetails);
     generateIndexSlideV2(pptx, warehouses, flags);
 
@@ -39,6 +69,16 @@ const createPptBufferV3 = async (warehouses, selectedImages = {}, customDetails 
         // rather than one plus an empty one.
         await generateDetailedSlideV3(pptx, w, photos, i + 1, flags);
         await generatePhotosSlideV3(pptx, w, photos, i + 1);
+    }
+
+    const map = await mapPending;
+    if (map) {
+        // Built last so its fetch could overlap the photographs, then moved into
+        // place after the index.
+        const slide = generateMapSlideV3(pptx, map);
+        pptx.slides.pop();
+        pptx.slides.splice(MAP_SLIDE_POSITION, 0, slide);
+        renumberSlideRelationships(pptx);
     }
 
     if (flags.pocSlide) {

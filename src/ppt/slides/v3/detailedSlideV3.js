@@ -67,16 +67,11 @@ async function generateDetailedSlideV3(pptx, warehouse, selectedPhotoUrls, optio
     slide.background = { color: COLORS.bg };
     addSlideTitle(slide, `Option ${optionIndex} - ID ${warehouse.id}`);
 
-    const rows = propertyFields(warehouse, flags);
+    // The project-name band is dropped here but kept in the TCI deck, which is
+    // why propertyFields still returns it: the slide title already identifies the
+    // property, and the address is on the index slide against the same option.
+    const rows = propertyFields(warehouse, flags).filter((row) => row.kind !== 'header');
 
-    const headerOpts = {
-        bold: true, color: COLORS.bg, fill: { color: COLORS.navy },
-        fontFace: FONT_SEMIBOLD, fontSize: 9, valign: 'middle', margin: 0.06,
-    };
-    const headerValueOpts = {
-        bold: true, color: COLORS.navy, fill: { color: COLORS.sidebar },
-        fontFace: FONT_SEMIBOLD, fontSize: 9, valign: 'middle', margin: 0.06,
-    };
     const subHeaderOpts = {
         bold: true, color: COLORS.navy, fill: { color: COLORS.bg },
         fontFace: FONT_SEMIBOLD, fontSize: 8.5, valign: 'middle', margin: 0.06,
@@ -91,12 +86,6 @@ async function generateDetailedSlideV3(pptx, warehouse, selectedPhotoUrls, optio
     };
 
     const cells = rows.map((row) => {
-        if (row.kind === 'header') {
-            return [
-                { text: row.label, options: headerOpts },
-                { text: clamp(row.value), options: headerValueOpts },
-            ];
-        }
         if (row.kind === 'subheader') {
             return [{ text: row.label, options: { ...subHeaderOpts, colspan: 2 } }];
         }
