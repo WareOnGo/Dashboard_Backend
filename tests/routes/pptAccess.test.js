@@ -62,6 +62,7 @@ function makeApp() {
 const ROUTES = [
     '/api/generate-ppt',
     '/api/generate-ppt-v2',
+    '/api/generate-ppt-v3',
     '/api/generate-ppt-godamwale',
     '/api/generate-ppt-tci',
     '/api/generate-detailed-ppt',

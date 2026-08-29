@@ -20,6 +20,9 @@ const backendRoot = path.resolve(harnessRoot, '..', '..');
  *
  *   standard   3 + n            title + index + n property slides + contact
  *   v2         3 + n            title + index + n property slides + POC
+ *   v3         3 + n + p        title + index + a details slide per property,
+ *                               plus a photos slide for each of the p with
+ *                               photographs, + POC
  *   godamwale  2 + n            title + index + n property slides
  *   tci        2 + n + p        baked title + a details slide per property, plus a
  *                               photos slide for each of the p with photographs,
@@ -47,6 +50,11 @@ const VARIANTS = {
   v2: {
     label: 'v2 (sidebar layout)',
     slides: (warehouses) => 3 + warehouses.length,
+    network: false,
+  },
+  v3: {
+    label: 'v3 (TCI columns, dedicated photos slide)',
+    slides: (warehouses) => 3 + warehouses.length + warehouses.filter(hasPhotos).length,
     network: false,
   },
   godamwale: {

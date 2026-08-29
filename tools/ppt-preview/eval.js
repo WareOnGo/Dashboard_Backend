@@ -362,6 +362,68 @@ function skip(name, reason) {
 
   console.log('');
 
+  // ── v3: v2's branding, TCI's columns, TCI's photo split ──────────────────
+  currentGroup = 'v3: ';
+  console.log('v3 composition');
+
+  const v3 = await inspect((await session.build('v3', { ids: [1000] })).buffer);
+  const v3Details = v3.slides.find((sl) => /Option 1 - ID 1000$|Option 1 - ID 1000 •/.test(sl.joined))
+    || v3.slides[2];
+
+  // The columns are TCI's, not v2's — these labels exist in one and not the other.
+  const tciOnlyLabels = ['Type of Option', 'Status of Land', 'Electrical workload', 'Building Stability Certificate', 'Handover timeline'];
+  const missing = tciOnlyLabels.filter((label) => !v3Details.joined.includes(label));
+  check('carries the TCI field set', missing.length === 0, `missing: ${missing.join(', ')}`);
+
+  check(
+    'photographs are on their own slide',
+    /Option 1 - ID 1000 — Photos/.test(v3.slides[3]?.joined || ''),
+    `slide 4 reads "${(v3.slides[3]?.joined || '').slice(0, 50)}"`,
+  );
+
+  // Branding comes from v2's own modules, so the cover, index and closing slide
+  // are the same objects v2 renders.
+  check(
+    'keeps v2 branding: cover, index and POC slide',
+    /Warehouse Options/.test(v3.slides[0]?.joined || '')
+      && /INDEX/.test(v3.slides[1]?.joined || '')
+      && /schedule a site visit/.test(v3.slides[v3.slideCount - 1]?.joined || ''),
+    'a v2 bookend slide is missing',
+  );
+
+  // Same display flags as v2, including the index-slide redaction.
+  const v3Rate = session.fixtures[0].ratePerSqft;
+  const v3Redacted = await inspect((await session.build('v3', {
+    ids: [session.fixtures[0].id], customDetails: { commercials: false },
+  })).buffer);
+  const v3RentSlides = v3Redacted.slides
+    .filter((sl) => sl.text.some((run) => run.trim() === String(v3Rate) || run.trim() === `${v3Rate}/-`))
+    .map((sl) => sl.index);
+  check(
+    '--no-commercials leaves the rent on no slide',
+    v3RentSlides.length === 0,
+    `rate ${v3Rate} still on slide(s) ${v3RentSlides.join(', ')}`,
+  );
+
+  const v3NoPoc = await inspect((await session.build('v3', {
+    ids: [session.fixtures[0].id], customDetails: { pocSlide: false },
+  })).buffer);
+  check('--no-poc drops exactly one slide', v3NoPoc.slideCount === v3.slideCount - 1,
+    `${v3.slideCount} with, ${v3NoPoc.slideCount} without`);
+
+  // Derived from the variant's own formula rather than hardcoded: v3 has a cover,
+  // an index and a POC slide that the TCI deck does not, so the count differs.
+  const v3NoPhotosBuild = await session.build('v3', { ids: [1004] });
+  const v3NoPhotos = await inspect(v3NoPhotosBuild.buffer);
+  check(
+    'a property with no photographs gets no photos slide',
+    v3NoPhotos.slideCount === VARIANTS.v3.slides(v3NoPhotosBuild.warehouses)
+      && !/— Photos/.test(v3NoPhotos.text),
+    `${v3NoPhotos.slideCount} slides, expected ${VARIANTS.v3.slides(v3NoPhotosBuild.warehouses)}`,
+  );
+
+  console.log('');
+
   // ── Report ───────────────────────────────────────────────────────────────
   const failed = results.filter((r) => !r.pass && !r.skipped);
   const skipped = results.filter((r) => r.skipped);

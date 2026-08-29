@@ -2,6 +2,7 @@
 
 const pptService = require('../ppt/services/pptService');
 const pptServiceV2 = require('../ppt/services/pptServiceV2');
+const pptServiceV3 = require('../ppt/services/pptServiceV3');
 const pptServiceGodamwale = require('../ppt/services/pptServiceGodamwale');
 const pptServiceTci = require('../ppt/services/pptServiceTci');
 const detailedPptService = require('../ppt/services/detailedPptService');
@@ -62,7 +63,7 @@ class PptGenerationService {
     /**
      * Build a deck. `variant` selects the template.
      *
-     * @param {string} variant - 'standard' | 'v2' | 'godamwale' | 'tci' | 'detailed'
+     * @param {string} variant - 'standard' | 'v2' | 'v3' | 'godamwale' | 'tci' | 'detailed'
      * @param {Object[]} warehouses
      * @param {Object} selectedImages - { [warehouseId]: string[] }
      * @param {Object} customDetails
@@ -75,6 +76,8 @@ class PptGenerationService {
                 return pptService.createPptBuffer(warehouses, selectedImages, customDetails, includeLocation);
             case 'v2':
                 return pptServiceV2.createPptBufferV2(warehouses, selectedImages, customDetails);
+            case 'v3':
+                return pptServiceV3.createPptBufferV3(warehouses, selectedImages, customDetails);
             case 'godamwale':
                 return pptServiceGodamwale.createPptBufferGodamwale(warehouses, selectedImages, customDetails);
             case 'tci':

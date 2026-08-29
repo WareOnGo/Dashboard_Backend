@@ -1,24 +1,13 @@
 const { COLORS, LAYOUT, FONT } = require('./themeTci');
 const { addOptionSlideChrome } = require('./chromeTci');
 const { fetchImage } = require('../../utils/image');
+const { propertyFields } = require('../propertyFields');
 
 const MAX_CELL_CHARS = 110;
 const clamp = (s) => {
     if (s == null) return '';
     const str = String(s);
     return str.length <= MAX_CELL_CHARS ? str : str.slice(0, MAX_CELL_CHARS - 1).trimEnd() + '…';
-};
-
-// Treat empty strings and the literal placeholders "NA" / "N/A" as null —
-// they show up across the data set as stand-ins for "no value" and shouldn't
-// override the row's default text.
-const NA_RE = /^\s*(na|n\/a)\s*$/i;
-const asValue = (v) => {
-    if (v == null) return null;
-    if (typeof v !== 'string') return v;
-    const trimmed = v.trim();
-    if (!trimmed || NA_RE.test(trimmed)) return null;
-    return trimmed;
 };
 
 const IMAGE_EXT_RE = /\.(jpe?g|png|gif|webp|bmp)(?:$|\?)/i;
@@ -146,57 +135,12 @@ async function generatePhotosSlideTci(pptx, warehouse, selectedPhotoUrls, option
  * The table used to share the slide with the photographs, taking the left half;
  * the photographs now have their own slide, so it spans the content box.
  */
-async function generateDetailedSlideTci(pptx, warehouse, selectedPhotoUrls, optionIndex) {
+async function generateDetailedSlideTci(pptx, warehouse, selectedPhotoUrls, optionIndex, flags = {}) {
     const slide = startOptionSlide(pptx, optionIndex, 'Property Details');
 
-    const projectName = warehouse.projectName
-        || warehouse.address
-        || [warehouse.city, warehouse.state].filter(Boolean).join(', ')
-        || `Property ${warehouse.id}`;
-
-    const wd = warehouse.WarehouseData || {};
-    const lat = wd.latitude, lng = wd.longitude;
-    const hasCoords = typeof lat === 'number' && typeof lng === 'number';
-    const mapsUrl = warehouse.googleLocation
-        || (hasCoords ? `https://www.google.com/maps/search/?api=1&query=${lat},${lng}` : null);
-    const coordsText = hasCoords ? `${lat}, ${lng}` : (warehouse.googleLocation ? 'See link' : 'Available on demand');
-
-    // Offered area is the canonical value — fall back to totalSpaceSqft only
-    // when offeredSpaceSqft isn't set.
-    const offered = asValue(warehouse.offeredSpaceSqft);
-    const area = offered
-        ? `Offered area – ${offered} sq. ft.`
-        : (Array.isArray(warehouse.totalSpaceSqft) && warehouse.totalSpaceSqft.length
-            ? `Offered area – ${warehouse.totalSpaceSqft.join(', ')} sq. ft.`
-            : 'N/A');
-
-    // Fire safety: concatenate measures with NOC status. "NA"/"N/A"/blank
-    // measures are treated as null so we only show the NOC half when the
-    // measures string is a placeholder.
-    const fireMeasures = asValue(wd.fireSafetyMeasures);
-    const fireNocLabel = wd.fireNocAvailable == null
-        ? 'NOC status not available'
-        : `NOC ${wd.fireNocAvailable ? 'Available' : 'Not available'}`;
-    const fireSafetyValue = [fireMeasures, fireNocLabel].filter(Boolean).join(', ');
-
-    // Power: prefer the numeric KVA field; fall back to "Available" per PM
-    // direction since this column isn't reliably backfilled yet.
-    const powerKva = asValue(wd.powerKva);
-    const electricalValue = powerKva ? `${powerKva} KVA` : 'Available';
-
-    // CLU display follows the v2 convention: blank/Other land types resolve to
-    // "Unverified CLU"; anything else shows as "<landType> CLU".
-    const landTypeStr = asValue(wd.landType);
-    const isUnverifiedCLU = !landTypeStr || /^others?$/i.test(landTypeStr);
-    const cluValue = isUnverifiedCLU ? 'Unverified CLU' : `${landTypeStr} CLU`;
-
-    // The `availability` column is a yes/no flag in the DB — translate to a
-    // human-readable handover timeline. Anything else (e.g. a future date) is
-    // passed through unchanged.
-    const availabilityRaw = asValue(warehouse.availability);
-    const handoverValue = availabilityRaw && /^yes$/i.test(availabilityRaw)
-        ? 'Immediate'
-        : (availabilityRaw || 'Available');
+    // Field derivation lives in ../propertyFields so the v3 deck renders exactly
+    // the same columns; this function only styles them.
+    const rows = propertyFields(warehouse, flags);
 
     // Header rows reproduce the source's dark navy "Project name" band plus
     // the white "Building Structural Details" sub-header.
@@ -217,54 +161,20 @@ async function generateDetailedSlideTci(pptx, warehouse, selectedPhotoUrls, opti
         valign: 'middle', margin: 0.06,
     };
 
-    const cells = [
-        [
-            { text: 'Project name', options: headerCellOpts },
-            { text: projectName, options: headerCellOpts },
-        ],
-        [
-            { text: 'Building Structural Details', options: { ...subHeaderOpts, colspan: 2 } },
-        ],
-        ['Type of Option', asValue(warehouse.warehouseType) || 'N/A'],
-        ['Google Coordinates', mapsUrl
-            ? { text: coordsText, options: { ...valueOpts, hyperlink: { url: mapsUrl }, color: COLORS.hyperlink, underline: { style: 'sng' } } }
-            : coordsText],
-        ['Status of Land', cluValue],
-        ['Area details', area],
-        ['Rental per sq. ft.', asValue(warehouse.ratePerSqft) ? `${asValue(warehouse.ratePerSqft)} + GST` : 'On request'],
-        ['Eaves Height', (() => {
-            const v = asValue(warehouse.clearHeightFt);
-            if (!v) return 'N/A';
-            // Some rows already carry the unit ("10 ft", "10ft", "10 FT.") — strip
-            // any trailing ft/feet token before re-appending so we don't end up
-            // with "10 ft ft".
-            const stripped = String(v).replace(/\s*(ft|feet)\.?\s*$/i, '').trim();
-            return `${stripped} ft`;
-        })()],
-        ['Type Of Flooring', asValue(warehouse.flooringType) || 'Unverified'],
-        ['Floor Load Capacity', asValue(warehouse.floorStrengthPerSqm) || 'Unverified'],
-        ['No. of docks', asValue(warehouse.numberOfDocks) ? `${asValue(warehouse.numberOfDocks)} Nos` : 'N/A'],
-        // PM-requested fallbacks. The 'Running Canopy' / 'Turbo vent' defaults
-        // are temporary stand-ins until the backfill exercise populates these
-        // columns — drop them once data lands.
-        ['Canopy details', asValue(warehouse.canopyType) || 'Running Canopy'],
-        ['Ventilation details', asValue(warehouse.ventilationType) || 'Turbo vent'],
-        ['Insulation details', asValue(warehouse.insulationType) || 'Not available'],
-        ['Electrical workload', electricalValue],
-        ['Toilets', 'Available'],
-        ['Building Stability Certificate', 'Available'],
-        ['Fire safety details', fireSafetyValue || 'N/A'],
-        // `availability` is the closest existing column to the requested
-        // handover-timeline field; use it directly until a dedicated column
-        // is added.
-        ['Handover timeline', handoverValue],
-    ].map((row, i) => {
-        if (i < 2) return row; // header rows already shaped
-        const [label, value] = row;
-        const valueCell = (value && typeof value === 'object' && value.options)
-            ? value
-            : { text: clamp(value ?? 'N/A'), options: valueOpts };
-        return [{ text: label, options: labelOpts }, valueCell];
+    const cells = rows.map((row) => {
+        if (row.kind === 'header') {
+            return [
+                { text: row.label, options: headerCellOpts },
+                { text: row.value, options: headerCellOpts },
+            ];
+        }
+        if (row.kind === 'subheader') {
+            return [{ text: row.label, options: { ...subHeaderOpts, colspan: 2 } }];
+        }
+        const valueCell = row.url
+            ? { text: row.value, options: { ...valueOpts, hyperlink: { url: row.url }, color: COLORS.hyperlink, underline: { style: 'sng' } } }
+            : { text: clamp(row.value ?? 'N/A'), options: valueOpts };
+        return [{ text: row.label, options: labelOpts }, valueCell];
     });
 
     // Label column widened with the extra room: "Building Stability Certificate"

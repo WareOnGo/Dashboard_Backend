@@ -41,6 +41,11 @@ router.post('/generate-ppt', ...gate,
 router.post('/generate-ppt-v2', ...gate,
     pptController.handleGenerate({ variant: 'v2', label: 'v2' }));
 
+// v3: the v2 deck with the fuller TCI specification table and a dedicated
+// photographs slide. Same display flags as v2.
+router.post('/generate-ppt-v3', ...gate,
+    pptController.handleGenerate({ variant: 'v3', label: 'v3' }));
+
 router.post('/generate-ppt-godamwale', ...gate,
     pptController.handleGenerate({ variant: 'godamwale', label: 'godamwale' }));
 
