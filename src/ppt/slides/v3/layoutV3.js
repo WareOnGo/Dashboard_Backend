@@ -15,9 +15,9 @@ const LAYOUT = {
     ...SLIDE,
     MARGIN: 0.36,
     /** Below the slide title. */
-    CONTENT_TOP: 0.72,
+    CONTENT_TOP: 0.68,
     /** Above the footer rule. */
-    CONTENT_BOTTOM: 5.15,
+    CONTENT_BOTTOM: 5.18,
     /** Gutter between the two spec columns, and between photographs. */
     GUTTER: 0.2,
 };
