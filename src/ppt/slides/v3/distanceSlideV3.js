@@ -24,6 +24,15 @@ const { logInfo, logWarn } = require('../../utils/logger');
 const DIRECTIONS_TIMEOUT_MS = 8000;
 const MAP_TIMEOUT_MS = 8000;
 
+// The Static Images API refuses requests over 8,192 characters. Routes are drawn
+// from Mapbox's own `simplified` geometry, which measured 1,934 characters of URL
+// for five routes once percent-encoded — roughly 300 per route, so about 25 fit.
+// (`full` geometry was 21,747 characters for the same five and is unusable here.)
+// The cap is checked anyway rather than assumed: an unusually long route, or a
+// deck with many options, drops the lines and keeps the pins.
+const URL_LIMIT = 8192;
+const URL_SAFETY_MARGIN = 200;
+
 // Distinct from the navy option pins so the client's own site reads as the thing
 // everything else is measured against, not as another option.
 const CLIENT_PIN = 'pin-l-star+C0392B';
@@ -57,36 +66,75 @@ function measurableOptions(warehouses) {
 
 /** One driving leg. Resolves to null rather than throwing, so one dead leg is not a dead deck. */
 async function fetchLeg(token, from, to) {
-    // overview=false: the table needs distance and duration, not geometry, and
-    // skipping it keeps the responses small.
+    // `simplified` geometry is what the map draws — detailed enough to follow the
+    // real roads at this size, short enough to survive the URL cap.
+    // `geometries=polyline` is precision 5, which is the encoding the Static
+    // Images path overlay expects; polyline6 would render in the wrong place.
     const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${from.lng},${from.lat};${to.lng},${to.lat}`
-        + `?overview=false&access_token=${token}`;
+        + `?overview=simplified&geometries=polyline&access_token=${token}`;
     try {
         const res = await axios.get(url, { timeout: DIRECTIONS_TIMEOUT_MS });
         const route = res.data?.routes?.[0];
         if (!route) return null;
-        return { km: route.distance / 1000, minutes: route.duration / 60 };
+        return { km: route.distance / 1000, minutes: route.duration / 60, geometry: route.geometry || null };
     } catch (_) {
         return null;
     }
 }
 
-/** A map with the client's site starred and the options numbered around it. */
-async function fetchComparisonMap(token, client, options) {
+/**
+ * Assemble the static-map URL, dropping the route lines if they would push the
+ * request past the API's limit.
+ *
+ * Pure, and exported, so the fallback can be exercised without the network — it
+ * is the branch that only fires on an unusually long deck, which is exactly the
+ * kind of path that otherwise ships untested.
+ *
+ * @returns {{url: string, withPaths: boolean, urlLength: number}} urlLength is
+ *   the length of the *attempted* full request, so a caller can log why it fell back.
+ */
+function buildComparisonMapUrl({ token, paths, pins, width, height }) {
+    const build = (overlay) => `https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/${overlay.join(',')}`
+        + `/auto/${width}x${height}@2x?padding=45&access_token=${token}`;
+
+    const full = build([...paths, ...pins]);
+    if (paths.length === 0 || full.length <= URL_LIMIT - URL_SAFETY_MARGIN) {
+        return { url: full, withPaths: paths.length > 0, urlLength: full.length };
+    }
+    return { url: build(pins), withPaths: false, urlLength: full.length };
+}
+
+/**
+ * A map with the driving route to each option drawn, the client's site starred,
+ * and the options numbered.
+ *
+ * Paths are listed before the pins because overlay order is z-order: the lines
+ * have to sit under the markers, not over them.
+ */
+async function fetchComparisonMap(token, client, options, routes) {
+    const width = 640;
+    const height = 700;
+
+    const paths = routes
+        .filter((r) => r && r.geometry)
+        .map((r) => `path-2+${OPTION_PIN_COLOR}-0.75(${encodeURIComponent(r.geometry)})`);
     const pins = [
         `${CLIENT_PIN}(${client.lng.toFixed(5)},${client.lat.toFixed(5)})`,
         ...options
             .filter((o) => o.option <= 99)
             .map((o) => `pin-s-${o.option}+${OPTION_PIN_COLOR}(${o.lng.toFixed(5)},${o.lat.toFixed(5)})`),
-    ].join(',');
+    ];
 
-    const width = 640;
-    const height = 700;
-    const url = `https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/${pins}`
-        + `/auto/${width}x${height}@2x?padding=45&access_token=${token}`;
+    const { url, withPaths, urlLength } = buildComparisonMapUrl({ token, paths, pins, width, height });
+    if (paths.length > 0 && !withPaths) {
+        logWarn('distanceSlideV3', 'fetchComparisonMap', 'Route lines dropped — the request would exceed the URL limit', {
+            urlLength, routes: paths.length,
+        });
+    }
+
     try {
         const res = await axios.get(url, { responseType: 'arraybuffer', timeout: MAP_TIMEOUT_MS });
-        return `image/png;base64,${Buffer.from(res.data).toString('base64')}`;
+        return { dataUri: `image/png;base64,${Buffer.from(res.data).toString('base64')}`, withPaths };
     } catch (_) {
         return null;
     }
@@ -114,10 +162,10 @@ async function fetchDistanceComparison(warehouses, customDetails = {}, flags = {
     if (options.length === 0) return null;
 
     const startedAt = Date.now();
-    const [legs, mapImage] = await Promise.all([
-        Promise.all(options.map((o) => fetchLeg(token, client, o))),
-        fetchComparisonMap(token, client, options),
-    ]);
+    // The map now draws the routes, so it needs their geometry: legs first, then
+    // the image. Both still sit inside the window the photo downloads occupy.
+    const legs = await Promise.all(options.map((o) => fetchLeg(token, client, o)));
+    const map = await fetchComparisonMap(token, client, options, legs);
 
     const rows = options.map((o, i) => ({ ...o, ...(legs[i] || { km: null, minutes: null }) }));
     const measured = rows.filter((r) => r.km !== null).length;
@@ -128,10 +176,16 @@ async function fetchDistanceComparison(warehouses, customDetails = {}, flags = {
     }
 
     logInfo('distanceSlideV3', 'fetchDistanceComparison', 'Distance comparison ready', {
-        measured, options: options.length, hasMap: !!mapImage, durationMs: Date.now() - startedAt,
+        measured, options: options.length, hasMap: !!map, routesDrawn: !!map?.withPaths,
+        durationMs: Date.now() - startedAt,
     });
 
-    return { client, rows, mapImage, measured, total: warehouses.length };
+    return {
+        client, rows, measured,
+        mapImage: map?.dataUri || null,
+        routesDrawn: !!map?.withPaths,
+        total: warehouses.length,
+    };
 }
 
 const fmtKm = (km) => (km === null ? 'Not routable' : `${km < 10 ? km.toFixed(1) : Math.round(km)} km`);
@@ -190,7 +244,9 @@ function generateDistanceSlideV3(pptx, data) {
 
     // Says what the numbers are, so nobody reads them as straight-line.
     slide.addText(
-        'Road distance and typical driving time, measured from the client site marked on the map.',
+        data.routesDrawn
+            ? 'Road distance and typical driving time. The map shows the driving route from the client site to each option.'
+            : 'Road distance and typical driving time, measured from the client site marked on the map.',
         {
             x: LAYOUT.MARGIN, y: LAYOUT.CONTENT_TOP + rows.length * rowH + 0.12,
             w: tableW, h: 0.4,
@@ -211,4 +267,9 @@ function generateDistanceSlideV3(pptx, data) {
     return slide;
 }
 
-module.exports = { fetchDistanceComparison, generateDistanceSlideV3, parseClientLocation };
+module.exports = {
+    fetchDistanceComparison,
+    generateDistanceSlideV3,
+    parseClientLocation,
+    buildComparisonMapUrl,
+};
