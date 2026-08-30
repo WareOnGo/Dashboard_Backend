@@ -83,9 +83,13 @@ async function createSession({ count = 6, imagePort = 0, offline = true, useDb =
      * @param {object} [opts]
      * @param {number[]} [opts.ids]
      * @param {object} [opts.customDetails]
+     * @param {object} [opts.selectedImages] - { [warehouseId]: string[] }, overriding
+     *   the default of "every photograph on the row". The dashboard's PPT modal
+     *   lets a user pick which images go in the deck, so a preview has to be able
+     *   to model that rather than always sending the whole set.
      * @returns {Promise<{buffer: Buffer, warehouses: object[], durationMs: number}>}
      */
-    async build(variant, { ids, customDetails = {} } = {}) {
+    async build(variant, { ids, customDetails = {}, selectedImages = null } = {}) {
       if (!VARIANTS[variant]) {
         throw new Error(`Unknown variant "${variant}". Known: ${Object.keys(VARIANTS).join(', ')}`);
       }
@@ -111,7 +115,7 @@ async function createSession({ count = 6, imagePort = 0, offline = true, useDb =
       const buffer = await service.createBuffer(
         variant,
         warehouses,
-        selectedImagesFor(warehouses),
+        selectedImages || selectedImagesFor(warehouses),
         defaultCustomDetails(customDetails),
       );
 
