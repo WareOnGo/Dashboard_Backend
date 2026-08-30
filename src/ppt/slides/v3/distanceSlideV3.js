@@ -38,6 +38,25 @@ const URL_SAFETY_MARGIN = 200;
 const CLIENT_PIN = 'pin-l-star+C0392B';
 const OPTION_PIN_COLOR = COLORS.navy.replace('#', '');
 
+/**
+ * Straight-line distance, in km.
+ *
+ * Shown beside the road distance because the two answer different questions and
+ * a reader assumes the second is the first. Hyderabad makes the gap plain: one
+ * option 35km away as the crow flies is 62km by the fastest route, because
+ * cutting through the city is 17km shorter but 24 minutes slower than riding the
+ * ring road. Without the direct figure the road figure just reads as wrong.
+ */
+function directKm(a, b) {
+    const R = 6371;
+    const rad = Math.PI / 180;
+    const dLat = (b.lat - a.lat) * rad;
+    const dLng = (b.lng - a.lng) * rad;
+    const h = Math.sin(dLat / 2) ** 2
+        + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLng / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(h));
+}
+
 /** Parse a client-supplied location, tolerating strings from a form field. */
 function parseClientLocation(raw) {
     if (!raw || typeof raw !== 'object') return null;
@@ -167,7 +186,11 @@ async function fetchDistanceComparison(warehouses, customDetails = {}, flags = {
     const legs = await Promise.all(options.map((o) => fetchLeg(token, client, o)));
     const map = await fetchComparisonMap(token, client, options, legs);
 
-    const rows = options.map((o, i) => ({ ...o, ...(legs[i] || { km: null, minutes: null }) }));
+    const rows = options.map((o, i) => ({
+        ...o,
+        direct: directKm(client, o),
+        ...(legs[i] || { km: null, minutes: null }),
+    }));
     const measured = rows.filter((r) => r.km !== null).length;
 
     if (measured === 0) {
@@ -205,7 +228,7 @@ function generateDistanceSlideV3(pptx, data) {
     slide.background = { color: COLORS.bg };
     addSlideTitle(slide, `Distance from ${data.client.label}`);
 
-    const MAP_W = 4.30;
+    const MAP_W = 4.00;
     const tableW = LAYOUT.CONTENT_W - MAP_W - LAYOUT.GUTTER;
 
     const headerOpts = {
@@ -220,15 +243,17 @@ function generateDistanceSlideV3(pptx, data) {
     const rows = [[
         { text: '#', options: { ...headerOpts, align: 'center' } },
         { text: 'Property', options: headerOpts },
+        { text: 'Direct', options: { ...headerOpts, align: 'right' } },
         { text: 'By road', options: { ...headerOpts, align: 'right' } },
         { text: 'Drive', options: { ...headerOpts, align: 'right' } },
     ]];
 
     for (const r of data.rows) {
-        const name = r.name.length <= 42 ? r.name : `${r.name.slice(0, 41).trimEnd()}…`;
+        const name = r.name.length <= 38 ? r.name : `${r.name.slice(0, 37).trimEnd()}…`;
         rows.push([
             { text: String(r.option), options: { ...cellOpts, align: 'center' } },
             { text: name, options: cellOpts },
+            { text: fmtKm(r.direct), options: { ...cellOpts, align: 'right' } },
             { text: fmtKm(r.km), options: { ...cellOpts, align: 'right' } },
             { text: fmtMin(r.minutes), options: { ...cellOpts, align: 'right' } },
         ]);
@@ -237,16 +262,16 @@ function generateDistanceSlideV3(pptx, data) {
     const rowH = Math.min(0.42, (LAYOUT.CONTENT_H - 0.5) / rows.length);
     slide.addTable(rows, {
         x: LAYOUT.MARGIN, y: LAYOUT.CONTENT_TOP, w: tableW,
-        colW: [0.32, tableW - 0.32 - 0.86 - 0.78, 0.86, 0.78],
+        colW: [0.30, tableW - 0.30 - 0.70 - 0.78 - 0.76, 0.70, 0.78, 0.76],
         rowH: rows.map(() => rowH),
         border: { type: 'solid', pt: 0.5, color: COLORS.divider },
     });
 
     // Says what the numbers are, so nobody reads them as straight-line.
     slide.addText(
-        data.routesDrawn
-            ? 'Road distance and typical driving time. The map shows the driving route from the client site to each option.'
-            : 'Road distance and typical driving time, measured from the client site marked on the map.',
+        'Direct is straight-line distance. By road is the fastest driving route, which can run '
+        + 'considerably further where a ring road beats cutting through the city.'
+        + (data.routesDrawn ? ' The map shows that route to each option.' : ''),
         {
             x: LAYOUT.MARGIN, y: LAYOUT.CONTENT_TOP + rows.length * rowH + 0.12,
             w: tableW, h: 0.4,
