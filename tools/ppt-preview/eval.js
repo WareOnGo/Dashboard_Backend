@@ -439,6 +439,26 @@ function skip(name, reason) {
     `${mapForFourProperties} attempts for a 4-property deck`,
   );
 
+  // The distance slide exists only when the caller supplies the client's own
+  // site, and only when routing is reachable. Both absences are silent.
+  const noClientSite = await inspect((await session.build('v3', { ids: [1000, 1001] })).buffer);
+  check(
+    'no distance slide without a client location',
+    !/Distance from/.test(noClientSite.text),
+    'a distance slide appeared without a client site being given',
+  );
+
+  const withClientSite = await inspect((await session.build('v3', {
+    ids: [1000, 1001],
+    customDetails: { clientLocation: { lat: 19.0760, lng: 72.8777, label: 'Client DC' } },
+  })).buffer);
+  check(
+    'survives routing being unreachable',
+    !/Distance from/.test(withClientSite.text)
+      && withClientSite.slideCount === noClientSite.slideCount,
+    `${withClientSite.slideCount} slides vs ${noClientSite.slideCount} without a client site`,
+  );
+
   // Derived from the variant's own formula rather than hardcoded: v3 has a cover,
   // an index and a POC slide that the TCI deck does not, so the count differs.
   const v3NoPhotosBuild = await session.build('v3', { ids: [1004] });

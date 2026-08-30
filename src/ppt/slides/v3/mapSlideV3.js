@@ -23,9 +23,10 @@ const { logInfo, logWarn } = require('../../utils/logger');
 const IMAGE_W = 1280;
 const IMAGE_H = Math.round(IMAGE_W / (LAYOUT.CONTENT_W / LAYOUT.CONTENT_H));
 
-// A light basemap keeps the pins legible and matches the deck's cream ground far
-// better than the satellite style the detailed deck uses.
-const STYLE = 'light-v11';
+// streets-v12 rather than the minimal light basemap: at the metro zoom a
+// proposal actually lands on, light-v11 renders little beyond city names, so a
+// reader cannot place a pin against the roads and areas they know.
+const STYLE = 'streets-v12';
 const PIN_COLOR = COLORS.navy.replace('#', '');
 const PADDING = 50;
 

@@ -13,6 +13,7 @@ const { generateContactSlideV2 } = require('../slides/v2/contactSlideV2');
 const { generateDetailedSlideV3 } = require('../slides/v3/detailedSlideV3');
 const { generatePhotosSlideV3 } = require('../slides/v3/photosSlideV3');
 const { fetchOverviewMap, generateMapSlideV3 } = require('../slides/v3/mapSlideV3');
+const { fetchDistanceComparison, generateDistanceSlideV3 } = require('../slides/v3/distanceSlideV3');
 
 // Where the overview map belongs: after the cover and the index, so the reader
 // sees the geography before the individual options.
@@ -57,6 +58,10 @@ const createPptBufferV3 = async (warehouses, selectedImages = {}, customDetails 
     // instead of adding itself to the total. Never rejects — a deck without its
     // map is a lesser deck, not a failed one.
     const mapPending = fetchOverviewMap(warehouses, flags);
+    // Same treatment: routing every option against the client's own site is a
+    // handful of requests, all started here so they run while the photographs
+    // download rather than after them.
+    const distancePending = fetchDistanceComparison(warehouses, customDetails, flags);
 
     await generateTitleSlideV2(pptx, warehouses, customDetails);
     generateIndexSlideV2(pptx, warehouses, flags);
@@ -80,6 +85,10 @@ const createPptBufferV3 = async (warehouses, selectedImages = {}, customDetails 
         pptx.slides.splice(MAP_SLIDE_POSITION, 0, slide);
         renumberSlideRelationships(pptx);
     }
+
+    // Placed before the closing contact slide, which stays the deck's sign-off.
+    const distance = await distancePending;
+    if (distance) generateDistanceSlideV3(pptx, distance);
 
     if (flags.pocSlide) {
         generateContactSlideV2(pptx, customDetails);
