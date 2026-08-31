@@ -1,4 +1,4 @@
-const { normalise, coordsOf, parseAge, gridRegions, runPool } = require('../../scripts/importOsmPois');
+const { normalise, coordsOf, parseAge, gridRegions, runPool, simplify } = require('../../scripts/importOsmPois');
 const { categoryFor } = require('../../src/utils/osmCategories');
 
 /**
@@ -131,6 +131,29 @@ describe('normalise — highway lines', () => {
         expect(rows[0].wkt).toBe('SRID=4326;LINESTRING(77.5 12.9,77.6 13)');
     });
 
+    test('drops the tag blob, because ref/highway/name are already columns', () => {
+        // Measured at 252 bytes a row — more than the geometry — for tags nothing
+        // reads. Null rather than {} so it stores as a SQL NULL, not a jsonb null.
+        const { rows } = normalise(highway, [
+            way(1, [{ lat: 1, lon: 2 }, { lat: 3, lon: 4 }], { ref: 'NH44', highway: 'trunk', source: 'survey' }),
+        ], SOURCE);
+
+        expect(rows[0].tags).toBeNull();
+    });
+
+    test('simplifies the stored geometry', () => {
+        // Overpass returns ~13 vertices a way; the tolerance takes that to ~3 with a
+        // measured 0.3 m typical effect on distance-to-road.
+        const dense = Array.from({ length: 15 }, (_, i) => ({ lat: 12.9 + i * 0.001, lon: 77.5 + i * 0.001 }));
+        const { rows } = normalise(highway, [way(1, dense)], SOURCE);
+
+        const stored = rows[0].wkt.match(/,/g).length + 1;
+        expect(stored).toBeLessThan(dense.length);
+        // The endpoints must survive, or the road no longer reaches where it did.
+        expect(rows[0].wkt).toContain('77.5 12.9');
+        expect(rows[0].wkt).toContain('77.514 12.914');
+    });
+
     test('keeps ref and highway class, and tolerates an unnumbered road', () => {
         // Roughly a quarter of Indian trunk ways carry no ref, measured. Null is
         // correct; the read side has to render an unnamed highway.
@@ -167,6 +190,9 @@ describe('normalise — highway lines', () => {
     });
 
     test('collapses consecutive duplicate vertices but keeps the shape', () => {
+        // These three points are collinear, so simplification legitimately reduces
+        // them to the endpoints. What matters here is that the duplicates are gone
+        // and the line still spans the same extent.
         const { rows } = normalise(highway, [
             way(1, [
                 { lat: 1, lon: 1 }, { lat: 1, lon: 1 },
@@ -174,7 +200,7 @@ describe('normalise — highway lines', () => {
             ]),
         ], SOURCE);
 
-        expect(rows[0].wkt).toBe('SRID=4326;LINESTRING(1 1,2 2,3 3)');
+        expect(rows[0].wkt).toBe('SRID=4326;LINESTRING(1 1,3 3)');
     });
 
     test('skips a vertex with non-finite coordinates without losing the way', () => {
@@ -185,10 +211,61 @@ describe('normalise — highway lines', () => {
         expect(rows[0].wkt).toBe('SRID=4326;LINESTRING(1 1,3 3)');
     });
 
+    test('state highways are ingested deliberately, not by accident', () => {
+        // Previously SH only arrived when OSM happened to tag it as trunk: 12,858 NH
+        // rows against 573 SH, measured. The ref column is what tells them apart.
+        const { rows } = normalise(highway, [
+            way(1, [{ lat: 1, lon: 2 }, { lat: 3, lon: 4 }], { ref: 'SH17', highway: 'secondary' }),
+        ], SOURCE);
+
+        expect(rows[0].ref).toBe('SH17');
+    });
+
     test('produces no lat/lng columns — a line has no single point', () => {
         const { rows } = normalise(highway, [way(1, [{ lat: 1, lon: 2 }, { lat: 3, lon: 4 }])], SOURCE);
         expect(rows[0].lat).toBeUndefined();
         expect(rows[0].lng).toBeUndefined();
+    });
+});
+
+describe('simplify', () => {
+    test('collapses near-collinear points to the endpoints', () => {
+        const line = Array.from({ length: 20 }, (_, i) => [i * 0.01, i * 0.01 + (i % 2 ? 1e-5 : 0)]);
+        const out = simplify(line, 0.0005);
+
+        expect(out).toHaveLength(2);
+        // Endpoints are passed through untouched, jitter and all — simplification
+        // removes vertices, it never moves the ones it keeps.
+        expect(out[0]).toEqual(line[0]);
+        expect(out[1]).toEqual(line[line.length - 1]);
+    });
+
+    test('always keeps both endpoints, so adjacent ways still meet', () => {
+        const line = [[0, 0], [0.5, 0.0001], [1, 0]];
+        const out = simplify(line, 0.0005);
+        expect(out[0]).toEqual([0, 0]);
+        expect(out[out.length - 1]).toEqual([1, 0]);
+    });
+
+    test('keeps a corner that matters', () => {
+        // A right angle is the whole shape. Losing it would move the road.
+        expect(simplify([[0, 0], [1, 0], [1, 1]], 0.0005)).toHaveLength(3);
+    });
+
+    test('leaves a two-point line alone', () => {
+        expect(simplify([[0, 0], [1, 1]], 0.0005)).toEqual([[0, 0], [1, 1]]);
+    });
+
+    test('handles a way with thousands of vertices without blowing the stack', () => {
+        // Some OSM ways are enormous, which is why the implementation is iterative.
+        const big = Array.from({ length: 20000 }, (_, i) => [i * 1e-4, Math.sin(i / 50) * 0.01]);
+        expect(() => simplify(big, 0.0005)).not.toThrow();
+        expect(simplify(big, 0.0005).length).toBeLessThan(big.length);
+    });
+
+    test('a bigger tolerance never yields more points', () => {
+        const line = Array.from({ length: 50 }, (_, i) => [i * 0.01, Math.sin(i / 5) * 0.02]);
+        expect(simplify(line, 0.01).length).toBeLessThanOrEqual(simplify(line, 0.001).length);
     });
 });
 

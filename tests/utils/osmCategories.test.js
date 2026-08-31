@@ -9,6 +9,7 @@ const {
     categoryKeys,
     queryHash,
     nameFrom,
+    parseRefs,
     maxVoltage,
     footprintBufferDeg,
 } = require('../../src/utils/osmCategories');
@@ -95,11 +96,14 @@ describe('scope', () => {
 });
 
 describe('category-specific rules that carry a decision', () => {
-    test('aerodrome is filtered to real airports, not every airstrip', () => {
-        // Measured: 401 bare aeroway=aerodrome in India, only 158 with an IATA code.
+    test('aerodrome requires an IATA code and nothing looser', () => {
+        // Measured: 401 bare aeroway=aerodrome in India, only 158 with IATA. Also
+        // measured, which is why the looser clause is gone: accepting
+        // aerodrome:type=public added 2 rows and made a flying club the "nearest
+        // airport" to a Bengaluru warehouse instead of Kempegowda International.
         const ql = qlFor(categoryFor('aerodrome'));
         expect(ql).toContain('"iata"');
-        expect(ql).toMatch(/aerodrome:type/);
+        expect(ql).not.toMatch(/aerodrome:type/);
     });
 
     test('hospital does not quietly include clinics or doctors', () => {
@@ -173,6 +177,22 @@ describe('queryHash', () => {
         expect(() => queryHash('teleporter')).toThrow(/Unknown OSM category/);
     });
 
+    test.each([['dropTags', 'dropTags', false], ['simplifyDeg', 'simplifyDeg', 0.05]])(
+        'responds to %s, because it changes what gets stored', (_label, field, value) => {
+            // A row stored under a different value for either is exactly as stale as
+            // one fetched by a different query, so the hash has to see it.
+            const c = categoryFor('national_highway');
+            const before = queryHash('national_highway');
+            const original = c[field];
+            c[field] = value;
+            try {
+                expect(queryHash('national_highway')).not.toBe(before);
+            } finally {
+                c[field] = original;
+            }
+        },
+    );
+
     test('covers keep(), not just the query text', () => {
         // Changing a filter changes what gets stored just as surely as changing the
         // query, so it has to invalidate the stored rows too.
@@ -209,6 +229,66 @@ describe('nameFrom', () => {
         ['whitespace only', { name: '   ' }],
     ])('returns null for %s rather than a placeholder', (_label, tags) => {
         expect(nameFrom(tags)).toBeNull();
+    });
+});
+
+describe('parseRefs', () => {
+    test.each([
+        ['NH44', 'NH44'],
+        ['NH 44', 'NH44'],
+        ['NH-44', 'NH44'],
+        ['nh44', 'NH44'],
+        ['  NH44  ', 'NH44'],
+        ['NH66A', 'NH66A'],
+    ])('canonicalises %s to %s', (raw, expected) => {
+        // OSM spells the same road several ways. Grouping or matching on the raw
+        // string treats one highway as three.
+        expect(parseRefs(raw).ref).toBe(expected);
+    });
+
+    test('splits a road carrying several designations', () => {
+        // Measured on 641 of 15,724 ways. A naive read of this column yields
+        // "NH44;NH75", which is neither designation and matches no query.
+        expect(parseRefs('NH44;NH75').refs).toEqual(['NH44', 'NH75']);
+    });
+
+    test('prefers the designation an Indian reader recognises', () => {
+        // NH44 and AH43 are the same road; nobody in India calls it AH43.
+        expect(parseRefs('AH43;NH44').ref).toBe('NH44');
+        // An expressway is the more useful fact when a road is both.
+        expect(parseRefs('NE7;NH348').ref).toBe('NE7');
+        expect(parseRefs('SH17;NH66').ref).toBe('NH66');
+    });
+
+    test('keeps every designation for matching, even the unpreferred one', () => {
+        // Display uses `ref`; a query for "near AH43" still has to match.
+        expect(parseRefs('AH43;NH44').refs).toEqual(['AH43', 'NH44']);
+    });
+
+    test('deduplicates spellings of the same designation', () => {
+        expect(parseRefs('NH44;NH 44;nh-44').refs).toEqual(['NH44']);
+    });
+
+    test('is deterministic when class and number cannot separate two refs', () => {
+        // Not "correct" so much as stable: the same input must not produce a
+        // different display value on a later run.
+        expect(parseRefs('NH75;NH44').ref).toBe(parseRefs('NH44;NH75').ref);
+    });
+
+    test('keeps a named road verbatim rather than mangling it', () => {
+        // "Mumbai Ring Road" is not a designation and must not be forced into one.
+        expect(parseRefs('Mumbai Ring Road').ref).toBe('Mumbai Ring Road');
+    });
+
+    test.each([['null', null], ['undefined', undefined], ['empty', ''], ['whitespace', '   ']])(
+        'is null with an empty refs array for %s', (_label, raw) => {
+            expect(parseRefs(raw)).toEqual({ ref: null, refs: [] });
+        },
+    );
+
+    test('tolerates stray separators', () => {
+        expect(parseRefs('NH44;;NH75').refs).toEqual(['NH44', 'NH75']);
+        expect(parseRefs('NH44,NH75').refs).toEqual(['NH44', 'NH75']);
     });
 });
 

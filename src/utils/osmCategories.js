@@ -62,11 +62,76 @@ const FOOTPRINT_RADIUS_KM = 25;
 const DEG_PER_KM = 1 / 111;
 
 /**
- * Highway refs worth treating as national-class in India. `trunk` is effectively
- * the NH network here and `motorway` the expressways; the `primary` clause catches
- * NH-numbered roads a mapper downgraded.
+ * Numbered-highway refs worth storing, as an Overpass regex.
+ *
+ * NH national highway, NE expressway, AH Asian Highway, SH state highway.
+ *
+ * SH is included DELIBERATELY, which it previously was not. The earlier pattern
+ * accepted only NH/NE/AH on `highway=primary` while accepting any ref on `trunk`,
+ * and the measured result was 12,858 NH rows against 573 SH — those 573 being
+ * simply the state highways OSM happens to tag as trunk. That is the worst of both
+ * options: "nearest highway" would almost always find an NH and would find an SH
+ * only by luck. A state highway is a real access route for a warehouse, so either
+ * include them properly or not at all.
+ *
+ * The stored `ref` is what distinguishes them downstream ("NH44" vs "SH17"), so a
+ * reader can prefer one class over the other, or label them differently. The OSM
+ * `highway` class cannot do that job: it is motorway/trunk/primary, which in India
+ * does not map cleanly onto the NH/SH distinction.
  */
-const NH_REF_PATTERN = '^(NH|NE|AH)[ -]?[0-9]';
+const HIGHWAY_REF_PATTERN = '^(NH|NE|AH|SH)[ -]?[0-9]';
+
+/**
+ * Preference order when a road carries more than one designation. An Indian
+ * reader recognises "NH44" far more readily than its Asian Highway alias "AH43",
+ * and an expressway is the more useful fact when a road is both.
+ */
+const REF_CLASS_RANK = { NE: 0, NH: 1, SH: 2, AH: 3, MDR: 4, ODR: 5 };
+
+/**
+ * Canonicalise an OSM highway `ref` into one preferred designation plus the full
+ * set of them.
+ *
+ * Two measured problems this solves. 641 of 15,724 ways carried more than one
+ * designation in a single semicolon-separated string ("NH44;NH75"), so anything
+ * parsing that column naively gets a value that is neither designation and matches
+ * no query. And OSM spells the same road inconsistently — "NH44", "NH 44",
+ * "NH-44" are all present — so grouping or matching on the raw string silently
+ * treats one highway as three.
+ *
+ * @param {string|null|undefined} raw - the OSM ref tag
+ * @returns {{ref: string|null, refs: string[]}} `ref` is the one to display;
+ *   `refs` is every designation, canonical and deduplicated, for matching.
+ */
+function parseRefs(raw) {
+    if (raw === null || raw === undefined) return { ref: null, refs: [] };
+
+    const seen = new Set();
+    const parsed = [];
+    for (const piece of String(raw).split(/[;,]/)) {
+        // Collapse "NH 44" / "NH-44" / "nh44" to "NH44". The prefix and number are
+        // captured separately so anything not shaped like a designation is kept
+        // verbatim rather than mangled into one.
+        const trimmed = piece.trim();
+        if (!trimmed) continue;
+        const m = /^([A-Za-z]{2,3})[\s-]*([0-9]+[A-Za-z]?)$/.exec(trimmed);
+        const canonical = m ? `${m[1].toUpperCase()}${m[2].toUpperCase()}` : trimmed;
+        if (seen.has(canonical)) continue;
+        seen.add(canonical);
+        const cls = m ? m[1].toUpperCase() : null;
+        parsed.push({
+            canonical,
+            rank: cls !== null && cls in REF_CLASS_RANK ? REF_CLASS_RANK[cls] : 9,
+            number: m ? parseInt(m[2], 10) : Number.MAX_SAFE_INTEGER,
+        });
+    }
+    if (!parsed.length) return { ref: null, refs: [] };
+
+    // Sorted for display preference; the tie-break on number only exists so the
+    // choice is deterministic across runs rather than dependent on OSM's ordering.
+    const preferred = [...parsed].sort((a, b) => a.rank - b.rank || a.number - b.number)[0];
+    return { ref: preferred.canonical, refs: parsed.map((r) => r.canonical) };
+}
 
 /** A usable display name, or null. Never a placeholder — see nameFrom's comment. */
 function nameFrom(tags = {}) {
@@ -113,22 +178,28 @@ const CATEGORIES = [
         minExpected: 120,
         mustExistNearWarehouses: false,
         /**
-         * Filtered to airports with an IATA code or a public/international/regional
-         * type. Measured: 401 bare `aeroway=aerodrome` in India but only 158 with an
-         * IATA code — the other 243 are gliding clubs, private strips and military
-         * airfields, none of which belong in "nearest airport" on a proposal.
+         * An IATA code is the whole filter, and the narrowness is deliberate.
          *
-         * This query is the single biggest quality win in the ingest. It replaces
+         * Measured: 401 bare `aeroway=aerodrome` exist in India but only 158 carry
+         * an IATA code. The other 243 are gliding clubs, private strips and military
+         * airfields — none of them somewhere freight goes.
+         *
+         * An earlier version also accepted `aerodrome:type=public|international|
+         * regional`, on the theory that some real airports lack an IATA code. Checked
+         * against the ingested data, that clause contributed exactly 2 of 171 rows,
+         * and one of them was Jakkur Aerodrome — a flying club that then came back as
+         * the nearest airport to a Bengaluru warehouse, 41 km away, in place of
+         * Kempegowda International. Every commercial Indian airport has an IATA code,
+         * so the clause bought two rows and one wrong answer.
+         *
+         * This query is still the biggest quality win in the ingest. It replaces
          * geospatialService.findNearestAirport, which is a Nominatim FREE-TEXT
-         * SEARCH for the word "airport" in a +/-1 degree box — it can and does
-         * return "Airport Road" and airport hotels.
+         * SEARCH for the word "airport" in a +/-1 degree box — it can and does return
+         * "Airport Road" and airport hotels.
          */
         ql: () => `[out:json][timeout:300];
 ${AREA_IN}
-(
-  nwr["aeroway"="aerodrome"]["iata"](area.in);
-  nwr["aeroway"="aerodrome"]["aerodrome:type"~"^(international|public|regional)$"](area.in);
-);
+nwr["aeroway"="aerodrome"]["iata"](area.in);
 out center;`,
     },
 
@@ -349,16 +420,31 @@ out center;`,
          * mainline, i.e. the physical entry and exit points. `motorway_junction`
          * nodes are unioned in as well.
          *
-         * Measured on a 1-degree Bengaluru box: 658 nodes, 41 seconds, 12 kB. Slow
-         * per request but tiny to store. Also measured, and worth knowing before
-         * anyone builds a label from it: only 6 of those 658 carried a `ref` tag and
-         * 23 had any name. Access points in India are essentially unnamed, so the
-         * display name for this category should come from the nearest
-         * `national_highway` ref, not from the node.
+         * EVERY TAG TEST HERE IS EXACT EQUALITY, NOT A REGEX, AND THAT MATTERS.
+         * Overpass cannot use its tag index for a pattern match, so it scans
+         * instead. Measured on the same 1-degree Bengaluru box, returning
+         * byte-identical results both ways:
+         *
+         *   way["highway"~"^(motorway|trunk)_link$"]  41.4 s   (~82 min for 120 tiles)
+         *   way["highway"="motorway_link"] + "trunk_link"   4.8 s   (~10 min)
+         *
+         * 8.7x, for nothing but spelling the query out. Please do not "tidy" these
+         * four clauses back into two regexes.
+         *
+         * Also measured, before anyone builds a label from this: of those 658
+         * access points only 6 carried a `ref` tag and 23 had any name. Access
+         * points in India are essentially unnamed, so a display label should come
+         * from the nearest `national_highway` ref, not from the node itself.
          */
         ql: (box) => `[out:json][timeout:300];
-way["highway"~"^(motorway|trunk)_link$"](${box})->.links;
-way["highway"~"^(motorway|trunk)$"](${box})->.mains;
+(
+  way["highway"="motorway_link"](${box});
+  way["highway"="trunk_link"](${box});
+)->.links;
+(
+  way["highway"="motorway"](${box});
+  way["highway"="trunk"](${box});
+)->.mains;
 node(w.links)->.ln;
 node(w.mains)->.mn;
 (
@@ -376,7 +462,7 @@ out;`,
         minExpected: 0,
         mustExistNearWarehouses: false,
         /**
-         * NH and expressway centrelines, as LineStrings in osm_highway.
+         * Numbered-highway centrelines, as LineStrings in osm_highway.
          *
          * Not points, and not in osm_poi: distance to a road is distance to a line.
          * The current export takes a way's bbox CENTRE (geospatialService.js
@@ -391,12 +477,39 @@ out;`,
          * Also measured: 2.6 MB for one 1-degree tile. That is why this category is
          * footprint-scoped rather than national — full national geometry would be
          * roughly 2.6 GB.
+         *
+         * Two size decisions, both measured on real rows:
+         *
+         * `dropTags` — the tag blob cost 252 bytes a row, more than the geometry,
+         * and ref/highway/name are already columns. Unlike a POI tag blob (where
+         * `iata` separates an airport from an airstrip, and `voltage` a transmission
+         * substation from a pole transformer) there is nothing in a highway's tags
+         * that a reader needs.
+         *
+         * `simplifyDeg` — Overpass returns about 13 vertices a way. Simplified at
+         * this tolerance that becomes 3, removing 75% of the geometry, and the
+         * effect on the only thing the geometry is for — distance from a point to
+         * the road — measured at 0.3 m typically and 55 m worst case. Against a
+         * figure reported in kilometres that is free.
          */
+        dropTags: true,
+        /** ~55 m, in degrees. See the note above for what it costs in accuracy. */
+        simplifyDeg: 0.0005,
+        /**
+         * Bumped when SHARED normalisation changes what this category stores, since
+         * queryHash cannot see into parseRefs or the WKT builder the way it sees
+         * per-category settings. Opt-in and per-category on purpose: a global
+         * version would invalidate every unrelated category too.
+         *
+         * 2 — refs are canonicalised and split into the `refs` array.
+         */
+        storageVersion: 2,
         ql: (box) => `[out:json][timeout:300];
 (
   way["highway"="motorway"](${box});
   way["highway"="trunk"](${box});
-  way["highway"="primary"]["ref"~"${NH_REF_PATTERN}"](${box});
+  way["highway"="primary"]["ref"~"${HIGHWAY_REF_PATTERN}"](${box});
+  way["highway"="secondary"]["ref"~"^SH[ -]?[0-9]"](${box});
 );
 out geom;`,
         keep: (el) => Array.isArray(el.geometry) && el.geometry.length >= 2,
@@ -428,14 +541,27 @@ const categoryKeys = () => CATEGORIES.map((c) => c.key);
 function queryHash(key) {
     const c = categoryFor(key);
     if (!c) throw new Error(`Unknown OSM category: ${key}`);
-    const shape = JSON.stringify({
+    // Everything that changes what ends up in the table belongs here, not just what
+    // changes the request — a row stored under a different simplification tolerance
+    // is as stale as one fetched by a different query.
+    //
+    // But ONLY what is relevant to this category. Fields that are unset are omitted
+    // rather than serialised as null, so adding a setting that a category does not
+    // use leaves its hash untouched. That property matters more than it looks:
+    // hashing the full shape unconditionally re-invalidated all eleven categories
+    // when the highway settings were introduced, which would have thrown away
+    // 110,731 already-fetched POI rows for no behavioural reason.
+    const shape = {
         ql: c.ql(c.scope === SCOPE_NATIONAL ? null : '0,0,1,1'),
         scope: c.scope,
         gridDeg: c.gridDeg || null,
         target: c.target,
         keep: c.keep ? c.keep.toString() : null,
-    });
-    return crypto.createHash('sha1').update(shape).digest('hex').slice(0, 12);
+    };
+    if (c.dropTags) shape.dropTags = true;
+    if (c.simplifyDeg) shape.simplifyDeg = c.simplifyDeg;
+    if (c.storageVersion) shape.storageVersion = c.storageVersion;
+    return crypto.createHash('sha1').update(JSON.stringify(shape)).digest('hex').slice(0, 12);
 }
 
 /**
@@ -448,6 +574,7 @@ const footprintBufferDeg = (radiusKm = FOOTPRINT_RADIUS_KM) => radiusKm * DEG_PE
 
 module.exports = {
     CATEGORIES,
+    parseRefs,
     SCOPE_NATIONAL,
     SCOPE_GRID,
     SCOPE_FOOTPRINT,

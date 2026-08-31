@@ -75,6 +75,7 @@ const {
     categoryKeys,
     queryHash,
     nameFrom,
+    parseRefs,
     footprintBufferDeg,
 } = require('../src/utils/osmCategories');
 
@@ -267,6 +268,71 @@ function coordsOf(el) {
 }
 
 /**
+ * Ramer-Douglas-Peucker line simplification, in degrees.
+ *
+ * Done here rather than in Postgres (ST_Simplify) so the stored geometry is the
+ * simplified geometry: simplifying on read would pay the cost on every query and
+ * save no space at all, which is the point of doing it.
+ *
+ * Endpoints are always kept, so a way still starts and ends where OSM says it
+ * does and adjacent ways still meet.
+ *
+ * Measured on real rows at the tolerance the highway category uses: 13 vertices
+ * become 3, removing 75% of the geometry, and distance from a point to the road
+ * moves 0.3 m typically and 55 m at worst. See the category's note.
+ *
+ * Planar maths on lat/lng, which is the same approximation
+ * src/utils/microMarketGeometry.js already makes and is far below the tolerance's
+ * own error at these latitudes.
+ *
+ * @param {Array<[number, number]>} points - [lng, lat] pairs
+ * @param {number} tolerance - in degrees
+ * @returns {Array<[number, number]>}
+ */
+function simplify(points, tolerance) {
+    if (points.length < 3) return points;
+
+    const sqTolerance = tolerance * tolerance;
+
+    /** Squared perpendicular distance from p to the segment a-b. */
+    const sqSegDist = (p, a, b) => {
+        let [x, y] = a;
+        const dx = b[0] - x;
+        const dy = b[1] - y;
+        if (dx !== 0 || dy !== 0) {
+            const t = ((p[0] - x) * dx + (p[1] - y) * dy) / (dx * dx + dy * dy);
+            if (t > 1) { [x, y] = b; } else if (t > 0) { x += dx * t; y += dy * t; }
+        }
+        return (p[0] - x) ** 2 + (p[1] - y) ** 2;
+    };
+
+    // Iterative rather than recursive: an OSM way can carry thousands of vertices
+    // and a recursive implementation would risk the stack on the worst of them.
+    const keep = new Uint8Array(points.length);
+    keep[0] = 1;
+    keep[points.length - 1] = 1;
+    const stack = [[0, points.length - 1]];
+
+    while (stack.length) {
+        const [first, last] = stack.pop();
+        let worst = 0;
+        let index = -1;
+        for (let i = first + 1; i < last; i++) {
+            const d = sqSegDist(points[i], points[first], points[last]);
+            if (d > worst) { worst = d; index = i; }
+        }
+        if (worst > sqTolerance && index !== -1) {
+            keep[index] = 1;
+            stack.push([first, index], [index, last]);
+        }
+    }
+
+    const out = [];
+    for (let i = 0; i < points.length; i++) if (keep[i]) out.push(points[i]);
+    return out;
+}
+
+/**
  * Turn Overpass elements into rows, reporting what was dropped and why.
  *
  * The counts matter as much as the rows: a filter quietly discarding most of a
@@ -295,15 +361,25 @@ function normalise(category, elements, sourceFile) {
                 points.push([p.lon, p.lat]);
             }
             if (points.length < 2) { noCoords++; continue; }
+            const shape = category.simplifyDeg
+                ? simplify(points, category.simplifyDeg)
+                : points;
+            // `ref` becomes the one designation worth displaying; `refs` keeps all
+            // of them, canonical, so a query for "near NH48" matches a road that
+            // OSM records as "NH44;NH48".
+            const { ref, refs } = parseRefs(el.tags && el.tags.ref);
             rows.push({
                 osmType,
                 osmId: BigInt(el.id),
-                ref: (el.tags && el.tags.ref) || null,
+                ref,
+                refs,
                 highway: (el.tags && el.tags.highway) || 'unknown',
                 name: nameFrom(el.tags),
-                tags: el.tags || {},
+                // Highways drop their tag blob: ref/highway/name are already columns
+                // and the blob measured 252 bytes a row that nothing reads.
+                tags: category.dropTags ? null : (el.tags || {}),
                 sourceFile,
-                wkt: `SRID=4326;LINESTRING(${points.map(([x, y]) => `${x} ${y}`).join(',')})`,
+                wkt: `SRID=4326;LINESTRING(${shape.map(([x, y]) => `${x} ${y}`).join(',')})`,
             });
             continue;
         }
@@ -381,22 +457,24 @@ async function upsertPois(rows) {
  */
 async function upsertHighways(rows) {
     if (!rows.length) return 0;
-    const perRow = 8;
+    const perRow = 9;
     const seenParam = rows.length * perRow + 1;
     const tuples = rows.map((_, i) => {
         const b = i * perRow;
-        return `($${b + 1}::char(1), $${b + 2}::bigint, $${b + 3}::text, $${b + 4}::text,`
-            + ` $${b + 5}::text, $${b + 6}::jsonb, $${b + 7}::text, $${seenParam}::timestamptz,`
-            + ` ST_GeogFromText($${b + 8}::text))`;
+        return `($${b + 1}::char(1), $${b + 2}::bigint, $${b + 3}::text, $${b + 4}::text[],`
+            + ` $${b + 5}::text, $${b + 6}::text, $${b + 7}::jsonb, $${b + 8}::text,`
+            + ` $${seenParam}::timestamptz, ST_GeogFromText($${b + 9}::text))`;
     }).join(', ');
     const params = rows.flatMap((r) => [
-        r.osmType, r.osmId, r.ref, r.highway, r.name, JSON.stringify(r.tags), r.sourceFile, r.wkt,
+        r.osmType, r.osmId, r.ref, r.refs || [], r.highway, r.name,
+        r.tags === null ? null : JSON.stringify(r.tags), r.sourceFile, r.wkt,
     ]);
     const sql = `
-        INSERT INTO osm_highway ("osmType","osmId",ref,highway,name,tags,"sourceFile","lastSeenAt",geog)
+        INSERT INTO osm_highway ("osmType","osmId",ref,refs,highway,name,tags,"sourceFile","lastSeenAt",geog)
         VALUES ${tuples}
         ON CONFLICT ("osmType","osmId") DO UPDATE SET
             ref = EXCLUDED.ref,
+            refs = EXCLUDED.refs,
             highway = EXCLUDED.highway,
             name = EXCLUDED.name,
             tags = EXCLUDED.tags,
@@ -433,7 +511,10 @@ async function recordRegion({ category, region, hash }, patch) {
     }));
 }
 
-module.exports = { normalise, coordsOf, parseAge, gridRegions, runPool, upsertPois, upsertHighways };
+module.exports = {
+    normalise, coordsOf, parseAge, gridRegions, runPool, simplify,
+    upsertPois, upsertHighways,
+};
 
 // The script body only runs when invoked directly, so the pure helpers above can
 // be unit-tested without a database or a network.
@@ -825,20 +906,40 @@ async function verify() {
     }
 
     // 5. the zero-element detectors
-    const empties = await prisma.osmIngestTile.findMany({
-        where: { status: 'empty' }, select: { category: true, tileKey: true },
-    });
-    const mustExist = empties.filter((e) => {
+    //
+    // The gate is "does this region contain one of our warehouses", not merely
+    // "is this a category that should exist somewhere". A national grid spans
+    // India's whole bounding box, so a third of its cells are the Bay of Bengal,
+    // Tibet or the Karakoram — legitimately empty of Indian hospitals. Demanding
+    // non-emptiness there cries wolf on every single run, which is worse than not
+    // checking, because it trains whoever reads this output to ignore it.
+    //
+    // A region containing a warehouse is a different matter: that means a
+    // settlement, which means a fuel station and a hospital within range. Empty
+    // there is not a fact about India, it is a truncated response.
+    const empties = await prisma.$queryRawUnsafe(`
+        SELECT t.category, t."tileKey",
+               (SELECT count(*) FROM "WarehouseData" d
+                 WHERE d.latitude BETWEEN t.south AND t.north
+                   AND d.longitude BETWEEN t.west AND t.east)::int AS warehouses
+        FROM osm_ingest_tile t
+        WHERE t.status = 'empty'
+        ORDER BY t.category, t."tileKey"`);
+
+    const suspect = empties.filter((e) => {
         const c = categoryFor(e.category);
-        return c && c.mustExistNearWarehouses;
+        return c && c.mustExistNearWarehouses && e.warehouses > 0;
     });
-    if (mustExist.length) {
-        // These categories exist in any populated place. Empty is not a fact here.
-        console.error(`  FAIL: ${mustExist.length} region(s) returned nothing for a category that must exist `
-            + `near any settlement: ${mustExist.slice(0, 5).map((e) => `${e.category}@${e.tileKey}`).join(', ')}`);
+    if (suspect.length) {
+        console.error(`  FAIL: ${suspect.length} region(s) returned nothing for a category that must exist `
+            + `wherever we hold a listing: `
+            + suspect.slice(0, 5).map((e) => `${e.category}@${e.tileKey} (${e.warehouses} warehouses)`).join(', '));
         hardFail = true;
-    } else if (empties.length) {
-        console.log(`  ${empties.length} region(s) genuinely empty (sparse categories only)`);
+    }
+    const benign = empties.length - suspect.length;
+    if (benign) {
+        console.log(`  ${benign} empty region(s), none containing a warehouse `
+            + '(ocean, or outside India — expected for a national grid)');
     }
 
     const ratios = await prisma.$queryRawUnsafe(`
