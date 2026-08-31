@@ -148,3 +148,6 @@ match_localities_2km.js
 
 # Local deck preview artefacts (rendered slides, pdfs, decks)
 tools/ppt-preview/out/
+
+# Batch-script logs (error/recovery JSONL, written to the repo root by default)
+*.jsonl

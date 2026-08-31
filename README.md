@@ -308,7 +308,7 @@ Backend_Repository/
 ├── prisma/schema.prisma
 ├── tests/                       # Jest + Supertest
 ├── docs/                        # staging spec, frontend integration, Docker/ECR setup
-├── scripts/                     # backfillMicroMarkets.js
+├── scripts/                     # backfills, PostGIS setup, OSM ingest
 └── routes/warehouse.js          # ⚠ legacy, NOT mounted — superseded by src/routes/warehouse.js
 ```
 
@@ -497,9 +497,59 @@ schema to read.
 scripts are restored. Build and run the image directly in the meantime; the intended
 workflow is described in `docs/DOCKER_DEPLOYMENT.md` and `docs/SETUP_GUIDE.md`.
 
-`scripts/` currently holds one maintenance job: `backfillMicroMarkets.js`
-(`npm run backfill:micromarkets`), which re-tags warehouses against the
-reviewer-drawn polygons — needed with `--all` whenever a polygon is renamed or moved.
+`scripts/` holds the maintenance and ingest jobs. Each carries its own `Usage:` block;
+the ones with an `npm` alias are wired in `package.json`.
+
+| Script | What it does |
+|---|---|
+| `backfillMicroMarkets.js` (`npm run backfill:micromarkets`) | Re-tags warehouses against the reviewer-drawn polygons. Needs `--all` whenever a polygon is renamed or moved. |
+| `backfillDashboardAccess.js` (`npm run backfill:dashboard-access`) | Grants `dashboardAccess` to existing users. Must run *before* the capability gate is enabled. |
+| `setupGeoColumns.js` | Adds the PostGIS bits Prisma cannot express — generated `geog` point columns, the `osm_highway` LineString column, and their GiST indexes. Idempotent; `--verify` checks without writing. |
+| `importOsmPois.js` (`npm run ingest:osm-pois`) | Imports OSM points of interest into `osm_poi` and highway centrelines into `osm_highway`. See below. |
+| `backfillWarehouseImageLabels.js` | Classifies warehouse images via OpenAI. Costs money; resumable. |
+| `classifyWarehouseImagesSample.js` | Read-only model-comparison harness, for deciding before spending. |
+| `scheduleImageLabelSweep.js` | Manages the pg_cron job that pokes the image-label sweep endpoint. |
+
+### POI ingest
+
+`npm run ingest:osm-pois` fills `osm_poi` and `osm_highway` from OpenStreetMap. Category
+definitions live in `src/utils/osmCategories.js` — that file is the single source of truth
+for what is fetched and how, and the script, its tests and the stored `queryHash` all read
+from it.
+
+Most categories are fetched as **one national request each**: measured national counts put
+ten of the eleven under 20k elements, ~69 MB of JSON in total, and a national fetch has no
+edge — a grid tiled around our own warehouses would silently bound "nearest fire station"
+by where we happen to own listings today. `hospital` (55,539) is split over a coarse
+national grid. The two **highway** categories are the exception and are restricted to a
+buffer around our warehouses, because `out geom` measured 2.6 MB per square degree, so full
+national geometry would be ~2.6 GB.
+
+Things worth knowing before running it:
+
+- **Overpass is a donated shared service.** It rate-limits, sheds load under whole-country
+  queries, and will refuse TCP connections outright if you lean on it. Set
+  `OVERPASS_ENDPOINT` to a mirror or a self-hosted instance for anything more than a
+  single category, and keep `--rate=1` against the public one.
+- **Every fetch is recorded in `osm_ingest_tile`, including the ones that returned
+  nothing.** That table exists to record negative results: a fetch returning zero elements
+  writes no POI rows, so without it "never fetched", "genuinely empty" and "Overpass
+  truncated the response" are indistinguishable — and the third becomes "no fire station
+  within range" on a client proposal. `status='empty'` is deliberately distinct from `'ok'`.
+- **Re-running is cheap and safe.** Only what failed, is new, or was built from a
+  superseded query definition is refetched. Editing a category's query changes its
+  `queryHash`, which marks those records stale automatically — you do not need to remember
+  to force a refresh.
+- **A partial ingest exits non-zero** and `--verify` prints why. Never treat a run with
+  failed regions as done.
+- **`--prune` is guarded.** It only deletes inside regions that completed *in that run*,
+  never inside ones that returned empty or failed, and it refuses outright if it would
+  remove more than `--prune-max-pct` of a category. Stale data is better than a hole.
+- **ICD/CFS is not in OpenStreetMap** and is deliberately not ingested. There is no tag for
+  an Inland Container Depot or Container Freight Station; a `name`-regex over
+  `landuse=industrial` misses most of the ~60 CONCOR depots and invents false positives.
+  The honest source is the public CBIC/CONCOR lists loaded into `point_of_interest`. Please
+  don't "fix" the gap with a regex.
 
 `SIGINT`/`SIGTERM`/`uncaughtException`/`unhandledRejection` all route through
 `gracefulShutdown`, which disconnects Prisma before exiting.

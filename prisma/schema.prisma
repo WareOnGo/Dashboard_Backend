@@ -145,16 +145,16 @@ model Warehouse {
   serviceLiftCount            String?
   totalFloors                 String?
   micromarket                 String[]             @default([])
+  handoverLeadUnit            HandoverLeadUnit?
+  handoverLeadValue           Int?
+  handoverType                HandoverType?
+  waterSupply                 WaterSupply?
   /// Use-cases a site suits (e-commerce, cold storage, 3PL, manufacturing…).
   /// A free-form text array rather than an enum: the list is a commercial
   /// judgement that will change faster than a schema migration, and the UI
   /// drives it as a multi-select. Defaults to empty so existing rows need no
   /// backfill and the column is never null.
   suitableFor                 String[]             @default([])
-  handoverLeadUnit            HandoverLeadUnit?
-  handoverLeadValue           Int?
-  handoverType                HandoverType?
-  waterSupply                 WaterSupply?
   WarehouseData               WarehouseData?
   WarehouseVisitNote          WarehouseVisitNote[]
 
@@ -476,7 +476,7 @@ model StagedWarehouse {
   /// or it is dropped at staging and never reaches the promoted warehouse —
   /// the mirror-drift test in stagingService.test.js exists to catch exactly
   /// that.
-  suitableFor                 String[]             @default([])
+  suitableFor                 String[]          @default([])
 
   @@index([reviewStatus, submittedAt])
 }
@@ -587,30 +587,6 @@ model sync_checkpoints {
   last_error      String?
 }
 
-model Guide {
-  id              Int         @id @default(autoincrement())
-  slug            String      @unique
-  title           String
-  seoTitle        String
-  description     String
-  summary         String
-  keywords        String[]    @default([])
-  blocks          Json
-  faqs            Json
-  related         String[]    @default([])
-  datePublished   DateTime?   @db.Date
-  dateModified    DateTime    @db.Date
-  sortOrder       Int         @default(0)
-  status          GuideStatus @default(DRAFT)
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime
-  deployedAt      DateTime?
-  deployedContent Json?
-  author          String?
-
-  @@index([status, sortOrder])
-}
-
 /// Points of interest imported from OpenStreetMap.
 ///
 /// REFERENCE DATA, not ours: every row is reproducible from a public extract, so
@@ -640,14 +616,117 @@ model OsmPoi {
   sourceFile String?
   importedAt DateTime                  @default(now())
   geog       Unsupported("geography")? @default(dbgenerated("\nCASE\n    WHEN ((lng IS NOT NULL) AND (lat IS NOT NULL)) THEN (st_setsrid(st_makepoint(lng, lat), 4326))::geography\n    ELSE NULL::geography\nEND"))
+  /// Stamped with the ingest run's start time every time a fetch sees this
+  /// feature, so importedAt keeps its first-seen meaning. A row inside a region
+  /// the run covered exhaustively whose lastSeenAt is older than the run has gone
+  /// upstream in OSM — that is what --prune deletes. Prune never runs over a
+  /// region that returned empty or failed, because stale data beats a hole: a
+  /// hole reads downstream as "nothing of this kind is anywhere near".
+  lastSeenAt DateTime                  @default(now())
 
   /// One row per OSM feature per category — a feature can legitimately match
   /// more than one category, and re-imports upsert rather than duplicate.
   @@unique([osmType, osmId, category])
   @@index([category])
   @@index([lat, lng])
+  @@index([lastSeenAt])
   @@index([geog], map: "osm_poi_geog_gist", type: Gist)
   @@map("osm_poi")
+}
+
+/// National-highway and expressway centrelines, imported from OpenStreetMap.
+/// Same lifecycle as OsmPoi: reference data, truncatable, re-importable.
+///
+/// A separate table with LINE geometry rather than rows in OsmPoi, because
+/// "distance to the nearest national highway" is a distance to a linestring. The
+/// two alternatives were both worse. Taking a way's bounding-box centre is what
+/// the PPT export does today and it can be 100km out on a long trunk road. And
+/// densifying way vertices into OsmPoi would add ~100k points to a table whose
+/// map viewport read (GeoModel.osmPoisInBbox) selects every category under one
+/// shared 2000-row cap, so highway vertices would hide every hospital.
+///
+/// NOTE: unlike OsmPoi.geog this is NOT a generated column — here the geometry IS
+/// the source of truth, and there is no lat/lng to derive it from. Prisma cannot
+/// write geography, so rows are inserted as raw SQL by scripts/importOsmPois.js.
+/// The DDL lives in scripts/setupGeoColumns.js.
+///
+/// Unique on (osmType, osmId) with no tile component: `out geom` was measured to
+/// return full, unclipped way geometry, so the same way fetched from two adjacent
+/// tiles is identical and upserts onto one row.
+model OsmHighway {
+  id         Int                       @id @default(autoincrement())
+  /// n(ode) | w(ay) | r(elation)
+  osmType    String                    @db.Char(1)
+  osmId      BigInt
+  /// "NH44", "NE7". Null for a trunk road OSM has not numbered — roughly a
+  /// quarter of them, measured — which is why the read side must tolerate an
+  /// unnamed highway rather than treating null as missing data.
+  ref        String?
+  /// motorway | trunk | primary, so an expressway stays distinguishable from an NH.
+  highway    String
+  name       String?
+  tags       Json?
+  sourceFile String?
+  importedAt DateTime                  @default(now())
+  lastSeenAt DateTime                  @default(now())
+  geog       Unsupported("geography")?
+
+  @@unique([osmType, osmId])
+  @@index([highway])
+  @@index([ref])
+  @@index([lastSeenAt])
+  @@index([geog], map: "osm_highway_geog_gist", type: Gist)
+  @@map("osm_highway")
+}
+
+/// Ingest bookkeeping for OsmPoi and OsmHighway — one row per (region, category).
+///
+/// This table exists to record NEGATIVE results, and that is worth being explicit
+/// about because it is the whole justification for its existence. A fetch that
+/// returns zero elements writes no POI rows, so without a record of the attempt,
+/// "never fetched", "fetched and genuinely empty" and "Overpass truncated the
+/// response" are indistinguishable — and the third silently becomes "there is no
+/// fire station within range of this warehouse" on a client proposal.
+///
+/// It is also what makes a re-run fetch only what is stale or new, and what lets
+/// a read say "coverage incomplete here" instead of "none found".
+model OsmIngestTile {
+  id           Int       @id @default(autoincrement())
+  /// "national", or "<sizeDeg>/<south>/<west>". The size is inside the key so a
+  /// region that times out can be split into finer children without a schema
+  /// change — which is how a dense cell recovers instead of staying a hole.
+  tileKey      String
+  category     String
+  south        Float
+  west         Float
+  north        Float
+  east         Float
+  /// pending | ok | empty | failed | skipped.
+  /// 'empty' is deliberately distinct from 'ok': both completed, but only 'empty'
+  /// warrants suspicion.
+  status       String    @default("pending")
+  /// Elements Overpass returned.
+  elementCount Int       @default(0)
+  /// Rows actually written, after filtering. A large gap between this and
+  /// elementCount means a filter is discarding more than intended — which is how
+  /// the substation voltage threshold gets tuned from evidence, not guesswork.
+  storedCount  Int       @default(0)
+  attempts     Int       @default(0)
+  lastError    String?
+  /// Hash of the query definition that produced this record. Editing a category's
+  /// query changes its hash, which marks these rows stale and forces a refetch.
+  /// Without it, a query edit silently leaves part of the table built from the
+  /// superseded definition and nothing ever says so.
+  queryHash    String?
+  durationMs   Int?
+  bytes        Int?
+  fetchedAt    DateTime?
+  updatedAt    DateTime  @updatedAt
+
+  @@unique([tileKey, category])
+  @@index([category, status])
+  @@index([status])
+  @@map("osm_ingest_tile")
 }
 
 /// Our own points of interest — the point-geometry sibling of MicroMarket.
@@ -704,6 +783,30 @@ model spatial_ref_sys {
   proj4text String? @db.VarChar(2048)
 }
 
+model Blog {
+  id              Int        @id @default(autoincrement())
+  slug            String     @unique
+  title           String
+  seoTitle        String
+  description     String
+  summary         String
+  keywords        String[]   @default([])
+  blocks          Json
+  faqs            Json
+  related         String[]   @default([])
+  datePublished   DateTime?  @db.Date
+  dateModified    DateTime   @db.Date
+  sortOrder       Int        @default(0)
+  status          BlogStatus @default(DRAFT)
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime
+  deployedAt      DateTime?
+  deployedContent Json?
+  author          String?
+
+  @@index([status, sortOrder])
+}
+
 enum ImageClass {
   INDOOR
   OUTDOOR
@@ -751,11 +854,6 @@ enum HandoverLeadUnit {
   MONTHS
 }
 
-enum GuideStatus {
-  DRAFT
-  PUBLISHED
-}
-
 /// Water supply available on site. Replaced a hasBorewell boolean, now dropped: true
 /// rows were backfilled to BOREWELL, while false rows were left null because "no
 /// borewell" said nothing about pipeline or tanker supply — which is why plenty of
@@ -766,4 +864,9 @@ enum WaterSupply {
   PIPELINE
   TANKER
   OTHERS
+}
+
+enum BlogStatus {
+  DRAFT
+  PUBLISHED
 }
