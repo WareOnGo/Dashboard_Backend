@@ -38,25 +38,6 @@ const URL_SAFETY_MARGIN = 200;
 const CLIENT_PIN = 'pin-l-star+C0392B';
 const OPTION_PIN_COLOR = COLORS.navy.replace('#', '');
 
-/**
- * Straight-line distance, in km.
- *
- * Shown beside the road distance because the two answer different questions and
- * a reader assumes the second is the first. Hyderabad makes the gap plain: one
- * option 35km away as the crow flies is 62km by the fastest route, because
- * cutting through the city is 17km shorter but 24 minutes slower than riding the
- * ring road. Without the direct figure the road figure just reads as wrong.
- */
-function directKm(a, b) {
-    const R = 6371;
-    const rad = Math.PI / 180;
-    const dLat = (b.lat - a.lat) * rad;
-    const dLng = (b.lng - a.lng) * rad;
-    const h = Math.sin(dLat / 2) ** 2
-        + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLng / 2) ** 2;
-    return 2 * R * Math.asin(Math.sqrt(h));
-}
-
 /** Parse a client-supplied location, tolerating strings from a form field. */
 function parseClientLocation(raw) {
     if (!raw || typeof raw !== 'object') return null;
@@ -188,7 +169,6 @@ async function fetchDistanceComparison(warehouses, customDetails = {}, flags = {
 
     const rows = options.map((o, i) => ({
         ...o,
-        direct: directKm(client, o),
         ...(legs[i] || { km: null, minutes: null }),
     }));
     const measured = rows.filter((r) => r.km !== null).length;
@@ -228,7 +208,7 @@ function generateDistanceSlideV3(pptx, data) {
     slide.background = { color: COLORS.bg };
     addSlideTitle(slide, `Distance from ${data.client.label}`);
 
-    const MAP_W = 4.00;
+    const MAP_W = 4.30;
     const tableW = LAYOUT.CONTENT_W - MAP_W - LAYOUT.GUTTER;
 
     const headerOpts = {
@@ -243,41 +223,47 @@ function generateDistanceSlideV3(pptx, data) {
     const rows = [[
         { text: '#', options: { ...headerOpts, align: 'center' } },
         { text: 'Property', options: headerOpts },
-        { text: 'Direct', options: { ...headerOpts, align: 'right' } },
         { text: 'By road', options: { ...headerOpts, align: 'right' } },
         { text: 'Drive', options: { ...headerOpts, align: 'right' } },
     ]];
 
     for (const r of data.rows) {
-        const name = r.name.length <= 38 ? r.name : `${r.name.slice(0, 37).trimEnd()}…`;
+        const name = r.name.length <= 42 ? r.name : `${r.name.slice(0, 41).trimEnd()}…`;
         rows.push([
             { text: String(r.option), options: { ...cellOpts, align: 'center' } },
             { text: name, options: cellOpts },
-            { text: fmtKm(r.direct), options: { ...cellOpts, align: 'right' } },
             { text: fmtKm(r.km), options: { ...cellOpts, align: 'right' } },
             { text: fmtMin(r.minutes), options: { ...cellOpts, align: 'right' } },
         ]);
     }
 
-    const rowH = Math.min(0.42, (LAYOUT.CONTENT_H - 0.5) / rows.length);
+    // The property rows share the full content height rather than stacking at a
+    // fixed height and leaving the lower half of the slide empty beside a
+    // full-height map. The header keeps its own modest height — giving it an equal
+    // share makes a five-row table look top-heavy — so the space goes to the rows
+    // that carry the content. The floor keeps a long deck legible, at which point
+    // the rows stop reaching the bottom, which is the right trade.
+    const HEADER_H = 0.34;
+    const MIN_ROW_H = 0.26;
+    // Capped as well as floored: three options dividing the full height gave
+    // 1.4in rows, which read as empty boxes rather than a filled table. Past the
+    // cap a short deck leaves some space at the bottom, which looks considerably
+    // better than stretching four lines of text over the whole slide.
+    const MAX_ROW_H = 0.95;
+    const bodyCount = rows.length - 1;
+    const share = (LAYOUT.CONTENT_H - HEADER_H) / bodyCount;
+    // The floor wins over filling the height, but never over staying on the slide:
+    // beyond 16 options an honoured floor would push the last rows off the bottom
+    // edge, so past that point the rows divide the space exactly and get smaller.
+    const bodyH = share < MIN_ROW_H
+        ? share
+        : Math.min(MAX_ROW_H, Math.max(MIN_ROW_H, share));
     slide.addTable(rows, {
         x: LAYOUT.MARGIN, y: LAYOUT.CONTENT_TOP, w: tableW,
-        colW: [0.30, tableW - 0.30 - 0.70 - 0.78 - 0.76, 0.70, 0.78, 0.76],
-        rowH: rows.map(() => rowH),
+        colW: [0.32, tableW - 0.32 - 0.86 - 0.78, 0.86, 0.78],
+        rowH: [HEADER_H, ...Array(bodyCount).fill(bodyH)],
         border: { type: 'solid', pt: 0.5, color: COLORS.divider },
     });
-
-    // Says what the numbers are, so nobody reads them as straight-line.
-    slide.addText(
-        'Direct is straight-line distance. By road is the fastest driving route, which can run '
-        + 'considerably further where a ring road beats cutting through the city.'
-        + (data.routesDrawn ? ' The map shows that route to each option.' : ''),
-        {
-            x: LAYOUT.MARGIN, y: LAYOUT.CONTENT_TOP + rows.length * rowH + 0.12,
-            w: tableW, h: 0.4,
-            fontFace: FONT, fontSize: 7.5, color: COLORS.navy, valign: 'top',
-        },
-    );
 
     if (data.mapImage) {
         slide.addImage({
