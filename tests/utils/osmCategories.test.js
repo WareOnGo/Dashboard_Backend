@@ -149,18 +149,31 @@ describe('category-specific rules that carry a decision', () => {
         expect(keep({ tags: { monorail: 'yes' } })).toBe(false);
     });
 
-    test('substation keeps transmission class and drops distribution', () => {
-        const { keep } = categoryFor('substation');
-        expect(keep({ tags: { substation: 'transmission' } })).toBe(true);
-        expect(keep({ tags: { substation: 'traction' } })).toBe(true);
-        expect(keep({ tags: { voltage: '220000' } })).toBe(true);
-        expect(keep({ tags: { voltage: '33000' } })).toBe(true);
-        expect(keep({ tags: { voltage: '11000' } })).toBe(false);
-        expect(keep({ tags: { substation: 'minor_distribution', voltage: '220000' } })).toBe(false);
-        // No voltage tag at all: dropped, and the script reports the drop count so
-        // this threshold can be tuned from evidence rather than guessed.
-        expect(keep({ tags: {} })).toBe(false);
+    test('metro_station and railway_station partition the station set', () => {
+        // Neither overlapping nor leaving a gap: a station must land in exactly one
+        // of the two. Previously the metro ones were fetched and discarded.
+        const rail = categoryFor('railway_station').keep;
+        const metro = categoryFor('metro_station').keep;
+        const stations = [
+            { tags: { railway: 'station' } },
+            { tags: { railway: 'station', station: 'subway' } },
+            { tags: { railway: 'station', subway: 'yes' } },
+            { tags: { railway: 'station', light_rail: 'yes' } },
+            { tags: { railway: 'station', station: 'light_rail' } },
+            { tags: { railway: 'station', monorail: 'yes' } },
+            { tags: { railway: 'halt' } },
+        ];
+        stations.forEach((el) => {
+            expect(rail(el) !== metro(el)).toBe(true);
+        });
     });
+
+    test('metro is not required to exist near a warehouse', () => {
+        // Metro runs in about a dozen Indian cities. An empty region is a fact about
+        // the country, not a truncated response.
+        expect(categoryFor('metro_station').mustExistNearWarehouses).toBe(false);
+    });
+
 });
 
 describe('queryHash', () => {
@@ -196,12 +209,12 @@ describe('queryHash', () => {
     test('covers keep(), not just the query text', () => {
         // Changing a filter changes what gets stored just as surely as changing the
         // query, so it has to invalidate the stored rows too.
-        const c = categoryFor('substation');
-        const before = queryHash('substation');
+        const c = categoryFor('railway_station');
+        const before = queryHash('railway_station');
         const original = c.keep;
         c.keep = () => true;
         try {
-            expect(queryHash('substation')).not.toBe(before);
+            expect(queryHash('railway_station')).not.toBe(before);
         } finally {
             c.keep = original;
         }
@@ -229,6 +242,36 @@ describe('nameFrom', () => {
         ['whitespace only', { name: '   ' }],
     ])('returns null for %s rather than a placeholder', (_label, tags) => {
         expect(nameFrom(tags)).toBeNull();
+    });
+
+    /**
+     * These are real OSM name tags, not placeholders we invented — mappers putting
+     * the category in the name field. Measured across the ingest: 718 rows, led by
+     * 308 fuel stations named "Petrol Pump" and 214 police stations named "Police
+     * Station". "Nearest fuel station: Petrol Pump" reads as a bug and says nothing.
+     */
+    test.each([
+        ['Fuel'], ['fuel'], ['  Fuel  '], ['Petrol Pump'], ['Petrol Station'],
+        ['Hospital'], ['Bus Station'], ['Bus Stand'], ['Railway Station'],
+        ['Police Station'], ['Fire Station'], ['Airport'], ['Substation'],
+        ['unnamed'], ['N/A'],
+    ])('rejects %s, a name that only restates the category', (name) => {
+        expect(nameFrom({ name })).toBeNull();
+    });
+
+    /**
+     * The rejection has to stay narrow, or it starts discarding the informative
+     * names that make a deck useful.
+     */
+    test.each([
+        ['Government Hospital, Karpuru'],
+        ['Anekal Bus Stand'],
+        ['Kempegowda International Airport'],
+        ['Attibele Police Station'],
+        ['Hospital Road'],
+        ['Fuel Depot Whitefield'],
+    ])('keeps %s', (name) => {
+        expect(nameFrom({ name })).toBe(name);
     });
 });
 

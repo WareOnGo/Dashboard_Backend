@@ -336,8 +336,9 @@ function simplify(points, tolerance) {
  * Turn Overpass elements into rows, reporting what was dropped and why.
  *
  * The counts matter as much as the rows: a filter quietly discarding most of a
- * category is invisible in a row total but obvious in a drop ratio, and it is how
- * the substation voltage threshold gets tuned from evidence.
+ * category is invisible in a row total but obvious in a drop ratio. It is what made
+ * the metro/railway split verifiable, and what settled whether the (since removed)
+ * substation voltage threshold was discarding real infrastructure.
  */
 function normalise(category, elements, sourceFile) {
     const rows = [];

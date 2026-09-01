@@ -185,14 +185,31 @@ const VARIABLE_WAREHOUSE = {
     validPhotos: [],
 };
 
+/**
+ * Relative to today, not a calendar date.
+ *
+ * The render tests below go through the real slide code, which reads the real
+ * clock — unlike the unit tests above, they have no way to inject NOW. This
+ * fixture previously hardcoded 15 Sep 2026 and started failing on 1 Sep 2026,
+ * when that date drifted inside the two-week window where a site correctly reads
+ * as "Immediate". The product was right and the test rotted.
+ *
+ * Six months out keeps it clear of that window for good, and the expected label is
+ * derived from the same formatter rather than written out, so the two cannot
+ * disagree.
+ */
+const FIXED_HANDOVER_DATE = new Date(Date.now() + 180 * 24 * 60 * 60 * 1000);
+
 const FIXED_WAREHOUSE = {
     ...VARIABLE_WAREHOUSE,
     id: 779,
     handoverType: 'FIXED',
     handoverLeadValue: null,
     handoverLeadUnit: null,
-    handoverDate: new Date('2026-09-15T00:00:00Z'),
+    handoverDate: FIXED_HANDOVER_DATE,
 };
+
+const FIXED_HANDOVER_LABEL = formatHandover(FIXED_WAREHOUSE);
 
 describe('handover text reaches every deck that renders it', () => {
     let pptx;
@@ -219,7 +236,11 @@ describe('handover text reaches every deck that renders it', () => {
         test('still shows the date for a FIXED site', async () => {
             await render(pptx, FIXED_WAREHOUSE);
 
-            expect(collectText(pptx.slides[0])).toContain('15 Sep 2026');
+            // Guard the guard: a label of "Immediate" would mean the fixture has
+            // drifted into the two-week window again and the assertion below has
+            // stopped testing anything.
+            expect(FIXED_HANDOVER_LABEL).not.toBe('Immediate');
+            expect(collectText(pptx.slides[0])).toContain(FIXED_HANDOVER_LABEL);
         });
     });
 });

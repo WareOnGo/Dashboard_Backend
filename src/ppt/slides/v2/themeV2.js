@@ -3,6 +3,12 @@ const path = require('path');
 const COLORS = {
     navy: '1A3350',
     navyDark: '1E3148',
+    /**
+     * A desaturated navy for supporting text — a landmark's name beside its
+     * category, a drive time beside a distance. Same family as `navy` so it does
+     * not read as a second colour, light enough to recede rather than compete.
+     */
+    navyMuted: '76839A',
     accentBlue: '0077CC',
     sidebar: 'F8F6F1',
     divider: 'CCCCCC',

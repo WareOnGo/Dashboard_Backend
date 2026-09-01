@@ -14,6 +14,7 @@ const { generateDetailedSlideV3 } = require('../slides/v3/detailedSlideV3');
 const { generatePhotosSlideV3 } = require('../slides/v3/photosSlideV3');
 const { fetchOverviewMap, generateMapSlideV3 } = require('../slides/v3/mapSlideV3');
 const { fetchDistanceComparison, generateDistanceSlideV3 } = require('../slides/v3/distanceSlideV3');
+const { fetchSiteMaps, generateProximitySlideV3 } = require('../slides/v3/proximitySlideV3');
 
 // Where the overview map belongs: after the cover and the index, so the reader
 // sees the geography before the individual options.
@@ -62,6 +63,10 @@ const createPptBufferV3 = async (warehouses, selectedImages = {}, customDetails 
     // handful of requests, all started here so they run while the photographs
     // download rather than after them.
     const distancePending = fetchDistanceComparison(warehouses, customDetails, flags);
+    // One street map per warehouse for the connectivity slides. Fired here so the
+    // images download alongside the photographs rather than after them; the
+    // distances themselves are already in the database and cost nothing.
+    const siteMapsPending = fetchSiteMaps(warehouses, flags);
 
     await generateTitleSlideV2(pptx, warehouses, customDetails);
     generateIndexSlideV2(pptx, warehouses, flags);
@@ -74,6 +79,14 @@ const createPptBufferV3 = async (warehouses, selectedImages = {}, customDetails 
         // rather than one plus an empty one.
         await generateDetailedSlideV3(pptx, w, photos, i + 1, flags);
         await generatePhotosSlideV3(pptx, w, photos, i + 1);
+        // Connectivity follows the photographs, so each option reads as
+        // specification -> photographs -> where it sits.
+        // Awaiting the same promise each pass is free after the first: only the
+        // first option waits, and by then its photographs have already downloaded.
+        // Awaiting before the loop would have serialised the maps ahead of every
+        // photograph instead.
+        const siteMaps = await siteMapsPending;
+        generateProximitySlideV3(pptx, w, i + 1, siteMaps.get(w.id) || null);
     }
 
     const map = await mapPending;

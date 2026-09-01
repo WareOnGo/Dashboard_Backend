@@ -400,7 +400,11 @@ class WarehouseModel extends BaseModel {
         try {
             return await this.model.findMany({
                 where: { id: { in: ids } },
-                include: { WarehouseData: true }
+                // WarehouseProximity is included HERE and deliberately not on the
+                // other WarehouseData includes: it is ~9 rows per warehouse, which
+                // is nothing for a deck of five but megabytes for an `all=true`
+                // listing that never renders it.
+                include: { WarehouseData: true, WarehouseProximity: true }
             });
         } catch (error) {
             this.handleDatabaseError(error);

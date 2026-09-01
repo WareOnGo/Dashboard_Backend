@@ -50,16 +50,18 @@ async function createSession({ count = 6, imagePort = 0, offline = true, useDb =
   let fixtures = [];
 
   if (useDb) {
-    // Mirrors WarehouseModel.findManyForPpt exactly, without booting the
-    // container: a preview against real data should see what the API sees.
+    // The REAL model, constructed with our own client rather than reimplemented.
+    //
+    // This used to be a hand-copied findMany with a comment promising it "mirrors
+    // WarehouseModel.findManyForPpt exactly". It stopped being true the moment the
+    // model started including WarehouseProximity, and the preview silently rendered
+    // a deck of "Not available" rows while the API would have rendered real ones.
+    // Using the model means a preview cannot disagree with production about what a
+    // deck is given.
     const { PrismaClient } = require(path.join(backendRoot, 'node_modules/@prisma/client'));
+    const WarehouseModel = require(path.join(backendRoot, 'src/models/warehouseModel'));
     prisma = new PrismaClient();
-    warehouseModel = {
-      findManyForPpt: (ids) => prisma.warehouse.findMany({
-        where: { id: { in: ids } },
-        include: { WarehouseData: true },
-      }),
-    };
+    warehouseModel = new WarehouseModel(prisma);
   } else {
     fixtures = makeWarehouses({ imageBase: images.baseUrl, count });
     warehouseModel = fixtureWarehouseModel(fixtures);

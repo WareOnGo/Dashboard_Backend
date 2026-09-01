@@ -19,7 +19,11 @@ const crypto = require('crypto');
  *
  *   aerodrome 401 · fire_station 733 · seaport 960 · motorway_junction 1,374
  *   police 4,466 · city/town 4,651 · bus_station 6,225 · railway_station 10,231
- *   substation 17,047 · fuel 19,087        -> 69 MB of JSON in total
+ *
+ * (substation was ingested and then dropped: 17,047 rows of which the filter
+ * kept 9,605, but 79% were unnamed, and "nearest substation: unnamed, 6 km" is
+ * not a fact worth putting on a proposal. Restoring it is a git revert.)
+ *   fuel 19,087                            -> 59 MB of JSON in total
  *   hospital 55,539 (32 MB)                -> the only one needing a split
  *
  * So SCOPE_NATIONAL is the default. It is fewer requests, it is kinder to a
@@ -133,12 +137,44 @@ function parseRefs(raw) {
     return { ref: preferred.canonical, refs: parsed.map((r) => r.canonical) };
 }
 
-/** A usable display name, or null. Never a placeholder — see nameFrom's comment. */
+/**
+ * Names that only restate the category, so they tell a reader nothing.
+ *
+ * These are not placeholders we invented — they are real OSM `name` tags, from
+ * mappers who put the category in the name field. Measured across the ingest: 32
+ * fuel stations named "Fuel", 25 hospitals named "Hospital", 8 bus stations named
+ * "Bus Station". "Nearest fuel station: Fuel" reads as a bug on a proposal, and it
+ * is strictly less useful than admitting the place is unnamed.
+ *
+ * Deliberately narrow: only names that are exactly a category word. "Government
+ * Hospital, Karpuru" and "Anekal Bus Stand" are informative and stay.
+ */
+const UNINFORMATIVE_NAMES = new Set([
+    'fuel', 'petrol', 'petrol pump', 'petrol station', 'fuel station', 'gas station',
+    'hospital', 'clinic', 'health centre', 'health center',
+    'bus station', 'bus stand', 'bus terminal',
+    'railway station', 'train station', 'station', 'railway',
+    'airport', 'aerodrome', 'airstrip',
+    'police', 'police station', 'fire station', 'fire brigade',
+    'substation', 'power substation', 'port', 'harbour', 'harbor',
+    'highway', 'road', 'unnamed', 'unknown', 'n/a', 'na', 'none',
+]);
+
+/**
+ * A usable display name, or null.
+ *
+ * NEVER a placeholder. The code this ingest replaces did
+ * `element.tags?.name || 'Railway Station'`, which is how fifty POIs end up sharing
+ * one name and a deck looks like it knows something it does not. Null, and let the
+ * renderer say "unnamed".
+ */
 function nameFrom(tags = {}) {
     const candidate = tags.name || tags['name:en'] || tags.ref || null;
     if (!candidate) return null;
     const trimmed = String(candidate).trim();
-    return trimmed.length ? trimmed : null;
+    if (!trimmed.length) return null;
+    if (UNINFORMATIVE_NAMES.has(trimmed.toLowerCase())) return null;
+    return trimmed;
 }
 
 /** Largest voltage in an OSM `voltage` tag, which may be `220000;110000`. */
@@ -329,33 +365,51 @@ out center;`,
     },
 
     {
-        key: 'substation',
+        key: 'metro_station',
         scope: SCOPE_NATIONAL,
         target: TARGET_POI,
-        timeoutSec: 900,
-        minExpected: 3000,
+        timeoutSec: 600,
+        minExpected: 300,
         mustExistNearWarehouses: false,
         /**
-         * 16,784 of the 17,047 nationally are ways, not nodes, so `out center` is
-         * load-bearing here.
+         * Metro, light rail and monorail stations — the ones `railway_station`
+         * deliberately excludes.
          *
-         * keep() aims at transmission-class substations and drops pole-mounted
-         * distribution transformers, which are not a power story worth telling.
-         * Flagging honestly: many real Indian 220 kV substations carry no `voltage`
-         * tag and will be dropped by this filter. That is why the script records the
-         * rejected count per fetch — the drop ratio is what lets the threshold be
-         * tuned from evidence instead of guessed.
+         * Previously these were fetched and thrown away: 1,112 of the 10,618
+         * elements that query returned, discarded because folding a metro stop into
+         * "nearest railway station" makes the number answer a different question
+         * from its label, and would have made a metro stop the nearest "station" in
+         * exactly the cities where that matters least for freight.
+         *
+         * They are worth keeping under their own name though, because they answer a
+         * real question the freight one does not: whether staff can reach the site
+         * without a car. Kept separate so neither number pretends to be the other.
+         *
+         * NOT marked mustExistNearWarehouses: metro exists in about a dozen Indian
+         * cities, so a region without one is a fact, not a failed fetch.
+         *
+         * Every tag test is exact equality — a regex here cannot use Overpass's tag
+         * index and measured 8.7x slower elsewhere in this file.
          */
-        ql: () => `[out:json][timeout:900];
+        ql: () => `[out:json][timeout:600];
 ${AREA_IN}
-nwr["power"="substation"](area.in);
+(
+  nwr["railway"="station"]["station"="subway"](area.in);
+  nwr["railway"="station"]["station"="light_rail"](area.in);
+  nwr["railway"="station"]["station"="monorail"](area.in);
+  nwr["railway"="station"]["subway"="yes"](area.in);
+  nwr["railway"="station"]["light_rail"="yes"](area.in);
+  nwr["railway"="station"]["monorail"="yes"](area.in);
+);
 out center;`,
+        /**
+         * The exact inverse of railway_station's filter, so the two categories
+         * partition the station set rather than overlapping or leaving a gap.
+         */
         keep: (el) => {
             const t = el.tags || {};
-            if (t.substation === 'minor_distribution') return false;
-            if (t.substation === 'transmission' || t.substation === 'traction') return true;
-            const volts = maxVoltage(t.voltage);
-            return volts !== null && volts >= 33000;
+            if (t.subway === 'yes' || t.light_rail === 'yes' || t.monorail === 'yes') return true;
+            return /^(subway|light_rail|monorail)$/.test(t.station || '');
         },
     },
 
@@ -575,6 +629,7 @@ const footprintBufferDeg = (radiusKm = FOOTPRINT_RADIUS_KM) => radiusKm * DEG_PE
 module.exports = {
     CATEGORIES,
     parseRefs,
+    UNINFORMATIVE_NAMES,
     SCOPE_NATIONAL,
     SCOPE_GRID,
     SCOPE_FOOTPRINT,

@@ -49,7 +49,9 @@ const {
     CATEGORIES, METRIC_IDENTITY, proximityCategoryFor, proximityKeys,
 } = require('../src/utils/proximityCategories');
 const { guardCandidates, resolve, STATUS } = require('../src/utils/proximityShortlist');
-const { fetchLeg, TokenBucket, PROFILE, PROVIDER } = require('../src/utils/mapboxDirections');
+const {
+    fetchLegsFrom, TokenBucket, PROFILE, PROVIDER, DirectionsUnavailableError,
+} = require('../src/utils/mapboxDirections');
 const { categoryFor } = require('../src/utils/osmCategories');
 
 const prisma = new PrismaClient();
@@ -123,10 +125,15 @@ async function main() {
     }
 
     // --- refuse partial source data ------------------------------------------
+    // Every startup query goes through withRetry, same as the ones in the main
+    // loop. Without it a transient pooler blip on the FIRST call killed the whole
+    // run — which is exactly backwards, since the run is otherwise built to survive
+    // the pooler dropping connections. Observed in practice: a Supabase outage took
+    // the process down at the coverage check and both passes exited immediately.
     const expected = WarehouseProximityModel.expectedRegionsFor(
         selected.map((c) => c.key), FOOTPRINT_TILES, GRID_CELLS,
     );
-    const coverage = await model.coverage(expected);
+    const coverage = await withRetry('coverage check', () => model.coverage(expected));
     const incomplete = coverage.filter((c) => !c.complete);
     let usable = selected;
     if (incomplete.length) {
@@ -154,15 +161,17 @@ async function main() {
         process.exit(1);
     }
 
-    let warehouses = await model.warehousesToCompute({ ids: IDS.length ? IDS : null, limit: null });
+    let warehouses = await withRetry('load warehouses',
+        () => model.warehousesToCompute({ ids: IDS.length ? IDS : null, limit: null }));
     const total = warehouses.length;
     if (!RECOMPUTE) {
-        const done = await model.alreadyComputed(usable.map((c) => c.key));
+        const done = await withRetry('load completed set',
+            () => model.alreadyComputed(usable.map((c) => c.key)));
         warehouses = warehouses.filter((w) => !done.has(w.id));
     }
     if (LIMIT) warehouses = warehouses.slice(0, LIMIT);
 
-    const watermarks = await model.poiWatermarks();
+    const watermarks = await withRetry('load POI watermarks', () => model.poiWatermarks());
     const legsPerWarehouse = usable
         .filter((c) => c.metric !== METRIC_IDENTITY)
         .reduce((s, c) => s + c.candidates, 0);
@@ -171,7 +180,8 @@ async function main() {
     console.log(`  categories        ${usable.map((c) => c.key).join(', ')}`);
     console.log(`  warehouses        ${warehouses.length} to compute (${total} have coordinates)`);
     console.log(`  routing legs      up to ${legsPerWarehouse} each, ~${legsPerWarehouse * warehouses.length} total`);
-    console.log(`                    (the 1.7x shortlist guard typically removes ~30%)`);
+    console.log(`                    batched ~12 per billed request, so ~`
+        + `${Math.ceil(legsPerWarehouse / 12) * warehouses.length} requests`);
     console.log(`  rate              ${RATE}/min, concurrency ${CONCURRENCY}`);
     if (!warehouses.length) { console.log('\nNothing to do.'); return verify(); }
 
@@ -191,11 +201,32 @@ async function main() {
     }
 
     const startedAt = Date.now();
-    const totals = { warehouses: 0, rows: 0, legs: 0, byStatus: {} };
+    const totals = { warehouses: 0, rows: 0, legs: 0, requests: 0, unavailable: 0, byStatus: {} };
 
     for (const w of warehouses) {
         if (stopping) break;
-        const rows = await computeWarehouse(w, usable, token, watermarks, totals);
+
+        let rows;
+        try {
+            rows = await computeWarehouse(w, usable, token, watermarks, totals);
+        } catch (err) {
+            // Routing was unavailable, not unsuccessful. Writing anything here would
+            // persist "not reachable" as a fact about the site when the truth is that
+            // we were throttled. Leave the warehouse uncomputed so a later run — or
+            // the next few seconds — retries it honestly.
+            totals.unavailable++;
+            if (err instanceof DirectionsUnavailableError) {
+                console.error(`  ~ warehouse ${w.id}: routing unavailable`
+                    + `${err.status ? ` (HTTP ${err.status})` : ''} — left uncomputed for a later run`);
+                // Back off before the next warehouse rather than marching through the
+                // whole list against a service that is refusing us.
+                await sleep(5000);
+                continue;
+            }
+            console.error(`  x warehouse ${w.id}: ${err.message.slice(0, 100)}`);
+            continue;
+        }
+
         try {
             await withRetry(`write warehouse ${w.id}`, () => model.upsertMany(w.id, rows));
             totals.rows += rows.length;
@@ -210,14 +241,20 @@ async function main() {
             const eta = Math.round((elapsed / Math.max(1, totals.warehouses))
                 * (warehouses.length - totals.warehouses));
             console.log(`  ${String(pct).padStart(3)}%  ${totals.warehouses}/${warehouses.length}  `
-                + `rows ${totals.rows}  legs ${totals.legs}  ${elapsed.toFixed(0)}s elapsed, eta ${eta}s`);
+                + `rows ${totals.rows}  legs ${totals.legs} in ${totals.requests} req  `
+                + `${elapsed.toFixed(0)}s elapsed, eta ${eta}s`);
         }
     }
 
     if (stopping) console.log('\nStopped early. Re-run the same command to continue.');
 
     console.log('\n=== totals ===');
-    console.log(`  warehouses ${totals.warehouses}  rows ${totals.rows}  routing legs ${totals.legs}`);
+    console.log(`  warehouses ${totals.warehouses}  rows ${totals.rows}  `
+        + `routing legs ${totals.legs} in ${totals.requests} billed request(s)`);
+    if (totals.unavailable) {
+        console.log(`  ${totals.unavailable} warehouse(s) left uncomputed because routing was `
+            + 'unavailable — re-run to pick them up');
+    }
     Object.entries(totals.byStatus).forEach(([k, v]) => console.log(`  ${k.padEnd(16)} ${v}`));
 
     await verify();
@@ -247,25 +284,49 @@ async function shortlistFor(warehouse, categories) {
     return out;
 }
 
-/** Compute all category rows for one warehouse. */
+/**
+ * Compute all category rows for one warehouse.
+ *
+ * Every leg across every category is routed in ONE pool rather than a pool per
+ * category. The distinction is not cosmetic: routing per category serialises ten
+ * small batches behind each other, and since each batch is bounded by the rate
+ * limiter rather than by concurrency, the warehouse ends up waiting ten times for
+ * work that could have overlapped. Measured on the first run at 14s per warehouse,
+ * against ~19 legs that at 200/min should cost under 6s.
+ */
 async function computeWarehouse(warehouse, categories, token, watermarks, totals) {
     const shortlists = await shortlistFor(warehouse, categories);
     const at = { lat: warehouse.lat, lng: warehouse.lng };
+
+    // Shortlist every category first, then flatten the legs into a single queue.
+    const entries = categories.map((category) => ({
+        category,
+        candidates: guardCandidates(shortlists.get(category.key) || []),
+        legs: [],
+    }));
+
+    const jobs = [];
+    entries.forEach((entry, entryIndex) => {
+        if (entry.category.metric === METRIC_IDENTITY) return;
+        entry.candidates.forEach((c, slot) => jobs.push({ entryIndex, slot, c }));
+    });
+
+    // Every destination across every category goes into one call, which Mapbox
+    // answers 12 at a time as a single billed request each. Verified against
+    // separate per-leg calls: identical to 0.000 km. This is what took the backfill
+    // from ~17 requests per warehouse to ~2, and since the job is bounded by the
+    // rate limit rather than by concurrency, it is the same factor off the clock.
+    const results = await fetchLegsFrom(token, at, jobs.map((j) => ({ lat: j.c.lat, lng: j.c.lng })), {
+        overview: 'false',
+        onRequest: async () => { await bucket.take(sleep); totals.requests++; },
+    });
+    totals.legs += jobs.length;
+
+    // Scatter the flat results back to the category they belong to.
+    jobs.forEach((job, i) => { entries[job.entryIndex].legs[job.slot] = results[i]; });
+
     const rows = [];
-
-    for (const category of categories) {
-        const raw = shortlists.get(category.key) || [];
-        const candidates = guardCandidates(raw);
-
-        let legs = [];
-        if (category.metric !== METRIC_IDENTITY && candidates.length) {
-            legs = await runPool(candidates, async (c) => {
-                await bucket.take(sleep);
-                totals.legs++;
-                return fetchLeg(token, at, { lat: c.lat, lng: c.lng }, { overview: 'false' });
-            }, CONCURRENCY);
-        }
-
+    for (const { category, candidates, legs } of entries) {
         const resolved = resolve({ category, candidates, legs });
         totals.byStatus[resolved.status] = (totals.byStatus[resolved.status] || 0) + 1;
         rows.push({

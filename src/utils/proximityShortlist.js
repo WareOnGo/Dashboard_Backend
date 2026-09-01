@@ -11,15 +11,29 @@ const { METRIC_IDENTITY } = require('./proximityCategories');
 
 /**
  * A candidate further than this multiple of the nearest one's straight-line
- * distance cannot overtake it by road, so routing to it is wasted money.
+ * distance is dropped before routing.
  *
- * Measured road-to-direct ratios in Bengaluru fell between 1.45 and 1.9. Widened
- * conservatively to [1.2, 2.0], the worst possible swing between two candidates is
- * 2.0/1.2 = 1.67. Anything beyond that only wins if the road network is genuinely
- * pathological — an unbridged river, a restricted zone — which is a case worth
- * FLAGGING rather than silently paying to measure.
+ * 2.5, and unlike the first version of this constant it is measured rather than
+ * argued. That version used 1.7, derived from Bengaluru road/direct ratios of
+ * 1.45-1.9 widened to a worst-case swing of 1.67. Checking it against 346 real
+ * category comparisons, where the winner sat at this multiple of the nearest
+ * candidate's straight-line distance:
+ *
+ *   median 1.00x   p90 1.14x   p99 1.59x   max 2.37x
+ *
+ * and the miss rate by threshold:
+ *
+ *   1.7x  missed the true winner 0.87% of the time
+ *   2.0x  0.58%
+ *   2.5x  0.00%
+ *
+ * So the original reasoning was nearly right and slightly too tight. 2.5 clears the
+ * worst case observed with margin. The guard still earns its place: with a p90 of
+ * 1.14x it prunes most of a 12-candidate shortlist, and a candidate beyond 2.5x only
+ * wins if the road network is genuinely pathological — an unbridged river, a
+ * restricted zone — which is worth FLAGGING rather than quietly paying to measure.
  */
-const MAX_DIRECT_RATIO = 1.7;
+const MAX_DIRECT_RATIO = 2.5;
 
 /** Above this road-to-direct ratio, something is wrong with the coordinates or the network. */
 const DETOUR_RATIO_WARN = 4;
@@ -53,11 +67,26 @@ const WARNING = Object.freeze({
  */
 function guardCandidates(candidates, maxRatio = MAX_DIRECT_RATIO) {
     if (!candidates || candidates.length <= 1) return candidates || [];
-    const nearest = candidates[0].directM;
+
+    // Drop candidates at coordinates already covered. OSM contains the same feature
+    // mapped twice — measured at 130 same-category coincident groups across the
+    // ingest — and routing to the second copy costs a paid request that cannot
+    // change the answer, because an identical origin and destination give an
+    // identical route.
+    const seen = new Set();
+    const distinct = candidates.filter((c) => {
+        const at = `${Number(c.lat).toFixed(5)},${Number(c.lng).toFixed(5)}`;
+        if (seen.has(at)) return false;
+        seen.add(at);
+        return true;
+    });
+    if (distinct.length <= 1) return distinct;
+
+    const nearest = distinct[0].directM;
     // A nearest distance of zero would make every ratio infinite; the landmark is
     // on top of the warehouse, so nothing else can beat it anyway.
-    if (!(nearest > 0)) return [candidates[0]];
-    return candidates.filter((c, i) => i === 0 || c.directM <= nearest * maxRatio);
+    if (!(nearest > 0)) return [distinct[0]];
+    return distinct.filter((c, i) => i === 0 || c.directM <= nearest * maxRatio);
 }
 
 /**
@@ -142,7 +171,17 @@ function resolve({ category, candidates, legs = [] }) {
         poiId: chosen.poiId,
         poiLat: chosen.lat,
         poiLng: chosen.lng,
-        roadKm: Math.round(leg.km * 10) / 10,
+        // Two decimals, floored at 0.01 for any real route.
+        //
+        // One decimal turned a 36 m route into "0 km"; two decimals still flattens a
+        // 22 m one. Measured on the finished backfill: three hospitals sat 8-36 m
+        // from their warehouse and stored as 0. A stored zero reads on a deck as a
+        // data error rather than "essentially on site", and it also makes the road
+        // distance shorter than the straight line, which looks impossible.
+        //
+        // Display rounding still belongs in the renderer; this only guarantees a
+        // route that exists is never recorded as no distance at all.
+        roadKm: Math.max(Math.round(leg.km * 100) / 100, leg.km > 0 ? 0.01 : 0),
         driveMinutes: Math.round(leg.minutes),
         candidates: shortlist.length,
         warnings,

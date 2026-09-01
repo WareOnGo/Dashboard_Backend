@@ -22,14 +22,38 @@ const highway = proximityCategoryFor('national_highway');
 
 describe('guardCandidates', () => {
     test('keeps candidates that could still win by road', () => {
-        // Within 1.7x of the nearest, so the road network could reorder them.
-        const kept = guardCandidates([cand(1, 1000), cand(2, 1600)]);
-        expect(kept).toHaveLength(2);
+        // Measured: the true road-nearest sat up to 2.37x the nearest candidate's
+        // straight-line distance, so anything within 2.5x has to be routed.
+        const kept = guardCandidates([cand(1, 1000), cand(2, 1600), cand(3, 2400)]);
+        expect(kept).toHaveLength(3);
     });
 
     test('drops candidates that cannot win, to avoid paying to measure them', () => {
-        const kept = guardCandidates([cand(1, 1000), cand(2, 1600), cand(3, 5000)]);
+        const kept = guardCandidates([cand(1, 1000), cand(2, 2400), cand(3, 5000)]);
         expect(kept.map((c) => c.poiId)).toEqual(['1', '2']);
+    });
+
+    /**
+     * OSM contains the same feature mapped twice — 130 same-category coincident
+     * groups across the ingest. Routing to the second copy costs a paid request that
+     * cannot change the answer, since identical coordinates give an identical route.
+     */
+    test('drops a candidate at coordinates already covered', () => {
+        const kept = guardCandidates([
+            { poiId: '1', lat: 12.5, lng: 77.5, directM: 1000 },
+            { poiId: '2', lat: 12.5, lng: 77.5, directM: 1010 },
+            { poiId: '3', lat: 12.6, lng: 77.6, directM: 1400 },
+        ]);
+        expect(kept.map((c) => c.poiId)).toEqual(['1', '3']);
+    });
+
+    test('keeps candidates a few hundred metres apart', () => {
+        // Deduplication must not collapse genuinely distinct nearby landmarks.
+        const kept = guardCandidates([
+            { poiId: '1', lat: 12.5000, lng: 77.5000, directM: 1000 },
+            { poiId: '2', lat: 12.5030, lng: 77.5030, directM: 1200 },
+        ]);
+        expect(kept).toHaveLength(2);
     });
 
     test('never drops the nearest, so a non-empty input never becomes empty', () => {
@@ -48,11 +72,13 @@ describe('guardCandidates', () => {
         expect(guardCandidates(input)).toEqual([]);
     });
 
-    test('the ratio is documented and bounded, not arbitrary', () => {
-        // Derived from measured road/direct ratios of 1.45-1.9, widened to
-        // [1.2, 2.0]: worst possible swing between two candidates is 1.67.
-        expect(MAX_DIRECT_RATIO).toBeGreaterThan(1.67);
-        expect(MAX_DIRECT_RATIO).toBeLessThan(2);
+    test('the ratio clears the worst case actually observed', () => {
+        // 346 real comparisons put the winner at most 2.37x the nearest candidate's
+        // straight-line distance. A threshold at or below that would have picked the
+        // wrong landmark.
+        expect(MAX_DIRECT_RATIO).toBeGreaterThan(2.37);
+        // But not so wide that the guard stops pruning: p90 was 1.14x.
+        expect(MAX_DIRECT_RATIO).toBeLessThan(4);
     });
 });
 
@@ -84,14 +110,25 @@ describe('resolve — the routed case', () => {
         expect(r.warnings).not.toContain(WARNING.NEAREST_BY_ROAD_DIFFERS);
     });
 
-    test('rounds to a precision a deck can print', () => {
+    test('stores two decimals, leaving display rounding to the renderer', () => {
+        // One decimal turned a 36 m route into "0 km", which reads as "next door"
+        // on a deck and made the stored distance shorter than the straight line.
         const r = resolve({
             category: hospital,
             candidates: [cand(1, 1000)],
             legs: [{ km: 4.26789, minutes: 11.7 }],
         });
-        expect(r.roadKm).toBe(4.3);
+        expect(r.roadKm).toBe(4.27);
         expect(r.driveMinutes).toBe(12);
+    });
+
+    test('a very short route never rounds away to zero', () => {
+        const r = resolve({
+            category: hospital,
+            candidates: [cand(1, 40)],
+            legs: [{ km: 0.036, minutes: 0.4 }],
+        });
+        expect(r.roadKm).toBeGreaterThan(0);
     });
 
     test('carries the winning landmark\'s identity for auditing', () => {
@@ -254,10 +291,12 @@ describe('category configuration', () => {
             .forEach((c) => expect(c.candidates).toBe(1));
     });
 
-    test('routed categories shortlist more than one', () => {
-        // Otherwise the road-beats-line case can never be discovered.
+    test('routed categories shortlist wide enough to find the road-nearest', () => {
+        // Measured miss rates: k=2 named the wrong landmark 11.6% of the time, k=3
+        // 6.4%, k=5 3.8%. Anything below 8 is knowingly wrong at a rate that shows
+        // up on real proposals.
         CATEGORIES.filter((c) => c.metric === METRIC_ROAD)
-            .forEach((c) => expect(c.candidates).toBeGreaterThan(1));
+            .forEach((c) => expect(c.candidates).toBeGreaterThanOrEqual(8));
     });
 
     test('every proximity category has a matching ingest category', () => {

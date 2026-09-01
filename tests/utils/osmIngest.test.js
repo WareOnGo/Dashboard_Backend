@@ -16,8 +16,9 @@ describe('coordsOf', () => {
     });
 
     test('reads the centre of a way fetched with `out center`', () => {
-        // Ways and relations have no coordinates of their own. 16,784 of the 17,047
-        // national substations are ways, so this path carries most of that category.
+        // Ways and relations have no coordinates of their own, so without `center`
+        // they arrive unusable. Hospitals and seaports are frequently mapped as
+        // areas, which is why this path matters.
         expect(coordsOf({ type: 'way', center: { lat: 19.1, lon: 72.9 } }))
             .toEqual({ lat: 19.1, lng: 72.9 });
     });
@@ -96,13 +97,14 @@ describe('normalise — points', () => {
     });
 
     test('applies the category filter and reports what it dropped', () => {
-        // The drop count is how the substation voltage threshold gets tuned from
-        // evidence rather than guessed — invisible in a row total, obvious here.
-        const substation = categoryFor('substation');
-        const { rows, filtered } = normalise(substation, [
-            { type: 'way', id: 1, center: { lat: 1, lon: 2 }, tags: { voltage: '220000' } },
-            { type: 'way', id: 2, center: { lat: 3, lon: 4 }, tags: { voltage: '11000' } },
-            { type: 'way', id: 3, center: { lat: 5, lon: 6 }, tags: {} },
+        // The drop count is what makes a filter's behaviour auditable — invisible in
+        // a row total, obvious here. It is how the metro/railway split was verified
+        // to partition rather than overlap.
+        const railway = categoryFor('railway_station');
+        const { rows, filtered } = normalise(railway, [
+            { type: 'node', id: 1, lat: 1, lon: 2, tags: { railway: 'station' } },
+            { type: 'node', id: 2, lat: 3, lon: 4, tags: { railway: 'station', subway: 'yes' } },
+            { type: 'node', id: 3, lat: 5, lon: 6, tags: { railway: 'station', station: 'light_rail' } },
         ], SOURCE);
 
         expect(rows).toHaveLength(1);
