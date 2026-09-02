@@ -1,0 +1,9 @@
+# Measurement output, not source. Regenerate with probe.js — see README.md.
+#
+# Kept out of git for two reasons: it is derived data that a re-run reproduces,
+# and coord-suspects.csv carries the name of whoever added each warehouse plus a
+# link to its location, which is staff and customer data with no business being in
+# a repository.
+*.jsonl
+*.csv
+*.log

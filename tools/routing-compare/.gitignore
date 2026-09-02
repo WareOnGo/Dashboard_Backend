@@ -1,0 +1,3 @@
+# Comparison output, not source. Regenerate with compare.js.
+*.jsonl
+*.log
