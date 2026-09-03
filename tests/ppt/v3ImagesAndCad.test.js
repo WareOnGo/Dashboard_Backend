@@ -127,29 +127,103 @@ const { splitSelection } = require('../../src/ppt/services/pptServiceV3');
  */
 describe('splitSelection', () => {
     test('a flat array is all photographs, as every other deck sends', () => {
-        expect(splitSelection(['a.jpg', 'b.jpg'])).toEqual({ photos: ['a.jpg', 'b.jpg'], cad: [] });
+        expect(splitSelection(['a.jpg', 'b.jpg']))
+            .toEqual({ photos: ['a.jpg', 'b.jpg'], cad: [], classified: false });
     });
 
     test('the v3 shape separates drawings from photographs', () => {
         expect(splitSelection({ photos: ['a.jpg'], cad: ['plan.png'] }))
-            .toEqual({ photos: ['a.jpg'], cad: ['plan.png'] });
+            .toEqual({ photos: ['a.jpg'], cad: ['plan.png'], classified: true });
     });
 
     test('either half may be absent', () => {
-        expect(splitSelection({ cad: ['plan.png'] })).toEqual({ photos: [], cad: ['plan.png'] });
-        expect(splitSelection({ photos: ['a.jpg'] })).toEqual({ photos: ['a.jpg'], cad: [] });
+        expect(splitSelection({ cad: ['plan.png'] }))
+            .toEqual({ photos: [], cad: ['plan.png'], classified: true });
+        expect(splitSelection({ photos: ['a.jpg'] }))
+            .toEqual({ photos: ['a.jpg'], cad: [], classified: true });
     });
 
     test('nothing selected yields two empty lists, never undefined', () => {
         // The caller spreads the result straight into two slide builders; a missing
         // key there would throw rather than skip.
         for (const input of [undefined, null, {}, 'nonsense', 42]) {
-            expect(splitSelection(input)).toEqual({ photos: [], cad: [] });
+            expect(splitSelection(input).photos).toEqual([]);
+            expect(splitSelection(input).cad).toEqual([]);
         }
     });
 
     test('a non-array in either field is ignored rather than trusted', () => {
-        expect(splitSelection({ photos: 'a.jpg', cad: { 0: 'b.png' } }))
-            .toEqual({ photos: [], cad: [] });
+        const r = splitSelection({ photos: 'a.jpg', cad: { 0: 'b.png' } });
+        expect(r.photos).toEqual([]);
+        expect(r.cad).toEqual([]);
+    });
+
+    /**
+     * `classified` gates the detail slide's photograph strip.
+     *
+     * Only the object shape guarantees `photos` holds photographs. In the flat
+     * array a khata extract and a shed arrive in one list, and cropping a land
+     * record into a 1.2in ribbon down a client deck is worse than leaving the
+     * space empty — so that path gets no strip at all.
+     */
+    test('only the object shape claims its photographs are classified', () => {
+        expect(splitSelection({ photos: ['a.jpg'], cad: [] }).classified).toBe(true);
+        expect(splitSelection(['a.jpg']).classified).toBe(false);
+        expect(splitSelection(undefined).classified).toBe(false);
+    });
+});
+
+const {
+    pickStripPhoto, VALUE_W_FULL, VALUE_W_WITH_STRIP, STRIP_W,
+} = require('../../src/ppt/slides/v3/detailedSlideV3');
+
+/**
+ * The detail slide's photograph strip.
+ *
+ * The value column was over-provisioned: measured across 2,040 cells from 120
+ * warehouses the median value is 10 characters and the longest 64, against a
+ * column fitting 102. The strip spends that white space — but must not cost the
+ * table anything, because a wrapped value grows its row and a taller table
+ * squeezes every other row through the fill scale.
+ */
+describe('detail slide photograph strip', () => {
+    const CHAR_W = 0.064;
+    const charsPerLine = (w) => Math.floor((w - 0.12) / CHAR_W);
+    /** The longest value seen in the measured set. */
+    const LONGEST_MEASURED_VALUE = 64;
+
+    test('the narrowed value column still fits the longest real value on one line', () => {
+        // The whole justification for 1.2in. If this fails, the strip has started
+        // costing row height and should be narrowed or dropped.
+        expect(charsPerLine(VALUE_W_WITH_STRIP)).toBeGreaterThan(LONGEST_MEASURED_VALUE);
+    });
+
+    test('the strip and gap account for exactly what the values gave up', () => {
+        expect(VALUE_W_FULL - VALUE_W_WITH_STRIP).toBeCloseTo(STRIP_W + 0.16, 5);
+    });
+
+    test('picks a photograph deterministically, not randomly', () => {
+        // A client asking for the deck again should get the deck they were sent.
+        const photos = ['a.jpg', 'b.jpg', 'c.jpg'];
+        expect(pickStripPhoto(918, photos)).toBe(pickStripPhoto(918, photos));
+    });
+
+    test('different properties do not all show the same framing', () => {
+        const photos = ['a.jpg', 'b.jpg', 'c.jpg'];
+        const picked = new Set([1, 2, 3, 4, 5, 6].map((id) => pickStripPhoto(id, photos)));
+        expect(picked.size).toBeGreaterThan(1);
+    });
+
+    test('always picks something that is actually in the list', () => {
+        const photos = ['a.jpg', 'b.jpg', 'c.jpg', 'd.jpg'];
+        for (const id of [0, 1, 917, 918, 2016, 99999]) {
+            expect(photos).toContain(pickStripPhoto(id, photos));
+        }
+    });
+
+    test('no photographs means no strip, and no crash', () => {
+        expect(pickStripPhoto(918, [])).toBeNull();
+        expect(pickStripPhoto(918, null)).toBeNull();
+        expect(pickStripPhoto(undefined, ['a.jpg'])).toBe('a.jpg');
     });
 });

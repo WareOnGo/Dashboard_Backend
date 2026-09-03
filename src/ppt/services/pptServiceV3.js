@@ -56,14 +56,19 @@ function renumberSlideRelationships(pptx) {
  * slide titled Layout. Only the person choosing the images knows which is which.
  */
 function splitSelection(entry) {
-    if (Array.isArray(entry)) return { photos: entry, cad: [] };
+    // `classified` records which shape it was, because the detail slide's
+    // photograph strip must not crop a document. In the object shape `photos` is
+    // known to hold photographs only; in the flat array a khata extract and a
+    // shed are indistinguishable at that layer.
+    if (Array.isArray(entry)) return { photos: entry, cad: [], classified: false };
     if (entry && typeof entry === 'object') {
         return {
             photos: Array.isArray(entry.photos) ? entry.photos : [],
             cad: Array.isArray(entry.cad) ? entry.cad : [],
+            classified: true,
         };
     }
-    return { photos: [], cad: [] };
+    return { photos: [], cad: [], classified: false };
 }
 
 const createPptBufferV3 = async (warehouses, selectedImages = {}, customDetails = {}) => {
@@ -100,11 +105,11 @@ const createPptBufferV3 = async (warehouses, selectedImages = {}, customDetails 
 
     for (let i = 0; i < warehouses.length; i++) {
         const w = warehouses[i];
-        const { photos, cad } = splitSelection(selectedImages[w.id]);
+        const { photos, cad, classified } = splitSelection(selectedImages[w.id]);
         // The specification table, then the photographs — the latter only when
         // there are any, so a property without photographs contributes one slide
         // rather than one plus an empty one.
-        await generateDetailedSlideV3(pptx, w, photos, i + 1, flags);
+        await generateDetailedSlideV3(pptx, w, photos, i + 1, flags, classified);
         await generatePhotosSlideV3(pptx, w, photos, i + 1);
         // Layouts follow the photographs: a reader has seen the building before
         // being asked to read a plan of it.
