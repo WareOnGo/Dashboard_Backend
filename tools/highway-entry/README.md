@@ -178,6 +178,58 @@ Each of these cost 20 minutes or more. They are all still live.
    database retries. A read-only probe is not exempt — the first run died on its
    first query.
 
+## Recomputing a few warehouses
+
+Do NOT rebuild a zone to re-measure a handful of sites. Cut the areas you need out
+of the national extract instead — it is already on disk and checksum-verified, and
+`osmium` does this in seconds.
+
+Measured on a real case (four warehouses whose coordinates were corrected, in
+Bengaluru, Ghaziabad and Panvel — three different zones):
+
+| | rebuild three zones | targeted extracts |
+|---|---|---|
+| download | ~1 GB, throttled | none |
+| cut | — | 38 s |
+| build | ~30 min | 39 s |
+| size | ~1.6 GB of pbf | 50 MB |
+
+```bash
+# One box per cluster, 25km margin so the probe's 10km radius has room.
+cat > targeted.json <<'JSON'
+{ "extracts": [
+    { "output": "box-a.osm.pbf", "output_format": "pbf", "bbox": [77.631, 12.923, 78.131, 13.423] },
+    { "output": "box-b.osm.pbf", "output_format": "pbf", "bbox": [72.854, 18.630, 73.375, 19.256] }
+  ], "directory": "." }
+JSON
+osmium extract --config=targeted.json --overwrite --strategy=complete_ways india-latest.osm.pbf
+osmium merge box-a.osm.pbf box-b.osm.pbf -o targeted-latest.osm.pbf --overwrite
+
+RAW=targeted-latest.osm.pbf MIN_MB=10 tools/osrm/build-osrm.sh
+node -r dotenv/config tools/highway-entry/probe.js --ids=967,1498 --sample-m=100 --out=recompute.jsonl
+node -r dotenv/config scripts/backfillHighwayEntry.js --in=tools/highway-entry/recompute.jsonl
+```
+
+`--strategy=complete_ways` matters: the default clips ways at the boundary, which
+would sever a highway mid-box and leave the router unable to follow it out.
+
+**Two traps specific to merged extracts.** `osmium merge` writes no header bounding
+box, so build-osrm.sh falls back to `osmium fileinfo -e` to compute one. And the
+overall box of disjoint regions has its centre in the GAP between them, where there
+is no road — the verification retries from the nearest routable point for exactly
+this reason, and says so if that point is more than 50 km away.
+
+Also: recomputing coordinates invalidates the OTHER nine categories too, and those
+come from Mapbox rather than OSRM:
+
+```bash
+node -r dotenv/config scripts/backfillWarehouseProximity.js --ids=967,1498 --recompute
+```
+
+That resets the highway row to IDENTITY_ONLY, because the sweep cannot measure a
+line — so run it BEFORE the highway backfill, not after, or it will discard the
+routed distance you just stored.
+
 ## Known gaps, deliberately not fixed
 
 - **Zone borders.** A warehouse within 10 km of a zone edge may have its true

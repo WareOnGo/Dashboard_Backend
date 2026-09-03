@@ -186,6 +186,17 @@ done
 # a zero distance is a FAILURE rather than a pass.
 BBOX=$(osmium fileinfo "$RAW" 2>/dev/null | grep -oE '\([0-9.-]+,[0-9.-]+,[0-9.-]+,[0-9.-]+\)' | head -1 | tr -d '()')
 if [ -z "$BBOX" ]; then
+    # `osmium merge` writes NO header bounding box, so a graph built from merged
+    # targeted boxes lands here (see the "Recomputing a few warehouses" section of
+    # tools/highway-entry/README.md). Refusing outright was correct — the script
+    # must not claim a graph works when it cannot test it — but it made that whole
+    # workflow unverifiable. -e computes the real box by reading the file; measured
+    # at 0.65s for a 49MB extract.
+    log "no bounding box in the header (osmium merge drops it); computing from the data"
+    BBOX=$(osmium fileinfo -e "$RAW" 2>/dev/null \
+        | grep -oE '\([0-9.-]+,[0-9.-]+,[0-9.-]+,[0-9.-]+\)' | head -1 | tr -d '()')
+fi
+if [ -z "$BBOX" ]; then
     log "cannot read a bounding box from $RAW — refusing to claim the graph works"
     exit 1
 fi
@@ -206,6 +217,7 @@ log "    code=$CODE distance=${DIST}m"
 if [ "$CODE" != "Ok" ] || [ "${DIST%.*}" -eq 0 ] 2>/dev/null; then
     log "    centre unroutable; retrying from the nearest routable point to it"
     SNAP=$(curl -s --max-time 20 "http://localhost:5000/nearest/v1/driving/$CLON,$CLAT?number=1")
+    SNAP_M=$(echo "$SNAP" | jq -r '.waypoints[0].distance // empty' 2>/dev/null | cut -d. -f1)
     SLON=$(echo "$SNAP" | jq -r '.waypoints[0].location[0] // empty' 2>/dev/null)
     SLAT=$(echo "$SNAP" | jq -r '.waypoints[0].location[1] // empty' 2>/dev/null)
     if [ -n "$SLON" ]; then
@@ -221,6 +233,11 @@ if [ "$CODE" != "Ok" ] || [ "${DIST%.*}" -eq 0 ] 2>/dev/null; then
     log "GRAPH DOES NOT ROUTE — not claiming it is ready."
     log "A zero-distance 'Ok' means both points snapped to one edge, which is what"
     log "an empty or truncated graph looks like. Check build phases above."
+    if [ -n "${SNAP_M:-}" ] && [ "$SNAP_M" -gt 50000 ] 2>/dev/null; then
+        log "The nearest road to this extract's centre is $((SNAP_M / 1000))km away. For a"
+        log "MERGED extract of separate regions the centre falls in the gap between them,"
+        log "so verify with a point inside one region instead."
+    fi
     exit 1
 fi
 

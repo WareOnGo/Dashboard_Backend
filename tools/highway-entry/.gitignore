@@ -7,3 +7,7 @@
 *.jsonl
 *.csv
 *.log
+
+# Before/after values from a coordinate correction. Kept on disk as the only record
+# (WarehouseData has no history) but not in git: it is customer location data.
+coordinate-fixes.json
