@@ -38,11 +38,21 @@ const UNKNOWN_LEAD = 'On request';
 // unit — a sixth enum value added to the DB before this map is updated —
 // resolves to null and falls back to UNKNOWN_LEAD rather than rendering
 // something like "2 undefined".
+//
+// Capitalised because these appear alongside " Post LOI" below, and a mixed-case
+// "1 month Post LOI" reads as a formatting bug on a slide.
 const LEAD_UNIT_NOUNS = {
-    DAYS: ['day', 'days'],
-    WEEKS: ['week', 'weeks'],
-    MONTHS: ['month', 'months'],
+    DAYS: ['Day', 'Days'],
+    WEEKS: ['Week', 'Weeks'],
+    MONTHS: ['Month', 'Months'],
 };
+
+// A variable lead time is counted from the letter of intent, not from the date the
+// deck was generated, and a bare "1 Month" invites a client to read it as the
+// latter. Only the LEAD-TIME path carries this: a FIXED handover is an absolute
+// calendar date that an LOI does not move, and neither 'Immediate' nor
+// 'On request' is a duration to count from anything.
+const POST_LOI = 'Post LOI';
 
 // Accepts a Date (the Prisma shape) or an ISO string (fixtures / JSON payloads
 // that have been through a serialization hop). Anything unparseable — including
@@ -60,9 +70,10 @@ const utcDayIndex = (date) => Math.floor(
     Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()) / MS_PER_DAY
 );
 
-// '2 months', '1 month', '15 days'. Sits under an "Availability"/"Handover"
-// label, so the bare duration reads as the answer to "when" the same way
-// 'Immediate' does.
+// '2 Months Post LOI', '1 Month Post LOI', '15 Days Post LOI'. Sits under an
+// "Availability"/"Handover" label, so it reads as the answer to "when" the same
+// way 'Immediate' does — with the reference point stated, which a bare duration
+// leaves to the reader.
 function formatLeadTime(value, unit) {
     const nouns = LEAD_UNIT_NOUNS[unit];
     if (!nouns) return UNKNOWN_LEAD;
@@ -77,7 +88,7 @@ function formatLeadTime(value, unit) {
     // A zero-length lead time is availability now, by any reading.
     if (n === 0) return IMMEDIATE;
 
-    return `${n} ${n === 1 ? nouns[0] : nouns[1]}`;
+    return `${n} ${n === 1 ? nouns[0] : nouns[1]} ${POST_LOI}`;
 }
 
 function formatFixedHandover(handoverDate, now) {
@@ -94,8 +105,8 @@ function formatFixedHandover(handoverDate, now) {
  *   for `handoverType`, `handoverDate`, `handoverLeadValue`, `handoverLeadUnit`.
  *   A bare Date/string is accepted as the pre-migration date-only form.
  * @param {Date} [now] - Reference "today"; injectable for tests
- * @returns {string} 'Immediate', a lead time like '2 months', a formatted date
- *   like '15 Sep 2026', or 'On request'
+ * @returns {string} 'Immediate', a lead time like '2 Months Post LOI', a formatted
+ *   date like '15 Sep 2026', or 'On request'
  */
 function formatHandover(warehouse, now = new Date()) {
     // Tolerate the old date-only call shape so a missed call site degrades to

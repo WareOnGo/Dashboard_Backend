@@ -17,20 +17,59 @@ describe('formatHandover - VARIABLE lead times', () => {
             handoverLeadValue: 2,
             handoverLeadUnit: 'MONTHS',
             handoverDate: null,
-        }, NOW)).toBe('2 months');
+        }, NOW)).toBe('2 Months Post LOI');
     });
 
     test.each([
-        [15, 'DAYS', '15 days'],
-        [1, 'DAYS', '1 day'],
-        [3, 'WEEKS', '3 weeks'],
-        [1, 'WEEKS', '1 week'],
-        [6, 'MONTHS', '6 months'],
-        [1, 'MONTHS', '1 month'],
+        [15, 'DAYS', '15 Days Post LOI'],
+        [1, 'DAYS', '1 Day Post LOI'],
+        [3, 'WEEKS', '3 Weeks Post LOI'],
+        [1, 'WEEKS', '1 Week Post LOI'],
+        [6, 'MONTHS', '6 Months Post LOI'],
+        [1, 'MONTHS', '1 Month Post LOI'],
     ])('%s %s renders as "%s"', (value, unit, expected) => {
         expect(formatHandover({
             handoverType: 'VARIABLE', handoverLeadValue: value, handoverLeadUnit: unit,
         }, NOW)).toBe(expected);
+    });
+
+    /**
+     * "Post LOI" states the reference point a lead time is counted from.
+     *
+     * A bare "1 Month" on a slide invites the client to count from the day they
+     * received the deck; the site is actually available a month after the letter of
+     * intent. So every lead time carries it — and NOTHING ELSE does, which is the
+     * half worth asserting. A fixed handover is an absolute calendar date that no
+     * LOI moves, and neither 'Immediate' nor 'On request' is a duration counted
+     * from anything, so appending it there would be wrong rather than merely noisy.
+     */
+    test('every variable lead time states its reference point', () => {
+        for (const unit of ['DAYS', 'WEEKS', 'MONTHS']) {
+            for (const value of [1, 2, 15]) {
+                expect(formatHandover({
+                    handoverType: 'VARIABLE', handoverLeadValue: value, handoverLeadUnit: unit,
+                }, NOW)).toMatch(/ Post LOI$/);
+            }
+        }
+    });
+
+    test('nothing that is not a lead time claims to be post-LOI', () => {
+        const notLeadTimes = [
+            // A zero lead time, which is availability now by any reading.
+            { handoverType: 'VARIABLE', handoverLeadValue: 0, handoverLeadUnit: 'MONTHS' },
+            // Flagged variable but unusable, so the row cannot say when.
+            { handoverType: 'VARIABLE', handoverLeadValue: null, handoverLeadUnit: 'MONTHS' },
+            { handoverType: 'VARIABLE', handoverLeadValue: 3, handoverLeadUnit: 'FORTNIGHTS' },
+            // An absolute date, which an LOI does not shift.
+            { handoverType: 'FIXED', handoverDate: '2027-03-15' },
+            { handoverType: 'FIXED', handoverDate: null },
+            // The pre-migration date-only shape.
+            '2027-06-01',
+            null,
+        ];
+        for (const w of notLeadTimes) {
+            expect(formatHandover(w, NOW)).not.toContain('Post LOI');
+        }
     });
 
     test('a zero-length lead time is immediate availability', () => {
@@ -66,7 +105,7 @@ describe('formatHandover - VARIABLE lead times', () => {
             handoverLeadValue: 3,
             handoverLeadUnit: 'MONTHS',
             handoverDate: new Date('2027-01-01T00:00:00Z'),
-        }, NOW)).toBe('3 months');
+        }, NOW)).toBe('3 Months Post LOI');
     });
 });
 
@@ -143,7 +182,7 @@ describe('formatHandover - argument tolerance', () => {
         expect(formatHandover({ handoverType: 'FIXED', handoverDate: null })).toBe('Immediate');
         expect(formatHandover({
             handoverType: 'VARIABLE', handoverLeadValue: 2, handoverLeadUnit: 'MONTHS',
-        })).toBe('2 months');
+        })).toBe('2 Months Post LOI');
     });
 });
 
@@ -229,7 +268,7 @@ describe('handover text reaches every deck that renders it', () => {
             await render(pptx, VARIABLE_WAREHOUSE);
 
             const text = collectText(pptx.slides[0]);
-            expect(text).toContain('2 months');
+            expect(text).toContain('2 Months Post LOI');
             expect(text).not.toContain('Immediate');
         });
 
