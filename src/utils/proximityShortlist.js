@@ -54,6 +54,25 @@ const WARNING = Object.freeze({
     DETOUR_RATIO_HIGH: 'DETOUR_RATIO_HIGH',
     /** The second candidate beat the first, so straight-line order was misleading here. */
     NEAREST_BY_ROAD_DIFFERS: 'NEAREST_BY_ROAD_DIFFERS',
+
+    // Written by scripts/backfillHighwayEntry.js rather than by resolve() below.
+    // They live here anyway because this is where the vocabulary is defined, and a
+    // producer and a renderer trading bare strings across two files is how a
+    // warning silently stops being handled.
+
+    /** Access is on the carriageway itself: origin and entry snap to one point. */
+    ON_HIGHWAY: 'ON_HIGHWAY',
+    /**
+     * The highway nearest by ROAD is not the one nearest by straight line, so the
+     * designation was corrected along with the distance. 157 of 1,537 warehouses.
+     */
+    DESIGNATION_CORRECTED_BY_ROUTING: 'DESIGNATION_CORRECTED_BY_ROUTING',
+    /**
+     * The warehouse coordinate is >150m from any road, which is further than a
+     * compound accounts for. A fact about the pin, not the highway — the distance
+     * is still measured, from wherever the router had to put it.
+     */
+    WAREHOUSE_FAR_FROM_ROAD: 'WAREHOUSE_FAR_FROM_ROAD',
 });
 
 /**

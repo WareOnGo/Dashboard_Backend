@@ -92,7 +92,8 @@ const floorMinutes = (mins, km) => {
  * "Directly on NH44" instead of printing a zero. The floor alone would turn a
  * remarkable fact into an unremarkable 0.01km.
  */
-const ON_HIGHWAY = 'ON_HIGHWAY';
+const { WARNING } = require('../src/utils/proximityShortlist');
+const ON_HIGHWAY = WARNING.ON_HIGHWAY;
 const MIN_KM = 0.01;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -135,6 +136,28 @@ function loadRows(files) {
     return [...seen.values()];
 }
 
+/**
+ * A client that claims ONE connection, not five.
+ *
+ * DATABASE_URL sets connection_limit=5, which is right for the API where requests
+ * are concurrent. A script like this one is strictly sequential — it awaits every
+ * query — so four of those five slots are held and never used.
+ *
+ * That is not free. Measured during this work: 35 of the pooler's 60 connections
+ * were in use with 26 of them IDLE, held by production's container pools. Roughly
+ * 25 slots of real headroom, and every script claiming 5 of them. Running the
+ * probe, the backfill and an ad-hoc query at once was enough to exhaust it, at
+ * which point Prisma reports "Can't reach database server" — which reads like an
+ * outage and sent me looking at the network, DNS and TLS before the pool.
+ */
+function scriptClient() {
+    const url = process.env.DATABASE_URL || '';
+    const capped = url.includes('connection_limit=')
+        ? url.replace(/connection_limit=\d+/, 'connection_limit=1')
+        : `${url}${url.includes('?') ? '&' : '?'}connection_limit=1`;
+    return new PrismaClient({ datasources: { db: { url: capped } } });
+}
+
 (async () => {
     const files = inputs.length ? inputs
         : fs.readdirSync(path.join(__dirname, '..', 'tools', 'highway-entry'))
@@ -169,7 +192,7 @@ function loadRows(files) {
         return;
     }
 
-    const prisma = new PrismaClient();
+    const prisma = scriptClient();
 
     // The warehouse coordinates each measurement was taken FROM.
     //
@@ -205,8 +228,8 @@ function loadRows(files) {
     const CHUNK = 400;
     const rowsFor = (r) => {
         const warnings = [];
-        if (r.refChanged) warnings.push('DESIGNATION_CORRECTED_BY_ROUTING');
-        if ((r.originSnapM ?? 0) > COORD_SUSPECT_M) warnings.push('WAREHOUSE_FAR_FROM_ROAD');
+        if (r.refChanged) warnings.push(WARNING.DESIGNATION_CORRECTED_BY_ROUTING);
+        if ((r.originSnapM ?? 0) > COORD_SUSPECT_M) warnings.push(WARNING.WAREHOUSE_FAR_FROM_ROAD);
         const onHighway = !(r.routed.roadKm > 0);
         if (onHighway) warnings.push(ON_HIGHWAY);
         const roadKm = onHighway ? MIN_KM : r.routed.roadKm;

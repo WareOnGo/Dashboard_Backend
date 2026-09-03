@@ -130,7 +130,29 @@ async function main() {
     }
     console.log(`OSRM up at ${ENDPOINT}\n`);
 
-    const prisma = new PrismaClient();
+    /**
+ * A client that claims ONE connection, not five.
+ *
+ * DATABASE_URL sets connection_limit=5, which is right for the API where requests
+ * are concurrent. A script like this one is strictly sequential — it awaits every
+ * query — so four of those five slots are held and never used.
+ *
+ * That is not free. Measured during this work: 35 of the pooler's 60 connections
+ * were in use with 26 of them IDLE, held by production's container pools. Roughly
+ * 25 slots of real headroom, and every script claiming 5 of them. Running the
+ * probe, the backfill and an ad-hoc query at once was enough to exhaust it, at
+ * which point Prisma reports "Can't reach database server" — which reads like an
+ * outage and sent me looking at the network, DNS and TLS before the pool.
+ */
+function scriptClient() {
+    const url = process.env.DATABASE_URL || '';
+    const capped = url.includes('connection_limit=')
+        ? url.replace(/connection_limit=\d+/, 'connection_limit=1')
+        : `${url}${url.includes('?') ? '&' : '?'}connection_limit=1`;
+    return new PrismaClient({ datasources: { db: { url: capped } } });
+}
+
+const prisma = scriptClient();
 
     // Warehouses that already carry a Mapbox baseline, so every comparison has
     // something to compare against.

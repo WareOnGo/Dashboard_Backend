@@ -78,6 +78,22 @@ const METRIC_IDENTITY = 'identity';
  */
 const ROUTED_CANDIDATES = 20;
 const CATEGORIES = [
+    // METRIC_IDENTITY, and it stays that way even though a distance now exists.
+    //
+    // The metric describes what THE SWEEP can measure, not what the deck can show.
+    // resolve() shortlists tagged points and routes to them, and for a highway that
+    // means routing to an access node — measured at a median 1.31km error against
+    // the truth, because OSM does not tag the crossroads where you join an
+    // unrestricted road. So the sweep names the highway and stops, correctly.
+    //
+    // The real distance comes from a different producer entirely:
+    // scripts/backfillHighwayEntry.js samples the centreline every 100m and routes
+    // to every sample (~900 legs a warehouse, viable only on a local engine). It
+    // writes roadKm onto the same row. The slide therefore keys off the STORED DATA
+    // rather than this metric — see proximityRows — so both producers can write the
+    // row and neither has to lie. Flipping this to METRIC_ROAD would make the sweep
+    // route to a candidate whose lat/lng are null and overwrite good measurements
+    // with garbage.
     { key: 'national_highway', label: 'Nearest highway',         group: 'Connectivity', metric: METRIC_IDENTITY, maxRadiusKm: 50,  candidates: 1,                 order: 1 },
     { key: 'aerodrome',        label: 'Nearest airport',         group: 'Connectivity', metric: METRIC_ROAD,     maxRadiusKm: 200, candidates: ROUTED_CANDIDATES, order: 2 },
     { key: 'railway_station',  label: 'Nearest railway station', group: 'Connectivity', metric: METRIC_ROAD,     maxRadiusKm: 100, candidates: ROUTED_CANDIDATES, order: 3 },

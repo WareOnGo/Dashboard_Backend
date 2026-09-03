@@ -5,7 +5,7 @@ const { logInfo, logWarn } = require('../../utils/logger');
 const {
     CATEGORIES, METRIC_IDENTITY,
 } = require('../../../utils/proximityCategories');
-const { STATUS } = require('../../../utils/proximityShortlist');
+const { STATUS, WARNING } = require('../../../utils/proximityShortlist');
 
 /**
  * One slide per warehouse: a street map of the site on the left, its distances to
@@ -166,7 +166,35 @@ function proximityRows(warehouse) {
             continue;
         }
 
-        if (category.metric === METRIC_IDENTITY || row.status === STATUS.IDENTITY_ONLY) {
+        // Access directly on the carriageway. Measured on 12 warehouses, where the
+        // origin and the entry point snap to the same position, so the routed
+        // distance is genuinely zero and is stored at the 0.01km floor. Printing
+        // "0.01 km" would turn the strongest version of this fact into a rounding
+        // artefact; the designation is already in the aside beside it, so the value
+        // column only has to say that there is nothing to travel.
+        if ((row.warnings || []).includes(WARNING.ON_HIGHWAY)) {
+            rows.push({
+                ...base,
+                name: row.landmarkName || '',
+                note: 'Direct access',
+                // Emphasised, unlike every other note. The note cell exists for
+                // ABSENCES — "None within 15 km", "Not available" — which should be
+                // quiet. Fronting onto a highway is the strongest fact on the slide,
+                // and the first render had it as the faintest text on the page:
+                // italic 7.5pt muted, while every distance beside it was bold 10pt
+                // navy. A reader scanning the column would skip the best row.
+                emphasis: true,
+            });
+            continue;
+        }
+
+        // Ordering matters here. A highway row is METRIC_IDENTITY because the sweep
+        // cannot measure a line, but a second producer
+        // (scripts/backfillHighwayEntry.js) may have written a real roadKm onto the
+        // same row by sampling the centreline. So a stored distance wins over the
+        // category's metric, and the identity branch below is the FALLBACK for rows
+        // no one has measured yet — not the rule for the category.
+        if (!fmtKm(row.roadKm) && (category.metric === METRIC_IDENTITY || row.status === STATUS.IDENTITY_ONLY)) {
             // Named without a distance, deliberately. 95.5% of India's numbered
             // highway mileage is not access-controlled, so vehicles join it at
             // ordinary crossroads OSM has no reason to mark; a distance here would
@@ -294,9 +322,15 @@ function generateProximitySlideV3(pptx, warehouse, optionNumber, mapImage) {
             table.push([labelCell, {
                 text: r.note,
                 options: {
-                    colspan: 2, color: COLORS.navyMuted, fontFace: FONT, fontSize: 7.5,
-                    italic: true, align: 'right', valign: 'middle', margin: 0.06,
-                    border: hOnly,
+                    colspan: 2,
+                    // Matched to the distance cells it replaces, so an emphasised
+                    // note carries the same weight in the column as a number would.
+                    color: r.emphasis ? COLORS.navy : COLORS.navyMuted,
+                    fontFace: r.emphasis ? FONT_SEMIBOLD : FONT,
+                    fontSize: r.emphasis ? 10 : 7.5,
+                    bold: !!r.emphasis,
+                    italic: !r.emphasis,
+                    align: 'right', valign: 'middle', margin: 0.06, border: hOnly,
                 },
             }]);
             continue;

@@ -1,6 +1,6 @@
 const { proximityRows } = require('../../src/ppt/slides/v3/proximitySlideV3');
 const { CATEGORIES, GROUPS } = require('../../src/utils/proximityCategories');
-const { STATUS } = require('../../src/utils/proximityShortlist');
+const { STATUS, WARNING } = require('../../src/utils/proximityShortlist');
 
 /**
  * The connectivity slide's state-to-text mapping.
@@ -46,17 +46,63 @@ describe('proximityRows', () => {
     });
 
     /**
-     * The highway row is named and NOT measured, by design: 95.5% of India's
-     * numbered-highway mileage is not access-controlled, so a distance would describe
-     * a road you often cannot join at that point.
+     * THREE GENERATIONS OF HIGHWAY ROW COEXIST, and the slide must not confuse them.
+     *
+     * The category was METRIC_IDENTITY — named, never measured — because the only
+     * available method was a shortlist of tagged access points, and OSM does not tag
+     * the crossroads where you join an unrestricted highway. Routing the centreline
+     * replaced that in Sep 2026, so rows now carry a real distance. A row written
+     * before that still has status IDENTITY_ONLY and must keep rendering as a bare
+     * designation rather than as a missing number.
      */
-    test('a highway shows its designation and no distance', () => {
+    test('a routed highway shows its designation, distance and time', () => {
+        const r = find(proximityRows(wh([
+            { category: 'national_highway', status: STATUS.OK, landmarkName: 'NH648', roadKm: 2.61, driveMinutes: 3, warnings: [] },
+        ])), 'Nearest highway');
+        expect(r.name).toBe('NH648');
+        expect(r.km).toBe('2.6 km');
+        expect(r.time).toBe('3 min');
+        expect(r.note).toBe('');
+    });
+
+    test('an unmeasured highway row still shows its designation and no distance', () => {
         const r = find(proximityRows(wh([
             { category: 'national_highway', status: STATUS.IDENTITY_ONLY, landmarkName: 'NH44', roadKm: null, driveMinutes: null },
         ])), 'Nearest highway');
         expect(r.note).toBe('NH44');
         expect(r.km).toBe('');
         expect(r.time).toBe('');
+    });
+
+    /**
+     * Access on the carriageway itself. The routed distance is genuinely zero and is
+     * stored at the 0.01km floor, so the guard here is that the deck never prints
+     * that floor: "0.01 km" turns the strongest version of this fact into what looks
+     * like a rounding error.
+     */
+    test('a warehouse on the highway says so instead of printing a zero distance', () => {
+        const r = find(proximityRows(wh([
+            {
+                category: 'national_highway', status: STATUS.OK, landmarkName: 'NH44',
+                roadKm: 0.01, driveMinutes: 1, warnings: [WARNING.ON_HIGHWAY],
+            },
+        ])), 'Nearest highway');
+        expect(r.name).toBe('NH44');
+        expect(r.note).toBe('Direct access');
+        expect(r.emphasis).toBe(true);
+        expect(r.km).toBe('');
+        expect(r.km).not.toContain('0.01');
+    });
+
+    test('the on-highway row is worded differently from every other highway state', () => {
+        const hwy = (row) => find(proximityRows(wh([{ category: 'national_highway', ...row }])), 'Nearest highway');
+        const notes = [
+            hwy({ status: STATUS.OK, landmarkName: 'NH44', roadKm: 0.01, driveMinutes: 1, warnings: [WARNING.ON_HIGHWAY] }),
+            hwy({ status: STATUS.IDENTITY_ONLY, landmarkName: 'NH44', roadKm: null, driveMinutes: null }),
+            hwy({ status: STATUS.NONE_IN_RANGE, landmarkName: null, roadKm: null, driveMinutes: null }),
+            hwy({ status: STATUS.ROUTING_FAILED, landmarkName: 'NH44', roadKm: null, driveMinutes: null }),
+        ].map((r) => r.note);
+        expect(new Set(notes).size).toBe(notes.length);
     });
 
     test('nothing in range names the radius that was searched', () => {
