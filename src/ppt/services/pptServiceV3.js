@@ -16,6 +16,7 @@ const { fetchOverviewMap, generateMapSlideV3 } = require('../slides/v3/mapSlideV
 const { fetchDistanceComparison, generateDistanceSlideV3 } = require('../slides/v3/distanceSlideV3');
 const { fetchSiteMaps, generateProximitySlideV3 } = require('../slides/v3/proximitySlideV3');
 const { generateProsConsSlideV3 } = require('../slides/v3/prosConsSlideV3');
+const { generateCadSlidesV3 } = require('../slides/v3/cadSlideV3');
 
 // Where the overview map belongs: after the cover and the index, so the reader
 // sees the geography before the individual options.
@@ -38,6 +39,31 @@ function renumberSlideRelationships(pptx) {
     // rId1 is the slide master, so slides start at 2 — matching
     // makeXmlPresentationRels, which numbers them the same way.
     pptx.slides.forEach((slide, index) => { slide._rId = index + 2; });
+}
+
+/**
+ * Split one warehouse's selection into photographs and layout drawings.
+ *
+ * `selectedImages[id]` accepts two shapes, because v2, godamwale and the detailed
+ * deck all still send the first and there is no reason to break them:
+ *
+ *   ['url', ...]                          every image is a photograph
+ *   { photos: ['url'], cad: ['url'] }     drawings called out separately
+ *
+ * A drawing has to be designated rather than detected. The image classifier's
+ * DOCUMENT label covers CAD drawings AND khata extracts, tax receipts and rent
+ * agreements, so treating DOCUMENT as "layout" would put a client's paperwork on a
+ * slide titled Layout. Only the person choosing the images knows which is which.
+ */
+function splitSelection(entry) {
+    if (Array.isArray(entry)) return { photos: entry, cad: [] };
+    if (entry && typeof entry === 'object') {
+        return {
+            photos: Array.isArray(entry.photos) ? entry.photos : [],
+            cad: Array.isArray(entry.cad) ? entry.cad : [],
+        };
+    }
+    return { photos: [], cad: [] };
 }
 
 const createPptBufferV3 = async (warehouses, selectedImages = {}, customDetails = {}) => {
@@ -74,12 +100,15 @@ const createPptBufferV3 = async (warehouses, selectedImages = {}, customDetails 
 
     for (let i = 0; i < warehouses.length; i++) {
         const w = warehouses[i];
-        const photos = selectedImages[w.id] || [];
+        const { photos, cad } = splitSelection(selectedImages[w.id]);
         // The specification table, then the photographs — the latter only when
         // there are any, so a property without photographs contributes one slide
         // rather than one plus an empty one.
         await generateDetailedSlideV3(pptx, w, photos, i + 1, flags);
         await generatePhotosSlideV3(pptx, w, photos, i + 1);
+        // Layouts follow the photographs: a reader has seen the building before
+        // being asked to read a plan of it.
+        await generateCadSlidesV3(pptx, w, cad, i + 1);
         // Connectivity follows the photographs, so each option reads as
         // specification -> photographs -> where it sits.
         // Awaiting the same promise each pass is free after the first: only the
@@ -118,4 +147,4 @@ const createPptBufferV3 = async (warehouses, selectedImages = {}, customDetails 
     return pptx.write({ outputType: 'nodebuffer' });
 };
 
-module.exports = { createPptBufferV3 };
+module.exports = { createPptBufferV3, splitSelection };

@@ -60,7 +60,37 @@ const photoLayouts = {
     2: () => gridBoxes([2]),
     3: () => gridBoxes([2, 1]),
     4: () => gridBoxes([2, 2]),
+    5: () => gridBoxes([3, 2]),
+    6: () => gridBoxes([3, 3]),
 };
+
+/**
+ * Photographs per slide.
+ *
+ * Six fits: three across gives a 2.96in cell, 1.85in tall at the fixed 1.6 aspect,
+ * so two rows come to 3.9in inside a 4.5in content box. Seven would need a third
+ * row and each photograph would be smaller than a thumbnail.
+ */
+const MAX_PER_SLIDE = 6;
+
+/**
+ * Split n photographs into balanced slides.
+ *
+ * Balanced rather than greedy: eight photographs go 4+4, not 6+2. Filling the
+ * first slide and leaving two adrift on the second looks like a mistake, and the
+ * grid is centred either way so there is nothing to gain from packing.
+ *
+ * @param {number} n
+ * @param {number} [max]
+ * @returns {number[]} how many photographs go on each slide
+ */
+function chunkSizes(n, max = MAX_PER_SLIDE) {
+    if (n <= 0) return [];
+    const slides = Math.ceil(n / max);
+    const base = Math.floor(n / slides);
+    const extra = n % slides;
+    return Array.from({ length: slides }, (_, i) => base + (i < extra ? 1 : 0));
+}
 
 const addImageOrPlaceholder = async (pptx, slide, url, box) => {
     const placeholder = () => slide.addShape(pptx.shapes.RECTANGLE, {
@@ -90,20 +120,41 @@ const addImageOrPlaceholder = async (pptx, slide, url, box) => {
  * @returns {Promise<boolean>} whether a slide was added — a property with no
  *   usable photograph gets none, rather than one holding only a note.
  */
+/**
+ * @returns {Promise<number>} how many slides were added. Was a boolean when four
+ *   photographs were the ceiling; a caller only ever tested it for truthiness, and
+ *   a count is still falsy at zero.
+ */
 async function generatePhotosSlideV3(pptx, warehouse, selectedPhotoUrls, optionIndex) {
-    const photos = (selectedPhotoUrls || []).filter(isImageUrl).slice(0, 4);
-    if (photos.length === 0) return false;
+    // No cap. The four-photograph limit was a layout limit — there were only four
+    // grids — and a client with eight photographs of a shed should get eight.
+    const photos = (selectedPhotoUrls || []).filter(isImageUrl);
+    if (photos.length === 0) return 0;
 
-    const slide = pptx.addSlide();
-    slide.background = { color: COLORS.bg };
-    addSlideTitle(slide, `Option ${optionIndex} - ID ${warehouse.id} — Photos`);
+    const sizes = chunkSizes(photos.length);
+    let taken = 0;
 
-    const boxes = photoLayouts[photos.length]();
-    await Promise.all(photos.map((url, i) => addImageOrPlaceholder(pptx, slide, url, boxes[i])));
+    for (let slideIndex = 0; slideIndex < sizes.length; slideIndex += 1) {
+        const batch = photos.slice(taken, taken + sizes[slideIndex]);
+        taken += batch.length;
 
-    addTopRightLogo(slide);
-    addFooter(slide);
-    return true;
+        const slide = pptx.addSlide();
+        slide.background = { color: COLORS.bg };
+        addSlideTitle(slide, sizes.length > 1
+            ? `Option ${optionIndex} - ID ${warehouse.id} — Photos (${slideIndex + 1} of ${sizes.length})`
+            : `Option ${optionIndex} - ID ${warehouse.id} — Photos`);
+
+        const boxes = photoLayouts[batch.length]();
+        // eslint-disable-next-line no-await-in-loop
+        await Promise.all(batch.map((url, i) => addImageOrPlaceholder(pptx, slide, url, boxes[i])));
+
+        addTopRightLogo(slide);
+        addFooter(slide);
+    }
+
+    return sizes.length;
 }
 
-module.exports = { generatePhotosSlideV3, isImageUrl, gridBoxes, PHOTO_ASPECT };
+module.exports = {
+    generatePhotosSlideV3, isImageUrl, gridBoxes, chunkSizes, PHOTO_ASPECT, MAX_PER_SLIDE,
+};
