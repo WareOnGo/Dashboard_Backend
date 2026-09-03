@@ -15,6 +15,7 @@ const { generatePhotosSlideV3 } = require('../slides/v3/photosSlideV3');
 const { fetchOverviewMap, generateMapSlideV3 } = require('../slides/v3/mapSlideV3');
 const { fetchDistanceComparison, generateDistanceSlideV3 } = require('../slides/v3/distanceSlideV3');
 const { fetchSiteMaps, generateProximitySlideV3 } = require('../slides/v3/proximitySlideV3');
+const { generateProsConsSlideV3 } = require('../slides/v3/prosConsSlideV3');
 
 // Where the overview map belongs: after the cover and the index, so the reader
 // sees the geography before the individual options.
@@ -102,6 +103,13 @@ const createPptBufferV3 = async (warehouses, selectedImages = {}, customDetails 
     // Placed before the closing contact slide, which stays the deck's sign-off.
     const distance = await distancePending;
     if (distance) generateDistanceSlideV3(pptx, distance);
+
+    // The closing argument, and the one slide we cannot fill in: which trade-offs
+    // matter depends on the client's requirement. Ships as a structured blank with a
+    // row per property, immediately before the sign-off so it is the last thing
+    // discussed. Paginates past 12 properties rather than shrinking rows below the
+    // height of the text someone has to type into them.
+    generateProsConsSlideV3(pptx, warehouses);
 
     if (flags.pocSlide) {
         generateContactSlideV2(pptx, customDetails);
