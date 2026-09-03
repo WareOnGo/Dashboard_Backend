@@ -36,6 +36,51 @@ Also write a short factual description of what is visible, at most 25 words. Des
 
 confidence is your own certainty in the label, from 0 to 1.`;
 
+/**
+ * Sub-labels for an image already classified DOCUMENT.
+ *
+ * DOCUMENT is one bucket holding two unrelated things: drawings that belong on a
+ * client deck, and paperwork that must never reach one. v3 renders a layout on a
+ * slide of its own, so the deck needs to know which is which, and "it is a
+ * document" does not answer that.
+ *
+ * NOT_A_DOCUMENT exists because the response schema is strict — every property is
+ * required, so there is no way to omit this field for a photograph. Making the
+ * "inapplicable" case explicit beats inventing a nullable the API cannot express.
+ */
+const DOC_KINDS = ['LAYOUT', 'PAPERWORK', 'OTHER_DOCUMENT', 'NOT_A_DOCUMENT'];
+
+const DOC_PROMPT = `You are sorting images attached to Indian industrial warehouse listings. This image has already been identified as a document, drawing or screen rather than a photograph of a place.
+
+Decide which kind of document it is:
+
+- LAYOUT: an architectural or engineering drawing of the property. Floor plans, site plans, site layouts, CAD drawings, elevations, sections, plot/survey plans, block plans, dimensioned sketches of the shed or land. A drawing of the SPACE, whether CAD-drawn or hand-drawn.
+- PAPERWORK: a text document. Khata extracts, encumbrance certificates, tax receipts, rent or lease agreements, NOCs, compliance and occupancy certificates, letters, invoices, identity or ownership papers, any photographed page that is mostly prose or a form.
+- OTHER_DOCUMENT: a document or screen that is neither of the above. Map screenshots, satellite views, spreadsheets, price tables, brochures, WhatsApp or app screenshots, photographs of a computer monitor.
+- NOT_A_DOCUMENT: on looking again this is an ordinary photograph of a place, not a document at all.
+
+Rules:
+- Judge by WHAT THE DRAWING SHOWS, not by how neat it is. A hand-drawn dimensioned sketch of a shed is LAYOUT; a beautifully typeset lease is PAPERWORK.
+- A map or satellite screenshot is OTHER_DOCUMENT, not LAYOUT: it shows where the property is, not how it is built.
+- A title block, dimension strings, a scale bar or a north arrow are strong evidence of LAYOUT.
+- A page that is mostly running text or stamped/signed is PAPERWORK even if it mentions dimensions.
+- Use NOT_A_DOCUMENT only if this plainly is not a document; the earlier pass said it was.
+
+confidence is your own certainty in this sub-label, from 0 to 1.`;
+
+const DOC_SCHEMA = {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+        documentKind: { type: 'string', enum: DOC_KINDS },
+        // Why it landed there, so a wrong call can be argued with rather than
+        // just re-run. Short: this is a filing decision, not a description.
+        reason: { type: 'string' },
+        confidence: { type: 'number' },
+    },
+    required: ['documentKind', 'reason', 'confidence'],
+};
+
 const SCHEMA = {
     type: 'object',
     additionalProperties: false,
@@ -68,17 +113,19 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  *
  * Only the URL is sent; OpenAI fetches the bytes from R2 itself.
  */
-async function classify(model, imageUrl, { detail = 'low', maxAttempts = 5 } = {}) {
+async function callModel(model, imageUrl, prompt, schema, {
+    detail = 'low', maxAttempts = 5, schemaName = 'image_label',
+} = {}) {
     const body = {
         model,
         input: [{
             role: 'user',
             content: [
-                { type: 'input_text', text: PROMPT },
+                { type: 'input_text', text: prompt },
                 { type: 'input_image', image_url: imageUrl, detail },
             ],
         }],
-        text: { format: { type: 'json_schema', name: 'image_label', strict: true, schema: SCHEMA } },
+        text: { format: { type: 'json_schema', name: schemaName, strict: true, schema } },
     };
 
     for (let attempt = 0; ; attempt++) {
@@ -130,9 +177,7 @@ async function classify(model, imageUrl, { detail = 'low', maxAttempts = 5 } = {
 
         const usage = json.usage || {};
         return {
-            classification: parsed.classification,
-            description: parsed.description,
-            confidence: parsed.confidence,
+            ...parsed,
             inputTokens: usage.input_tokens || 0,
             outputTokens: usage.output_tokens || 0,
             latencyMs: Date.now() - started,
@@ -140,4 +185,28 @@ async function classify(model, imageUrl, { detail = 'low', maxAttempts = 5 } = {
     }
 }
 
-module.exports = { LABELS, PROMPT, SCHEMA, PRICING, classify, sleep };
+/**
+ * Scene type for one image. Unchanged in behaviour — the prompt above carries an
+ * ablation history and the model was chosen on its results, so it must keep
+ * running exactly as it did.
+ */
+function classify(model, imageUrl, opts = {}) {
+    return callModel(model, imageUrl, PROMPT, SCHEMA, { ...opts, schemaName: 'image_label' });
+}
+
+/**
+ * Which kind of document an already-DOCUMENT image is.
+ *
+ * A separate call rather than extra fields on the scene prompt: that prompt is
+ * tuned and measured, and only 223 of ~14,000 labelled images are documents, so
+ * asking every photograph about title blocks would cost 60x more to answer a
+ * question that does not apply to it.
+ */
+function classifyDocumentKind(model, imageUrl, opts = {}) {
+    return callModel(model, imageUrl, DOC_PROMPT, DOC_SCHEMA, { ...opts, schemaName: 'document_kind' });
+}
+
+module.exports = {
+    LABELS, PROMPT, SCHEMA, PRICING, classify, sleep,
+    DOC_KINDS, DOC_PROMPT, DOC_SCHEMA, classifyDocumentKind, callModel,
+};

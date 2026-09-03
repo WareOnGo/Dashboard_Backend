@@ -4,8 +4,12 @@ const ImageLabelService = require('../../src/services/imageLabelService');
 jest.mock('../../src/utils/imageClassifier', () => ({
     PRICING: { 'gpt-5.6-terra': { in: 2.0, out: 12.0 } },
     classify: jest.fn(),
+    // Must be mocked even for tests that never produce a DOCUMENT: the sweep looks
+    // it up unconditionally, so omitting it here would make any future DOCUMENT
+    // fixture crash on `undefined is not a function` rather than fail a claim.
+    classifyDocumentKind: jest.fn(),
 }));
-const { classify } = require('../../src/utils/imageClassifier');
+const { classify, classifyDocumentKind } = require('../../src/utils/imageClassifier');
 
 const ok = (classification = 'INDOOR') => ({
     classification, description: 'a description', confidence: 0.99,
@@ -44,6 +48,10 @@ describe('ImageLabelService.sweep', () => {
         jest.clearAllMocks();
         process.env.OPENAI_API_KEY = 'test-key';
         classify.mockImplementation(async () => ok());
+        classifyDocumentKind.mockImplementation(async () => ({
+            documentKind: 'LAYOUT', reason: 'a plan', confidence: 0.95,
+            inputTokens: 400, outputTokens: 30,
+        }));
     });
     afterAll(() => { process.env.OPENAI_API_KEY = OLD_KEY; });
 
@@ -227,5 +235,87 @@ describe('ImageLabelService.getStats', () => {
         expect(stats.recentRuns[0].id).toBe('2');
         // BigInt ids would otherwise throw here, breaking the endpoint.
         expect(() => JSON.stringify(stats)).not.toThrow();
+    });
+});
+
+/**
+ * The documents-only second pass.
+ *
+ * DOCUMENT holds both the drawings a client deck wants and the paperwork it must
+ * never show, and the scene prompt cannot separate them. So documents get asked a
+ * second question — and only documents, because they are ~1.6% of labelled images
+ * and asking every photograph would cost sixty times more for an answer that does
+ * not apply to it.
+ */
+describe('ImageLabelService.sweep — document sub-labels', () => {
+    const OLD_KEY = process.env.OPENAI_API_KEY;
+    beforeEach(() => {
+        jest.clearAllMocks();
+        process.env.OPENAI_API_KEY = 'test-key';
+        classifyDocumentKind.mockImplementation(async () => ({
+            documentKind: 'LAYOUT', reason: 'a plan', confidence: 0.95,
+            inputTokens: 400, outputTokens: 30,
+        }));
+    });
+    afterAll(() => { process.env.OPENAI_API_KEY = OLD_KEY; });
+
+    it('asks the second question only about documents', async () => {
+        classify.mockImplementation(async (model, url) => (
+            url.endsWith('1.jpg') ? ok('DOCUMENT') : ok('OUTDOOR')));
+        const models = makeModels({ unlabelled: images(3) });
+        const svc = new ImageLabelService(models.imageLabelModel, models.cronRunLogModel);
+
+        await svc.sweep({ limit: 3 });
+
+        expect(classify).toHaveBeenCalledTimes(3);
+        expect(classifyDocumentKind).toHaveBeenCalledTimes(1);
+        expect(classifyDocumentKind.mock.calls[0][1]).toContain('1.jpg');
+    });
+
+    it('stores the sub-label on the document row and nowhere else', async () => {
+        classify.mockImplementation(async (model, url) => (
+            url.endsWith('0.jpg') ? ok('DOCUMENT') : ok('INDOOR')));
+        const models = makeModels({ unlabelled: images(2) });
+        const svc = new ImageLabelService(models.imageLabelModel, models.cronRunLogModel);
+
+        await svc.sweep({ limit: 2 });
+
+        const rows = models.imageLabelModel.createManyLabels.mock.calls[0][0];
+        const doc = rows.find((r) => r.classification === 'DOCUMENT');
+        const photo = rows.find((r) => r.classification === 'INDOOR');
+        expect(doc.documentKind).toBe('LAYOUT');
+        // Not "NOT_A_DOCUMENT" and not an empty string: absent, so the column stays
+        // null and a reader can tell "not a document" from "not asked".
+        expect(photo.documentKind).toBeUndefined();
+    });
+
+    it('keeps the scene label when the sub-label call fails', async () => {
+        // A document with no sub-label is still correctly a document. Failing the
+        // row over it would discard a good scene label and make the image reappear
+        // in the next sweep to be re-classified from scratch.
+        classify.mockImplementation(async () => ok('DOCUMENT'));
+        classifyDocumentKind.mockImplementation(async () => ({ error: 'http 500' }));
+        const models = makeModels({ unlabelled: images(1) });
+        const svc = new ImageLabelService(models.imageLabelModel, models.cronRunLogModel);
+
+        const res = await svc.sweep({ limit: 1 });
+
+        const rows = models.imageLabelModel.createManyLabels.mock.calls[0][0];
+        expect(rows).toHaveLength(1);
+        expect(rows[0].classification).toBe('DOCUMENT');
+        expect(rows[0].documentKind).toBeUndefined();
+        expect(res.labelled ?? res.data?.labelled).toBe(1);
+    });
+
+    it('ignores a sub-label the schema does not define', async () => {
+        classify.mockImplementation(async () => ok('DOCUMENT'));
+        classifyDocumentKind.mockImplementation(async () => ({ documentKind: null, confidence: 0.1 }));
+        const models = makeModels({ unlabelled: images(1) });
+        const svc = new ImageLabelService(models.imageLabelModel, models.cronRunLogModel);
+
+        await svc.sweep({ limit: 1 });
+
+        const rows = models.imageLabelModel.createManyLabels.mock.calls[0][0];
+        expect(rows[0].documentKind).toBeUndefined();
     });
 });

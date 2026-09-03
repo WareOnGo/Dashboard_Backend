@@ -115,7 +115,8 @@ class ImageLabelModel extends BaseModel {
                 SELECT img #>> '{}'   AS "imageUrl",
                        l.classification,
                        l.description,
-                       l.confidence
+                       l.confidence,
+                       l."documentKind"
                 FROM "Warehouse" w
                 CROSS JOIN LATERAL jsonb_array_elements(COALESCE(w.media::jsonb->'images', '[]'::jsonb))
                      WITH ORDINALITY AS t(img, ord)
@@ -150,7 +151,8 @@ class ImageLabelModel extends BaseModel {
                        img #>> '{}'   AS "imageUrl",
                        l.classification,
                        l.description,
-                       l.confidence
+                       l.confidence,
+                       l."documentKind"
                 FROM "Warehouse" w
                 CROSS JOIN LATERAL jsonb_array_elements(COALESCE(w.media::jsonb->'images', '[]'::jsonb))
                      WITH ORDINALITY AS t(img, ord)

@@ -1,6 +1,6 @@
 // src/services/imageLabelService.js
 const BaseService = require('./baseService');
-const { PRICING, classify } = require('../utils/imageClassifier');
+const { PRICING, classify, classifyDocumentKind } = require('../utils/imageClassifier');
 
 /** Job name recorded in cron_run_log. */
 const JOB_NAME = 'sweep_warehouse_image_labels';
@@ -180,6 +180,32 @@ class ImageLabelService extends BaseService {
                 });
             });
 
+            // SECOND PASS, DOCUMENTS ONLY. DOCUMENT holds both the drawings a deck
+            // wants and the paperwork it must never show, and the scene prompt
+            // cannot separate them — it was tuned and measured on where the camera
+            // is. Asked only of documents because they are ~1.6% of labelled images
+            // (223 of ~14,000), so folding the question into every photograph's
+            // prompt would cost sixty times more to answer something inapplicable.
+            //
+            // A failure here leaves documentKind null and does NOT fail the row: a
+            // document with no sub-label is still correctly a document, and the
+            // backfill script can fill it in later. Losing the scene label over it
+            // would be a strictly worse trade.
+            const docs = rows.filter((r) => r.classification === 'DOCUMENT');
+            if (docs.length) {
+                const kinds = await this.runPool(
+                    docs,
+                    (row) => classifyDocumentKind(model, row.imageUrl),
+                    DEFAULT_CONCURRENCY,
+                );
+                kinds.forEach((k, i) => {
+                    if (k.error || !k.documentKind) return;
+                    inTok += k.inputTokens || 0;
+                    outTok += k.outputTokens || 0;
+                    docs[i].documentKind = k.documentKind;
+                });
+            }
+
             if (rows.length) labelled += await this.imageLabelModel.createManyLabels(rows);
         }
 
@@ -299,6 +325,10 @@ class ImageLabelService extends BaseService {
                     classification: r.classification,
                     description: r.description,
                     confidence: r.confidence,
+                    // Null unless the row is a DOCUMENT that has been sub-labelled.
+                    // The picker uses it to pre-tick layout drawings; null there
+                    // means "unknown", never "not a layout".
+                    documentKind: r.documentKind ?? null,
                 };
             }
             // Ids with no images at all still get an entry, so a caller can cache
