@@ -21,18 +21,26 @@ const LABEL_W = 2.60;              // as TCI's, and wide enough for the longest 
 /**
  * A thin photograph down the right edge.
  *
- * The value column was enormously over-provisioned: measured across 2,040 cells
- * from 120 warehouses, the median value is 10 characters and the LONGEST is 64,
- * against a column that fits 102 on a line. So most of the right-hand side was
- * white space, which read as a table that had run out of things to say.
+ * The value column is enormously over-provisioned. Measured over the WHOLE table
+ * — 39,950 value cells across 2,350 warehouses — the median value is 10
+ * characters, p99 is 35 and p99.9 is 55, against a column that fits 102 on a
+ * line. Most of the right-hand side was white space, which read as a table that
+ * had run out of things to say.
  *
- * 1.2in is safe rather than chosen by eye. At this width the value column still
- * fits 81 characters per line, so nothing in that measured set wraps — which
- * matters because a wrapped value grows its row, and a taller table pushes the
- * fill scale down and squeezes every OTHER row on the slide. The strip buys
- * nothing if it costs that.
+ * 1.8in is chosen from that distribution, not by eye. It leaves 71 characters per
+ * line, comfortably past p99.9, and the cost is measured: 11 cells of 39,950
+ * wrap at this width versus 6 at the old full width. A wrapped value grows its
+ * row, and a taller table pushes the fill scale down and squeezes every OTHER row
+ * — so the number that matters is how many wrap, and five extra cells in forty
+ * thousand is not a trade worth protecting against.
+ *
+ * (An earlier revision of this comment claimed the longest value was 64
+ * characters. That came from a 120-warehouse sample. The real maximum is 100 —
+ * the MAX_CELL_CHARS clamp — reached by area descriptions like "Offered area –
+ * 6500 sq. ft(4500sq.ft hall, 1000sq ft open area/parking, ...". Those wrapped
+ * before this strip existed and still do.)
  */
-const STRIP_W = 1.20;
+const STRIP_W = 1.80;
 const STRIP_GAP = 0.16;
 /** Width the values get back when there is no photograph to show. */
 const VALUE_W_FULL = LAYOUT.CONTENT_W - LABEL_W;
