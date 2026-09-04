@@ -6,6 +6,7 @@ const pptServiceV3 = require('../ppt/services/pptServiceV3');
 const pptServiceGodamwale = require('../ppt/services/pptServiceGodamwale');
 const pptServiceTci = require('../ppt/services/pptServiceTci');
 const detailedPptService = require('../ppt/services/detailedPptService');
+const { createLastMileBuffer } = require('../xlsx/lastMileService');
 
 /**
  * PPT generation service.
@@ -63,7 +64,7 @@ class PptGenerationService {
     /**
      * Build a deck. `variant` selects the template.
      *
-     * @param {string} variant - 'standard' | 'v2' | 'v3' | 'godamwale' | 'tci' | 'detailed'
+     * @param {string} variant - 'standard' | 'v2' | 'v3' | 'godamwale' | 'tci' | 'detailed' | 'last-mile'
      * @param {Object[]} warehouses
      * @param {Object} selectedImages - { [warehouseId]: string[] }
      * @param {Object} customDetails
@@ -72,6 +73,8 @@ class PptGenerationService {
      */
     async createBuffer(variant, warehouses, selectedImages = {}, customDetails = {}, includeLocation = false) {
         switch (variant) {
+            case 'last-mile':
+                return createLastMileBuffer(warehouses, selectedImages, customDetails);
             case 'standard':
                 return pptService.createPptBuffer(warehouses, selectedImages, customDetails, includeLocation);
             case 'v2':

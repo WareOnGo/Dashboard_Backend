@@ -65,6 +65,7 @@ const ROUTES = [
     '/api/generate-ppt-v3',
     '/api/generate-ppt-godamwale',
     '/api/generate-ppt-tci',
+    '/api/generate-xlsx-last-mile',
     '/api/generate-detailed-ppt',
 ];
 

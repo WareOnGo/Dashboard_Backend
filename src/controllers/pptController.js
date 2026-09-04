@@ -63,7 +63,7 @@ class PptController extends BaseController {
         const count = warehouseIds.length;
 
         const context =
-            `${variant} deck — ${count} warehouse${count === 1 ? '' : 's'}` +
+            `${variant} ${variant === 'last-mile' ? 'workbook' : 'deck'} — ${count} warehouse${count === 1 ? '' : 's'}` +
             (client ? ` for ${client}` : '') +
             (outcome === 'failed' ? ` — FAILED${httpStatus ? ` (HTTP ${httpStatus})` : ''}` : '') +
             (outcome === 'abandoned' ? ' — ABANDONED (client disconnected before delivery)' : '');
@@ -99,19 +99,21 @@ class PptController extends BaseController {
     }
 
     /**
-     * Build one deck variant end to end: parse ids, load warehouses, generate,
-     * stream back the .pptx, and audit the outcome either way.
+     * Build an export end to end: parse ids, load warehouses, generate,
+     * stream back the file, and audit the outcome either way.
      *
-     * All five endpoints share this; they differ only in the variant, the error
-     * wording, and whether an empty id list is allowed (TCI only).
+     * Routes select the variant, response type, error wording, and whether an
+     * empty id list is allowed (TCI only). Defaults preserve the PPT contract.
      *
      * @param {Object} opts
-     * @param {string} opts.variant - 'standard' | 'v2' | 'godamwale' | 'tci' | 'detailed'
+     * @param {string} opts.variant - Template key, including 'last-mile' for XLSX
      * @param {string} opts.label - human label used in error messages
      * @param {boolean} [opts.allowEmptyIds] - TCI falls back to placeholder data
+     * @param {string} [opts.contentType] - Download MIME type; defaults to PPTX
+     * @param {string} [opts.fileType] - File type used in errors; defaults to PPT
      * @returns {Function} Express handler
      */
-    handleGenerate({ variant, label, allowEmptyIds = false }) {
+    handleGenerate({ variant, label, allowEmptyIds = false, contentType = PPTX_CONTENT_TYPE, fileType = 'PPT' }) {
         return this.asyncHandler(async (req, res) => {
             const { ids, selectedImages = {}, customDetails = {}, includeLocation = false } = req.body || {};
             const warehouseIds = this.pptGenerationService.parseIds(ids);
@@ -163,7 +165,7 @@ class PptController extends BaseController {
                     warehouseIds, bufferSize: buffer.length, durationMs: Date.now() - startedAt,
                 });
 
-                res.setHeader('Content-Type', PPTX_CONTENT_TYPE);
+                res.setHeader('Content-Type', contentType);
                 res.send(buffer);
 
                 // Audited after the send attempt so a client that already hung up
@@ -171,12 +173,12 @@ class PptController extends BaseController {
                 audit('success', { httpStatus: 200, bytes: buffer.length });
                 return;
             } catch (error) {
-                logError('pptController', variant, `Failed to generate ${label} PPT`, {
+                logError('pptController', variant, `Failed to generate ${label} ${fileType}`, {
                     warehouseIds, error: error.message, stack: error.stack,
                 });
                 audit('failed', { httpStatus: 500, errorMessage: error.message });
                 return res.status(500).json({
-                    error: `An internal server error occurred during ${label} PPT generation.`,
+                    error: `An internal server error occurred during ${label} ${fileType} generation.`,
                 });
             }
         });

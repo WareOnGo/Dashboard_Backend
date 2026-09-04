@@ -49,6 +49,12 @@ router.post('/generate-ppt-v3', ...gate,
 router.post('/generate-ppt-godamwale', ...gate,
     pptController.handleGenerate({ variant: 'godamwale', label: 'godamwale' }));
 
+router.post('/generate-xlsx-last-mile', ...gate,
+    pptController.handleGenerate({
+        variant: 'last-mile', label: 'Last Mile', fileType: 'Excel',
+        contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    }));
+
 // TCI tolerates a missing/empty `ids`, falling back to placeholder warehouses so
 // the layout can be previewed before real data is wired in. Kept from the engine.
 router.post('/generate-ppt-tci', ...gate,
