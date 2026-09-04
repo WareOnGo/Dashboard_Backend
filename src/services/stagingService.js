@@ -15,10 +15,17 @@ const WAREHOUSE_DATA_FIELDS = [
     'powerKva', 'vaastuCompliance',
 ];
 
-/** StagedWarehouse columns that are pipeline metadata, never warehouse data. */
+/**
+ * StagedWarehouse columns that are pipeline metadata, never warehouse data.
+ * `warehouseDeleted` is not a column at all but a read-time annotation added by
+ * StagedWarehouseModel.annotateWarehouseExistence — it belongs here for the same reason:
+ * without it, buildPromotionPayload leaks it into the promotion payload, where it survives
+ * only because createWarehouseSchema is a non-strict z.object() that strips unknown keys.
+ */
 const STAGING_META_FIELDS = new Set([
     'id', 'reviewStatus', 'source', 'submittedBy', 'submittedAt', 'reviewedBy',
     'reviewedAt', 'rejectionReason', 'warehouseId', 'rawPayload', 'flags', 'reviewMeta',
+    'warehouseDeleted',
 ]);
 
 const REVIEWABLE = new Set(['PENDING']);
@@ -32,9 +39,13 @@ const REVIEWABLE = new Set(['PENDING']);
  * from the review panel — see SettingsService.getAutoApprove(). It is read per
  * submission in maybeAutoApprove().
  *
- * Auto-approval is best-effort: a submission that fails strict warehouse
- * validation (e.g. a partial PARTNER_API ingest payload) is left PENDING for a
- * human to fix rather than failing the submission outright.
+ * The staging row is kept either way — it stays the audit record and the pullback
+ * handle (see StagedWarehouseModel.reopen, which deletes the promoted warehouse and
+ * returns the row to PENDING). Autopilot skips the human gate, not the paper trail.
+ *
+ * Auto-approval is best-effort: anything that stops a promotion (a partial
+ * PARTNER_API payload failing strict warehouse validation, a transient DB error)
+ * leaves the row PENDING for a human rather than failing the submission outright.
  */
 
 /** Reviewer attribution recorded on rows promoted by the auto-approve flag. */
@@ -406,15 +417,16 @@ class StagingService extends BaseService {
 
     /**
      * Auto-approve hook for freshly staged rows. When autopilot is on (DB setting,
-     * see SettingsService), promote the row immediately and return the refreshed
-     * (APPROVED) row. Best-effort: if the row can't be validated/promoted (e.g. a
-     * partial ingest payload that fails strict validation), it's left PENDING and
-     * returned as-is.
+     * see SettingsService), promote the row immediately and return it as APPROVED
+     * with `warehouseId` set to the master Warehouse it produced — that id is what
+     * the create endpoints hand back to the submitter.
      *
-     * Fail-safe: if the auto-approve setting can't be read (transient DB error),
-     * the row is left PENDING for manual review rather than auto-published.
+     * Never fails the submission. The row is already stored by the time we get here,
+     * so any problem (setting unreadable, strict validation failure on a partial
+     * ingest payload, a promotion hiccup) degrades to "left PENDING for review"
+     * rather than erroring out work that was in fact saved.
      * @param {Object} staged - The just-created staged row
-     * @returns {Promise<Object>} The staged row (APPROVED if promotion succeeded)
+     * @returns {Promise<Object>} The staged row (APPROVED + warehouseId if promotion succeeded)
      * @private
      */
     async maybeAutoApprove(staged) {
@@ -426,14 +438,37 @@ class StagingService extends BaseService {
             return staged;
         }
         if (!enabled) return staged;
+
+        let warehouse;
         try {
-            await this.approveSubmission(staged.id, AUTO_APPROVE_REVIEWER);
+            warehouse = await this.approveSubmission(staged.id, AUTO_APPROVE_REVIEWER);
         } catch (error) {
-            // Leave the row PENDING for manual review if it can't be auto-approved.
-            if (error && error.name === 'ValidationError') return staged;
-            throw error;
+            // Leave the row for manual review if it can't be auto-approved. This covers
+            // strict-validation failures (partial ingest payloads) and promotion failures
+            // alike. Re-read rather than assuming: promote()'s compensation is best-effort,
+            // and a lost race (another reviewer approving first) or a failed compensation
+            // would otherwise have us report PENDING for a row that is actually APPROVED.
+            // Cold path, so the extra query costs nothing on the hot one — and it falls
+            // back to the in-memory row, since the read can fail for the same reason the
+            // promotion did.
+            console.error(`maybeAutoApprove: could not promote ${staged.id}, leaving unpromoted:`, error.message);
+            const current = await this.stagedWarehouseModel.findByStagedId(staged.id).catch(() => null);
+            return current || staged;
         }
-        return this.stagedWarehouseModel.findByStagedId(staged.id);
+
+        // Reflect the promotion locally rather than re-reading the row: the id comes straight
+        // off the Warehouse insert, so the submitter's receipt states what was actually
+        // created, and the hot submission path drops two queries (the re-read plus its
+        // existence annotation).
+        // `reviewedAt` is a local approximation of the timestamp promote() wrote; nothing
+        // reads it (the receipt drops it), it's set to keep the returned row self-consistent.
+        return {
+            ...staged,
+            reviewStatus: 'APPROVED',
+            reviewedBy: AUTO_APPROVE_REVIEWER.email,
+            reviewedAt: new Date(),
+            warehouseId: warehouse.id,
+        };
     }
 
     /**

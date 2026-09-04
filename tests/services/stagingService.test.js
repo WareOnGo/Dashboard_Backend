@@ -106,6 +106,123 @@ describe('StagingService mapping', () => {
     });
 });
 
+describe('maybeAutoApprove (autopilot)', () => {
+    const pendingRow = () => ({
+        id: 'staged-uuid-1', reviewStatus: 'PENDING', source: 'SCOUT',
+        submittedBy: scout.email, city: 'Bengaluru', warehouseId: null,
+    });
+
+    /**
+     * Build a service whose live collaborators are the autopilot setting, approveSubmission
+     * and — on the error path only — a re-read of the row. `reread` is what
+     * findByStagedId returns there; null stands for "the read failed too".
+     */
+    const build = ({ getAutoApprove, approveSubmission, reread = null }) => {
+        const model = { findByStagedId: jest.fn().mockResolvedValue(reread) };
+        const svc = new StagingService(model, {}, { getAutoApprove });
+        svc.approveSubmission = approveSubmission;
+        svc.model = model;
+        return svc;
+    };
+
+    const validationError = () => Object.assign(new Error('bad payload'), { name: 'ValidationError' });
+
+    it('promotes and reports the master warehouse id when autopilot is on', async () => {
+        const approveSubmission = jest.fn().mockResolvedValue({ id: 1713, city: 'Bengaluru' });
+        const svc = build({ getAutoApprove: jest.fn().mockResolvedValue(true), approveSubmission });
+
+        const out = await svc.maybeAutoApprove(pendingRow());
+
+        // The happy path takes the id straight off the insert — no second read.
+        expect(svc.model.findByStagedId).not.toHaveBeenCalled();
+
+        expect(approveSubmission).toHaveBeenCalledWith('staged-uuid-1', expect.objectContaining({
+            email: 'system:auto-approve',
+        }));
+        expect(out.reviewStatus).toBe('APPROVED');
+        expect(out.warehouseId).toBe(1713);
+        expect(out.reviewedBy).toBe('system:auto-approve');
+        expect(out.reviewedAt).toBeInstanceOf(Date);
+        // Carried through from the staged row, not re-fetched.
+        expect(out.city).toBe('Bengaluru');
+    });
+
+    it('leaves the row PENDING and never promotes when autopilot is off', async () => {
+        const approveSubmission = jest.fn();
+        const svc = build({ getAutoApprove: jest.fn().mockResolvedValue(false), approveSubmission });
+
+        const row = pendingRow();
+        const out = await svc.maybeAutoApprove(row);
+
+        expect(approveSubmission).not.toHaveBeenCalled();
+        expect(out).toBe(row);
+    });
+
+    it('fails safe to PENDING when the autopilot setting cannot be read', async () => {
+        const approveSubmission = jest.fn();
+        const svc = build({
+            getAutoApprove: jest.fn().mockRejectedValue(new Error('pooler timeout')),
+            approveSubmission,
+        });
+
+        const row = pendingRow();
+        expect(await svc.maybeAutoApprove(row)).toBe(row);
+        expect(approveSubmission).not.toHaveBeenCalled();
+    });
+
+    it('leaves the row PENDING when the payload fails strict warehouse validation', async () => {
+        const svc = build({
+            getAutoApprove: jest.fn().mockResolvedValue(true),
+            approveSubmission: jest.fn().mockRejectedValue(validationError()),
+        });
+
+        const row = pendingRow();
+        expect(await svc.maybeAutoApprove(row)).toBe(row);
+    });
+
+    it('leaves the row PENDING rather than failing the submission when promotion errors', async () => {
+        // The row is already stored and promote() has released its claim, so a promotion
+        // failure must degrade to "queued for review" instead of erroring the submitter.
+        const svc = build({
+            getAutoApprove: jest.fn().mockResolvedValue(true),
+            approveSubmission: jest.fn().mockRejectedValue(new Error('P2028: transaction closed')),
+        });
+
+        const row = pendingRow();
+        await expect(svc.maybeAutoApprove(row)).resolves.toBe(row);
+    });
+
+    it('reports what the row actually became when the promotion lost a race', async () => {
+        // A concurrent reviewer approval makes promote() throw a conflict, but the row is
+        // genuinely APPROVED and published. Reporting the stale in-memory row would tell
+        // the submitter their entry is queued when it is already live.
+        const conflict = Object.assign(new Error('not in a reviewable state'), { name: 'ConflictError' });
+        const svc = build({
+            getAutoApprove: jest.fn().mockResolvedValue(true),
+            approveSubmission: jest.fn().mockRejectedValue(conflict),
+            reread: { ...pendingRow(), reviewStatus: 'APPROVED', warehouseId: 1713 },
+        });
+
+        const out = await svc.maybeAutoApprove(pendingRow());
+
+        expect(out.reviewStatus).toBe('APPROVED');
+        expect(out.warehouseId).toBe(1713);
+    });
+
+    it('falls back to the in-memory row when even the re-read fails', async () => {
+        // The read can fail for the same reason the promotion did, and it must not turn a
+        // saved submission into an error.
+        const svc = build({
+            getAutoApprove: jest.fn().mockResolvedValue(true),
+            approveSubmission: jest.fn().mockRejectedValue(new Error('P1001: unreachable')),
+        });
+        svc.model.findByStagedId.mockRejectedValue(new Error('P1001: unreachable'));
+
+        const row = pendingRow();
+        await expect(svc.maybeAutoApprove(row)).resolves.toBe(row);
+    });
+});
+
 describe('StagedWarehouse mirror drift', () => {
     const columns = new Set(
         Prisma.dmmf.datamodel.models.find((m) => m.name === 'StagedWarehouse').fields.map((f) => f.name),

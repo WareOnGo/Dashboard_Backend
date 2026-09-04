@@ -70,9 +70,78 @@ When an approved row is inserted into master `Warehouse`:
   is forced to `false` at ingest; a separate WOG-verification flow sets it on master rows.
 - `uploadedBy` → **the original scout/source** is preserved. The approver is recorded
   separately via the staging row's `reviewedBy` and the `APPROVE` audit entry.
-- **Promotion reuses existing code paths** — `warehouseService.createWarehouse`, which
-  already runs strict validation, business rules, the `photos → media` double-write, and
-  the nested `WarehouseData` create.
+- **Promotion reuses existing code paths** — strict validation, `applyCreateBusinessRules`,
+  micro-market tagging, the `photos → media` double-write, and the nested `WarehouseData`
+  create. *(As built, the insert lives in `StagedWarehouseModel.promote()` rather than
+  `warehouseService.createWarehouse`, which is now unused: promotion needs the claim-first
+  pattern below, not an interactive transaction. `promote()` is the only live insert into
+  master `Warehouse`.)*
+
+### Auto-approve — "autopilot" (shipped after the original spec)
+
+The human review gate can be switched off at runtime. When autopilot is **on**, a freshly
+staged submission is promoted to master `Warehouse` immediately on creation instead of waiting
+in the `PENDING` queue.
+
+- **State lives in the DB, not an env var** — `app_setting` row
+  `(application: 'dashboard', key: 'auto_approve_submissions')`, read through
+  `SettingsService.getAutoApprove()`. **Default when the row has never been written is `true`**,
+  so a fresh database auto-publishes until someone turns it off.
+- **Toggled from the review panel** — `GET /api/staging/settings/auto-approve` (any reviewer)
+  and `PATCH` the same path (admin only), which writes an `UPDATE` audit row with a real
+  from→to. UI: the robot switch in `ReviewQueue.jsx`.
+- **Consumed once per submission** in `StagingService.maybeAutoApprove()`, which all three
+  ingress paths call (`createScoutSubmission`, `createDashboardSubmission`,
+  `createIngestSubmission`). Promotions are attributed to `system:auto-approve`.
+- **The staging row is still written either way.** Autopilot skips the human gate, not the
+  paper trail: the row remains the audit record and the pullback handle, so
+  `POST /api/staging/:id/reopen` still deletes the promoted warehouse and returns the row to
+  `PENDING`. Note that a pullback hard-deletes the master row, so re-approving mints a *new*
+  autoincrement id.
+- **It never fails a submission.** Anything that stops a promotion — the setting being
+  unreadable, a partial `PARTNER_API` payload failing strict warehouse validation, a transient
+  DB error — leaves the row `PENDING` for a human. The submitter gets a successful "queued for
+  review" response, not an error for work that was in fact saved.
+- **Gap worth knowing:** the `#<warehouseId>` WhatsApp confirmation is sent from
+  `StagingController.approveSubmission` (the reviewer route). Autopilot calls the service
+  directly, so auto-approved submissions send no WhatsApp — the submitter gets the id in the
+  create response instead.
+
+### Create-response contract (all three ingress paths)
+
+`POST /api/warehouses/scout` and `POST /api/warehouses` return a submission receipt built by
+`utils/submissionResult.js`, **not** a raw staged row and not a master warehouse:
+
+```json
+{
+  "submissionId": "a3f1c2de-...-9b40",
+  "id":           "a3f1c2de-...-9b40",
+  "warehouseId":  1713,
+  "reviewStatus": "APPROVED",
+  "autoApproved": true,
+  "warehouseType": "Industrial", "city": "Indore", "state": "Madhya Pradesh", "zone": "CENTRAL"
+}
+```
+
+The two ids have different types and different meanings, so both are named explicitly:
+`submissionId` is the `StagedWarehouse` uuid (always present, the review/pullback handle);
+`warehouseId` is the master `Warehouse` autoincrement `Int`, present **only** once the
+submission has actually been promoted and `null` otherwise. `autoApproved` requires both an
+`APPROVED` status and a non-null `warehouseId`, so it can never claim a warehouse that isn't
+there. `id` is retained as the staging uuid for backward compatibility — it is deliberately
+**not** switched to the numeric master id, since existing readers expect a uuid. `rawPayload`
+is not echoed back.
+
+Clients branch their success copy on this: with a `warehouseId` they show
+`Warehouse ID <n>`, without one they show `Reference ID <uuid>` plus review-pending copy
+(`Scout_Frontend/src/components/SuccessPage.jsx`,
+`Frontend_Repository/src/components/Dashboard.jsx`).
+
+`POST /api/staging/ingest` is the exception: its response is a contract with external partners
+who may be reading any mirror column off the 201 body, so it keeps the **whole staged row**
+(minus `rawPayload`/`flags`/`reviewMeta` and the `warehouseDeleted` annotation) and layers the
+receipt fields on top. Strictly additive — a partner reading `id`, `source` or `submittedAt`
+keeps working and simply gains `warehouseId`/`autoApproved`.
 
 ## Compatibility / non-breaking guarantees
 
@@ -227,9 +296,12 @@ Handled in the build with these defaults unless overridden:
 
 - **Double-approval guard.** Promotion runs in a transaction with an optimistic status
   check (`WHERE status IN (PENDING, IN_REVIEW)`); a second concurrent approve no-ops.
-- **Scout frontend contract.** After redirect, the Scout submit returns a staging row
-  (uuid id), not a master warehouse. The frontend success copy changes from "created" to
-  "submitted for review" — a small coordinated frontend change ships with this.
+- **Scout frontend contract.** ~~The Scout submit returns a staging row (uuid id), not a
+  master warehouse; success copy changes from "created" to "submitted for review".~~
+  **Superseded by autopilot** — the submit now returns the receipt described under
+  *Create-response contract* above, and the success copy is chosen per submission: the numeric
+  warehouse id when it was auto-approved, a staging reference id plus "submitted for review"
+  when it is queued.
 - **Media lifecycle.** Scout images are uploaded to S3 (`scout/` prefix) before submission,
   so media exists at ingest regardless of outcome. A periodic sweep removes S3 objects tied
   to `REJECTED` rows older than N days to avoid orphans.

@@ -1,6 +1,7 @@
 // src/controllers/warehouseController.js
 const BaseController = require('./baseController');
 const { changeMetadata } = require('../utils/auditDiff');
+const { toSubmissionResult } = require('../utils/submissionResult');
 
 /**
  * WarehouseController class for handling warehouse HTTP requests
@@ -152,15 +153,22 @@ class WarehouseController extends BaseController {
             req.audit('CREATE', 'staged_warehouse', staged.id, `Staged dashboard warehouse in ${req.body.city}, ${req.body.state}`, {
                 source: 'DASHBOARD',
                 reviewStatus: staged.reviewStatus,
+                // Recorded here because it is otherwise unrecoverable: nothing writes a
+                // CREATE row for the master warehouse itself, so without this "who created
+                // warehouse #N" needs a join through the staging uuid.
+                warehouseId: staged.warehouseId ?? null,
+                autoApproved: staged.warehouseId != null,
                 warehouseType: req.body.warehouseType,
                 city: req.body.city,
                 state: req.body.state,
                 zone: staged.zone // derived server-side from state
             });
 
-            // NOTE: returns a staged row (uuid id, reviewStatus=PENDING), not a master
-            // Warehouse. The dashboard create flow should read "submitted for review".
-            this.sendCreated(res, staged);
+            // The receipt names both ids explicitly (see toSubmissionResult): `warehouseId`
+            // is the published master Warehouse when autopilot promoted the submission,
+            // `null` when it was left PENDING. The dashboard branches its success copy on
+            // `autoApproved` rather than assuming one or the other.
+            this.sendCreated(res, toSubmissionResult(staged));
         } catch (error) {
             next(error);
         }
@@ -193,16 +201,21 @@ class WarehouseController extends BaseController {
                 scoutId: scout.id,
                 scoutEmpid: scout.empid,
                 reviewStatus: staged.reviewStatus,
+                // See the dashboard create above: the only record of the promoted
+                // warehouse's id on the create side.
+                warehouseId: staged.warehouseId ?? null,
+                autoApproved: staged.warehouseId != null,
                 warehouseType: req.body.warehouseType,
                 city: req.body.city,
                 state: req.body.state,
                 zone: staged.zone // derived server-side from state
             });
 
-            // Send created response. NOTE: the returned object is a staged row
-            // (uuid id, reviewStatus=PENDING), not a master Warehouse. The Scout
-            // frontend success copy should read "submitted for review".
-            this.sendCreated(res, staged);
+            // Send created response. The receipt carries `warehouseId` (the published
+            // master Warehouse) when autopilot promoted the submission, and `null` with
+            // reviewStatus=PENDING when it is queued for review — the Scout success page
+            // shows "Warehouse ID" or "Reference ID" accordingly.
+            this.sendCreated(res, toSubmissionResult(staged));
         } catch (error) {
             next(error);
         }

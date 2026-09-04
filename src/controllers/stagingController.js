@@ -2,6 +2,7 @@
 const BaseController = require('./baseController');
 const gupshupService = require('../services/gupshupService');
 const { changeMetadata } = require('../utils/auditDiff');
+const { toSubmissionResult } = require('../utils/submissionResult');
 
 /**
  * StagingController — admin-facing review API for the validation layer.
@@ -84,11 +85,19 @@ class StagingController extends BaseController {
             req.audit('CREATE', 'staged_warehouse', staged.id, `Ingested ${source} warehouse`, {
                 source, // matches the staged row's `source` value
                 reviewStatus: staged.reviewStatus,
+                warehouseId: staged.warehouseId ?? null,
+                autoApproved: staged.warehouseId != null,
                 city: req.body?.city,
                 state: req.body?.state,
             });
 
-            this.sendCreated(res, staged);
+            // Unlike the Scout/dashboard creates, this response is a contract with external
+            // partners we can't grep for — they may be reading any mirror column off the
+            // 201 body. So keep the whole row (minus the heavy reserved JSON and the
+            // read-time annotation) and layer the receipt on top: strictly additive, and it
+            // now tells them whether autopilot already published the warehouse.
+            const { rawPayload, flags, reviewMeta, warehouseDeleted, ...row } = staged;
+            this.sendCreated(res, { ...row, ...toSubmissionResult(staged) });
         } catch (error) {
             this.handleServiceError(res, error, next);
         }

@@ -135,7 +135,11 @@ and its memory flat regardless of a 50 MB site video.
 ### 8. Everything fails closed
 - Missing `STAGING_INGEST_SECRET` → the ingest endpoint returns **503**, never "allow all".
 - Capability lookup errors or a missing `VerifiedNumber` row → **no** capabilities.
-- Auto-approve setting unreadable → the submission stays `PENDING`.
+- Auto-approve setting unreadable → the submission stays `PENDING`. Same for any promotion
+  failure: once the staged row is durably written, nothing after it may fail the submission —
+  it degrades to "queued for review". The only signal is a `console.error` plus a PENDING row
+  showing up in the queue while autopilot is on. (A staging *write* failure still errors, as
+  it must: nothing was persisted.)
 - Webhook secret compared with `crypto.timingSafeEqual` over SHA-256 digests, so length
   mismatches can't throw and timing leaks nothing; missing header and wrong secret return
   an identical 401.
@@ -174,8 +178,9 @@ comma-separated `photos` string column is still written alongside it
                               │
               ┌───────────────┴─────────────────┐
               │ autopilot ON?   → auto-approve  │  (DB setting, admin-togglable;
-              │ validation fails → stays PENDING│   reviewer recorded as
-              └───────────────┬─────────────────┘   "system:auto-approve")
+              │ validation OR promotion fails   │   reviewer recorded as
+              │                 → stays PENDING │   "system:auto-approve";
+              └───────────────┬─────────────────┘   never fails the submission)
                               ▼
               Review panel — GET/PATCH /api/staging
               list → edit (stays PENDING, diffed field-by-field) → approve / reject
@@ -191,9 +196,17 @@ comma-separated `photos` string column is still written alongside it
 
 Notable properties:
 
+- **Create returns a submission receipt**, not a warehouse and not a raw staged row —
+  `{ submissionId, warehouseId, reviewStatus, autoApproved, … }` from
+  `utils/submissionResult.js`. `submissionId` is the staging uuid (always present);
+  `warehouseId` is the master `Int` and is `null` unless the submission was actually promoted.
+  Clients pick their success copy from that: "Warehouse ID 1713" vs "Reference ID <uuid>,
+  pending review". The partner webhook (`/staging/ingest`) layers those fields on top of the
+  full staged row instead, so its external contract stays additive.
 - **`reopen`** moves an `APPROVED`/`REJECTED` row back to `PENDING`. Reopening an approved
   row also *deletes* the promoted `Warehouse` (cascading `WarehouseData`), so revoking an
-  approval actually pulls it off the live list.
+  approval actually pulls it off the live list — and re-approving mints a *new* warehouse id,
+  so an id already handed to a submitter goes stale.
 - **`warehouseDeleted`** is computed at read time with one batched existence query rather
   than stored. `warehouseId` has no FK, so a warehouse deleted by any route — API, manual
   SQL, future code — is reflected in the review panel with no flag to keep in sync.
@@ -572,7 +585,10 @@ Things worth knowing before running it:
 - **Rate limits are per-IP** (`express-rate-limit`, in-memory). Behind a load balancer this
   is per-instance, and it resets on deploy. It's a burst backstop, not a quota.
 - **Autopilot is a live DB setting**, not an env var — an admin can flip it from the review
-  panel and it takes effect on the next submission.
+  panel and it takes effect on the next submission. It defaults to **on** when the
+  `app_setting` row has never been written, and auto-approved submissions send **no** Gupshup
+  notification (that send lives on the reviewer's approve route, which autopilot bypasses);
+  the submitter gets the warehouse id in the create response instead.
 - **Gupshup is off by default.** Turning it on requires all of
   `API_KEY`/`SOURCE`/`SRC_NAME`/`TEMPLATE_ID`; otherwise sends are skipped with a warning
   rather than failing the approve/reject.
