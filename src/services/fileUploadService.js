@@ -4,6 +4,7 @@ const WarehouseValidator = require('../validators/warehouseValidator');
 const s3ClientManager = require('../utils/s3Client');
 const { PutObjectCommand } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
+const { FILE_UPLOAD } = require('../utils/constants');
 const crypto = require('crypto');
 
 /**
@@ -218,18 +219,8 @@ class FileUploadService extends BaseService {
         const processedRequest = { ...request };
         
         // Validate file type against business rules
-        const allowedTypes = options.allowedTypes || [
-            'image/jpeg',
-            'image/png',
-            'image/gif',
-            'image/webp',
-            'application/pdf',
-            'video/mp4',
-            'video/quicktime',
-            'video/x-msvideo',
-            'video/webm',
-        ];
-        
+        const allowedTypes = options.allowedTypes || FILE_UPLOAD.ALLOWED_MIME_TYPES;
+
         if (!allowedTypes.includes(processedRequest.contentType)) {
             const error = new Error(`File type ${processedRequest.contentType} is not allowed`);
             error.name = 'ValidationError';
@@ -308,20 +299,7 @@ class FileUploadService extends BaseService {
      * @private
      */
     getFileExtensionFromContentType(contentType) {
-        const extensionMap = {
-            'image/jpeg': '.jpg',
-            'image/jpg': '.jpg',
-            'image/png': '.png',
-            'image/gif': '.gif',
-            'image/webp': '.webp',
-            'application/pdf': '.pdf',
-            'video/mp4': '.mp4',
-            'video/quicktime': '.mov',
-            'video/x-msvideo': '.avi',
-            'video/webm': '.webm',
-        };
-        
-        return extensionMap[contentType] || '';
+        return FILE_UPLOAD.MEDIA_TYPE_EXTENSIONS[contentType] || '';
     }
 
     /**

@@ -31,6 +31,20 @@ const app = express();
  */
 const PORT = process.env.PORT || 3001;
 
+/**
+ * Trust the single proxy hop in front of the app (App Runner's load balancer).
+ *
+ * Without this, Express ignores X-Forwarded-For and req.ip resolves to the
+ * load balancer rather than the caller, so express-rate-limit keyed every
+ * request in the fleet to one address and applied the per-IP scout limits as
+ * though all scouts were a single client. It also logged
+ * ERR_ERL_UNEXPECTED_X_FORWARDED_FOR on every rate-limited route.
+ *
+ * The value is 1, not `true`: only the last hop is trusted, so a client cannot
+ * spoof its address by sending its own X-Forwarded-For header.
+ */
+app.set('trust proxy', 1);
+
 // --- Middleware Stack ---
 
 /**

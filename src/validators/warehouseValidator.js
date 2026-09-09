@@ -1,6 +1,7 @@
 // src/validators/warehouseValidator.js
 const { z } = require('zod');
 const BaseValidator = require('./baseValidator');
+const { FILE_UPLOAD } = require('../utils/constants');
 
 /**
  * Use-cases a warehouse suits, stored in Warehouse.suitableFor.
@@ -217,12 +218,17 @@ class WarehouseValidator extends BaseValidator {
 
     /**
      * Schema for file upload request
+     *
+     * Checks the exact allowlist rather than an `image/*` prefix so that this
+     * layer and the upload service agree; a prefix match here accepted types
+     * the service then refused, turning an unsupported file into a confusing
+     * error one layer deeper.
      */
     static fileUploadSchema = z.object({
         contentType: z.string().min(1, "contentType is required")
             .refine(
-                (type) => type.startsWith('image/') || type.startsWith('video/') || type === 'application/pdf',
-                "contentType must be an image, video, or PDF"
+                (type) => FILE_UPLOAD.ALLOWED_MIME_TYPES.includes(type),
+                "contentType must be a supported image, video, or document type"
             )
     });
 
