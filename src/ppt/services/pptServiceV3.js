@@ -85,6 +85,8 @@ const createPptBufferV3 = async (warehouses, selectedImages = {}, customDetails 
         mapsLocation: customDetails.mapsLocation !== false,
         pocSlide: customDetails.pocSlide !== false,
     };
+    // Connectivity slides and their dedicated map images are opt-in.
+    const includeProximitySlide = customDetails.proximitySlide === true;
 
     // Started before anything is drawn and awaited after the property loop, so a
     // request that takes a second or two runs alongside the photo downloads
@@ -98,7 +100,7 @@ const createPptBufferV3 = async (warehouses, selectedImages = {}, customDetails 
     // One street map per warehouse for the connectivity slides. Fired here so the
     // images download alongside the photographs rather than after them; the
     // distances themselves are already in the database and cost nothing.
-    const siteMapsPending = fetchSiteMaps(warehouses, flags);
+    const siteMapsPending = includeProximitySlide ? fetchSiteMaps(warehouses, flags) : null;
 
     await generateTitleSlideV2(pptx, warehouses, customDetails);
     generateIndexSlideV2(pptx, warehouses, flags);
@@ -120,8 +122,10 @@ const createPptBufferV3 = async (warehouses, selectedImages = {}, customDetails 
         // first option waits, and by then its photographs have already downloaded.
         // Awaiting before the loop would have serialised the maps ahead of every
         // photograph instead.
-        const siteMaps = await siteMapsPending;
-        generateProximitySlideV3(pptx, w, i + 1, siteMaps.get(w.id) || null);
+        if (includeProximitySlide) {
+            const siteMaps = await siteMapsPending;
+            generateProximitySlideV3(pptx, w, i + 1, siteMaps.get(w.id) || null);
+        }
     }
 
     const map = await mapPending;
