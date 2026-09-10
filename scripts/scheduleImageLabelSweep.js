@@ -1,5 +1,7 @@
 /**
- * Manage the pg_cron job that drives the image-label forward-fill.
+ * Manage the existing pg_cron job, now targeting warehouse enrichment.
+ * To upgrade an existing job without replacing its secret/schedule, use
+ * scripts/scheduleWarehouseEnrichment.js after deploying the new API endpoint.
  *
  * The sweep endpoint is bounded and idempotent, so the schedule is just a poke:
  * every run labels whatever is unlabelled and returns. Keeping the job
@@ -39,7 +41,7 @@ const arg = (name, fallback) => {
 
 const COMMAND = process.argv[2];
 const JOB_NAME = 'sweep-warehouse-image-labels';
-const DEFAULT_URL = 'https://u3yrpp3726.ap-south-1.awsapprunner.com/api/image-labels/sweep';
+const DEFAULT_URL = 'https://u3yrpp3726.ap-south-1.awsapprunner.com/api/enrichment/sweep';
 const DEFAULT_SCHEDULE = '*/15 * * * *';
 const DEFAULT_TIMEOUT_MS = 120000;
 

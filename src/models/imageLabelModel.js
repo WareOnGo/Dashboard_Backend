@@ -18,6 +18,14 @@ class ImageLabelModel extends BaseModel {
         this.model = this.prisma.labeledWarehouseImage;
     }
 
+    /** Bound sweep queries without holding a database transaction during classification. */
+    async bounded(method, ...args) {
+        return this.prisma.$transaction(async tx => {
+            await tx.$executeRawUnsafe("SET LOCAL statement_timeout = '5s'");
+            return new ImageLabelModel(tx)[method](...args);
+        }, { maxWait: 3000, timeout: 8000 });
+    }
+
     /**
      * Images present in Warehouse.media with no row in labeled_warehouse_images.
      *

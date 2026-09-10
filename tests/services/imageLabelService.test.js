@@ -32,11 +32,13 @@ const makeModels = ({ unlabelled = [], inFlight = null } = {}) => {
         findForWarehouse: jest.fn(async () => []),
     };
     const cronRunLogModel = {
+        tryStart: jest.fn(async () => inFlight ? null : ({ id: 1n })),
         findInFlight: jest.fn(async () => inFlight),
         start: jest.fn(async () => ({ id: 1n })),
         finish: jest.fn(async () => ({})),
         recent: jest.fn(async () => [{ id: 2n, ranAt: new Date(), status: 'SUCCESS', durationMs: 10, metadata: null, notes: null }]),
     };
+    imageLabelModel.bounded = jest.fn(async (method, ...args) => imageLabelModel[method](...args));
     return { imageLabelModel, cronRunLogModel };
 };
 
@@ -68,6 +70,17 @@ describe('ImageLabelService.sweep', () => {
         expect(res.remaining).toBe(0);
         expect(classify).toHaveBeenCalledTimes(3);
         expect(cronRunLogModel.finish).toHaveBeenCalledWith(1n, 'SUCCESS', expect.any(Number), expect.any(Object), null);
+    });
+
+    it('stops starting image requests when the budget expires while keeping completed labels', async () => {
+        const { imageLabelModel, cronRunLogModel } = makeModels({ unlabelled: images(20) });
+        const controller = new AbortController();
+        classify.mockImplementation(async () => { controller.abort(); return ok(); });
+        const svc = new ImageLabelService(imageLabelModel, cronRunLogModel);
+        const result = await svc.sweep({ signal: controller.signal });
+        expect(classify).toHaveBeenCalledTimes(1);
+        expect(result).toMatchObject({ status: 'PARTIAL', processed: 1, labelled: 1, deferred: 19 });
+        expect(imageLabelModel.createManyLabels.mock.calls[0][0]).toHaveLength(1);
     });
 
     it('skips when another sweep is already in flight, without calling the API', async () => {
@@ -156,6 +169,7 @@ describe('ImageLabelService.sweep', () => {
         expect(classify).not.toHaveBeenCalled();
         expect(imageLabelModel.createManyLabels).not.toHaveBeenCalled();
         expect(cronRunLogModel.start).not.toHaveBeenCalled();
+        expect(cronRunLogModel.tryStart).not.toHaveBeenCalled();
     });
 
     it('fails loudly when no API key is configured rather than silently labelling nothing', async () => {

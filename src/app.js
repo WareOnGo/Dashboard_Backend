@@ -160,6 +160,7 @@ app.use('/api/staging', require('./routes/staging'));
  * POST /sweep is cron-triggered via CRON_SECRET; GET /stats is reviewer-gated.
  */
 app.use('/api/image-labels', require('./routes/imageLabels'));
+app.use('/api/enrichment', require('./routes/enrichment'));
 
 /**
  * Map view (POI plotting)

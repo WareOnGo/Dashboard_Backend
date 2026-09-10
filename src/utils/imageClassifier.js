@@ -114,8 +114,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * Only the URL is sent; OpenAI fetches the bytes from R2 itself.
  */
 async function callModel(model, imageUrl, prompt, schema, {
-    detail = 'low', maxAttempts = 5, schemaName = 'image_label',
+    detail = 'low', maxAttempts = 5, schemaName = 'image_label', signal,
 } = {}) {
+    const budget = require('./enrichmentBudget');
+    const pause = (ms) => signal ? budget.sleep(ms, signal) : sleep(ms);
     const body = {
         model,
         input: [{
@@ -129,6 +131,7 @@ async function callModel(model, imageUrl, prompt, schema, {
     };
 
     for (let attempt = 0; ; attempt++) {
+        if (signal?.aborted) return { error: 'Enrichment time budget exhausted' };
         const started = Date.now();
         let res;
         try {
@@ -139,10 +142,12 @@ async function callModel(model, imageUrl, prompt, schema, {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify(body),
+                signal,
             });
         } catch (err) {
+            if (signal?.aborted) return { error: 'Enrichment time budget exhausted' };
             if (attempt < maxAttempts - 1) {
-                await sleep(2 ** attempt * 1000);
+                try { await pause(2 ** attempt * 1000); } catch { return { error: 'Enrichment time budget exhausted' }; }
                 continue;
             }
             return { error: `network: ${err.message}` };
@@ -151,7 +156,8 @@ async function callModel(model, imageUrl, prompt, schema, {
         if (!res.ok) {
             const text = await res.text();
             if ((res.status === 429 || res.status >= 500) && attempt < maxAttempts - 1) {
-                await sleep(2 ** attempt * 1000 + Math.floor(Math.random() * 500));
+                try { await pause(2 ** attempt * 1000 + Math.floor(Math.random() * 500)); }
+                catch { return { error: 'Enrichment time budget exhausted' }; }
                 continue;
             }
             return { error: `http ${res.status}: ${text.slice(0, 300)}` };

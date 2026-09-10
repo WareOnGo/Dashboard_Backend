@@ -1,4 +1,5 @@
 const axios = require('axios');
+const { check: checkBudget } = require('./enrichmentBudget');
 
 /**
  * The one place a paid Mapbox Directions request is made.
@@ -112,6 +113,8 @@ async function fetchLeg(token, from, to, {
     // waits 40 seconds for it will be deleted by whoever runs the suite next.
     sleepFn = sleep,
     retryDelaysMs = RETRY_DELAYS_MS,
+    signal,
+    requireValidResponse = false,
 } = {}) {
     // Mapbox coordinates are lng,lat — the opposite order to how every row in this
     // codebase reads. Transposing them silently returns a plausible route between
@@ -125,12 +128,14 @@ async function fetchLeg(token, from, to, {
     let lastStatus;
 
     for (let attempt = 0; attempt <= retryDelaysMs.length; attempt++) {
+        checkBudget(signal);
         let res;
         try {
             // validateStatus lets a 429 body (and its Retry-After header) reach us
             // instead of arriving as a thrown error with the details buried.
-            res = await get(url, { timeout: timeoutMs, validateStatus: () => true });
+            res = await get(url, { timeout: timeoutMs, validateStatus: () => true, ...(signal ? { signal } : {}) });
         } catch (err) {
+            checkBudget(signal);
             // A network fault or timeout. Recoverable, so keep trying.
             lastStatus = err && err.response && err.response.status;
             if (attempt < retryDelaysMs.length) {
@@ -142,6 +147,9 @@ async function fetchLeg(token, from, to, {
         }
 
         const status = res && res.status;
+        if (status >= 400 && !RETRYABLE_STATUS.has(status) && status !== 422) {
+            throw new DirectionsUnavailableError(`Directions returned HTTP ${status}`, status);
+        }
         if (status !== undefined && RETRYABLE_STATUS.has(status)) {
             lastStatus = status;
             if (attempt < retryDelaysMs.length) {
@@ -154,6 +162,9 @@ async function fetchLeg(token, from, to, {
 
         const route = res && res.data && res.data.routes && res.data.routes[0];
         if (!route || !Number.isFinite(route.distance) || !Number.isFinite(route.duration)) {
+            if (requireValidResponse && !['NoRoute', 'NoSegment'].includes(res?.data?.code)) {
+                throw new DirectionsUnavailableError('Directions returned an invalid route response', status);
+            }
             // Mapbox answered and found nothing. A genuine "not routable", which the
             // caller is entitled to record as such.
             return null;
@@ -286,6 +297,8 @@ async function fetchInterleaved(token, origin, destinations, {
     http = null,
     sleepFn = sleep,
     retryDelaysMs = RETRY_DELAYS_MS,
+    signal,
+    requireValidResponse = false,
 } = {}) {
     const o = `${origin.lng},${origin.lat}`;
     const coords = [o];
@@ -298,15 +311,20 @@ async function fetchInterleaved(token, origin, destinations, {
     const get = http || ((u, c) => axios.get(u, c));
 
     for (let attempt = 0; attempt <= retryDelaysMs.length; attempt++) {
+        checkBudget(signal);
         let res;
         try {
-            res = await get(url, { timeout: timeoutMs, validateStatus: () => true });
+            res = await get(url, { timeout: timeoutMs, validateStatus: () => true, ...(signal ? { signal } : {}) });
         } catch (err) {
+            checkBudget(signal);
             if (attempt < retryDelaysMs.length) { await sleepFn(retryDelaysMs[attempt]); continue; }
             throw new DirectionsUnavailableError(
                 `Directions batch failed: ${err && err.message}`, err && err.response && err.response.status);
         }
 
+        if (res?.status >= 400 && !RETRYABLE_STATUS.has(res.status) && res.status !== 422) {
+            throw new DirectionsUnavailableError(`Directions batch returned HTTP ${res.status}`, res.status);
+        }
         if (res && RETRYABLE_STATUS.has(res.status)) {
             if (attempt < retryDelaysMs.length) {
                 const advised = retryAfterMs(res.headers);
@@ -320,12 +338,18 @@ async function fetchInterleaved(token, origin, destinations, {
             && res.data.routes[0].legs;
         // Expected legs for N destinations after dropping the trailing return: 2N-1.
         if (!Array.isArray(legs) || legs.length !== destinations.length * 2 - 1) {
+            if (requireValidResponse && !['NoRoute', 'NoSegment'].includes(res?.data?.code)) {
+                throw new DirectionsUnavailableError('Directions returned an invalid batch response', res?.status);
+            }
             return null;   // rejected as a batch, or an unexpected shape
         }
 
         return destinations.map((_, i) => {
             const leg = legs[i * 2];
-            if (!leg || !Number.isFinite(leg.distance) || !Number.isFinite(leg.duration)) return null;
+            if (!leg || !Number.isFinite(leg.distance) || !Number.isFinite(leg.duration)) {
+                if (requireValidResponse) throw new DirectionsUnavailableError('Directions returned an invalid batch leg', res?.status);
+                return null;
+            }
             return { km: leg.distance / 1000, minutes: leg.duration / 60, geometry: null };
         });
     }

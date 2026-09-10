@@ -12,6 +12,7 @@ const VisitNoteModel = require('./models/visitNoteModel');
 const ImageLabelModel = require('./models/imageLabelModel');
 const CronRunLogModel = require('./models/cronRunLogModel');
 const GeoModel = require('./models/geoModel');
+const WarehouseProximityModel = require('./models/warehouseProximityModel');
 
 // Import Services
 const WarehouseService = require('./services/warehouseService');
@@ -25,6 +26,8 @@ const SettingsService = require('./services/settingsService');
 const VisitNoteService = require('./services/visitNoteService');
 const ImageLabelService = require('./services/imageLabelService');
 const GeoService = require('./services/geoService');
+const WarehouseProximityService = require('./services/warehouseProximityService');
+const WarehouseEnrichmentService = require('./services/warehouseEnrichmentService');
 
 // Import Controllers
 const WarehouseController = require('./controllers/warehouseController');
@@ -276,6 +279,15 @@ class Container {
             const cronRunLogModel = container.resolve('cronRunLogModel');
             return new ImageLabelService(imageLabelModel, cronRunLogModel);
         });
+
+        this.registerSingleton('warehouseProximityModel', () => new WarehouseProximityModel(database.getClient()));
+        this.registerSingleton('warehouseProximityService', container => new WarehouseProximityService(
+            container.resolve('warehouseProximityModel'), container.resolve('cronRunLogModel'),
+        ));
+        this.registerSingleton('warehouseEnrichmentService', container => new WarehouseEnrichmentService(
+            container.resolve('imageLabelService'), container.resolve('warehouseProximityService'),
+            container.resolve('cronRunLogModel'),
+        ));
 
         // Map view (POIs, warehouses as points)
         this.registerSingleton('geoModel', () => {

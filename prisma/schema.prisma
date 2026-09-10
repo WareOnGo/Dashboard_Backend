@@ -553,8 +553,8 @@ model AppSetting {
 /// Precomputed proximity from a warehouse to the nearest landmark of each category.
 /// One row per (warehouseId, category).
 ///
-/// DERIVED, not submitted: written only by scripts/backfillWarehouseProximity.js,
-/// never by a warehouse POST/PUT. Deliberately absent from warehouseValidator and
+/// DERIVED, not submitted: written by the proximity backfill and scheduled backend
+/// enrichment. Never accepted from a warehouse POST/PUT. Absent from warehouseValidator and
 /// StagingService.WAREHOUSE_DATA_FIELDS — the same reasoning as Warehouse.micromarket.
 ///
 /// `category` is free text rather than an enum, so a twelfth landmark type is one

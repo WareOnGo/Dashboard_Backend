@@ -21,6 +21,33 @@ const capture = () => {
 };
 
 describe('fetchLeg', () => {
+    test('enrichment treats malformed provider responses as unavailable, not an unreachable landmark', async () => {
+        await expect(fetchLeg('tok', { lat: 1, lng: 2 }, { lat: 3, lng: 4 }, {
+            requireValidResponse: true, http: async () => ({ status: 200, data: {} }),
+        })).rejects.toThrow(DirectionsUnavailableError);
+    });
+
+    test('strict enrichment still accepts an explicit no-route response', async () => {
+        expect(await fetchLeg('tok', { lat: 1, lng: 2 }, { lat: 3, lng: 4 }, {
+            requireValidResponse: true, http: async () => ({ status: 200, data: { code: 'NoRoute' } }),
+        })).toBeNull();
+    });
+
+    test('expired enrichment does not start a paid routing request', async () => {
+        const controller = new AbortController();
+        controller.abort();
+        const http = jest.fn();
+        await expect(fetchLeg('tok', { lat: 1, lng: 2 }, { lat: 3, lng: 4 }, {
+            signal: controller.signal, http,
+        })).rejects.toMatchObject({ name: 'AbortError' });
+        expect(http).not.toHaveBeenCalled();
+    });
+
+    test('authentication failures never become stored no-route answers', async () => {
+        await expect(fetchLeg('tok', { lat: 1, lng: 2 }, { lat: 3, lng: 4 }, {
+            http: async () => ({ status: 401, data: {} }),
+        })).rejects.toMatchObject({ status: 401 });
+    });
     test('converts metres and seconds to km and minutes', async () => {
         const r = await fetchLeg('tok', { lat: 1, lng: 2 }, { lat: 3, lng: 4 },
             { http: () => Promise.resolve(routed(39412, 5231)) });

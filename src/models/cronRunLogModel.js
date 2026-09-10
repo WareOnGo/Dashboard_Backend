@@ -18,6 +18,13 @@ class CronRunLogModel extends BaseModel {
         this.model = this.prisma.cronRunLog;
     }
 
+    async bounded(operation) {
+        return this.prisma.$transaction(async tx => {
+            await tx.$executeRawUnsafe("SET LOCAL statement_timeout = '5s'");
+            return operation(tx.cronRunLog);
+        }, { maxWait: 3000, timeout: 8000 });
+    }
+
     /**
      * Is a run of this job currently in flight and still fresh?
      *
@@ -52,12 +59,27 @@ class CronRunLogModel extends BaseModel {
      */
     async start(jobName, metadata = null) {
         try {
-            return await this.model.create({
+            return await this.bounded(model => model.create({
                 data: { jobName, status: 'RUNNING', durationMs: 0, metadata },
-            });
+            }));
         } catch (error) {
             this.handleDatabaseError(error);
         }
+    }
+
+    /** Claim a run across instances without holding a connection during API work. */
+    async tryStart(jobName, staleAfterMs, metadata = null) {
+        return this.prisma.$transaction(async (tx) => {
+            await tx.$executeRawUnsafe("SET LOCAL statement_timeout = '5s'");
+            const [lock] = await tx.$queryRaw`
+                SELECT pg_try_advisory_xact_lock(hashtext(${jobName})::bigint) AS acquired`;
+            if (!lock.acquired) return null;
+            const existing = await tx.cronRunLog.findFirst({
+                where: { jobName, status: 'RUNNING', ranAt: { gte: new Date(Date.now() - staleAfterMs) } },
+            });
+            if (existing) return null;
+            return tx.cronRunLog.create({ data: { jobName, status: 'RUNNING', durationMs: 0, metadata } });
+        }, { maxWait: 5000, timeout: 8000 });
     }
 
     /**
@@ -71,10 +93,10 @@ class CronRunLogModel extends BaseModel {
      */
     async finish(id, status, durationMs, metadata = null, notes = null) {
         try {
-            return await this.model.update({
+            return await this.bounded(model => model.update({
                 where: { id },
                 data: { status, durationMs, metadata, notes },
-            });
+            }));
         } catch (error) {
             this.handleDatabaseError(error);
         }
@@ -88,11 +110,11 @@ class CronRunLogModel extends BaseModel {
      */
     async recent(jobName, limit = 10) {
         try {
-            return await this.model.findMany({
+            return await this.bounded(model => model.findMany({
                 where: { jobName },
                 orderBy: { ranAt: 'desc' },
                 take: limit,
-            });
+            }));
         } catch (error) {
             this.handleDatabaseError(error);
         }

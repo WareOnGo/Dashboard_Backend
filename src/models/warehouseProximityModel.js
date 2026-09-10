@@ -89,6 +89,60 @@ class WarehouseProximityModel extends BaseModel {
         }
     }
 
+    /** Missing/stale categories, with durable retry cooldowns in the existing run log. */
+    async findPending(categories, limit = 5) {
+        if (!categories.length) return [];
+        const specs = Prisma.join(categories.map(c => Prisma.sql`(${c.key})`));
+        return this.prisma.$queryRaw`
+            WITH categories(category) AS (VALUES ${specs})
+            SELECT d."warehouseId" AS id, d.latitude AS lat, d.longitude AS lng
+            FROM "WarehouseData" d
+            WHERE d.geog IS NOT NULL
+              AND EXISTS (
+                SELECT 1 FROM categories c WHERE NOT EXISTS (
+                    SELECT 1 FROM warehouse_proximity p
+                    WHERE p."warehouseId" = d."warehouseId" AND p.category = c.category
+                      AND p."computedFromLat" IS NOT DISTINCT FROM d.latitude
+                      AND p."computedFromLng" IS NOT DISTINCT FROM d.longitude
+                )
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM "CronRunLog" r
+                WHERE r."jobName" = 'warehouse_proximity:' || d."warehouseId"::text
+                  AND r.status = 'FAILED' AND r."ranAt" > now() - interval '1 day'
+                  AND (r.metadata->>'lat')::double precision IS NOT DISTINCT FROM d.latitude
+                  AND (r.metadata->>'lng')::double precision IS NOT DISTINCT FROM d.longitude
+                  AND (r.metadata->>'retryAt')::timestamptz > now()
+              )
+            ORDER BY d."warehouseId" DESC LIMIT ${limit}`;
+    }
+
+    async rowsFor(warehouseId) {
+        return this.model.findMany({ where: { warehouseId } });
+    }
+
+    /** Each spatial statement has its own short transaction; none spans routing. */
+    async bounded(method, ...args) {
+        return this.prisma.$transaction(async tx => {
+            await tx.$executeRawUnsafe("SET LOCAL statement_timeout = '5s'");
+            return new WarehouseProximityModel(tx)[method](...args);
+        }, { maxWait: 3000, timeout: 8000 });
+    }
+
+    /** Don't publish results if a coordinate edit arrived while we were routing. */
+    async upsertCurrent(warehouse, rows) {
+        return this.prisma.$transaction(async tx => {
+            await tx.$executeRawUnsafe("SET LOCAL statement_timeout = '5s'");
+            const current = await tx.$queryRaw`
+                SELECT "warehouseId" FROM "WarehouseData"
+                WHERE "warehouseId" = ${warehouse.id}
+                  AND latitude = ${warehouse.lat} AND longitude = ${warehouse.lng}
+                FOR UPDATE`;
+            if (!current.length) return 0;
+            return new WarehouseProximityModel(tx).upsertMany(warehouse.id, rows, { onlyMissingOrStale: true });
+        }, { maxWait: 3000, timeout: 8000 });
+    }
+
     /**
      * The k nearest POIs to one point, per category, in one query.
      *
@@ -189,7 +243,7 @@ class WarehouseProximityModel extends BaseModel {
      * `attempts` accumulates in SQL rather than in JS so a bounded retry stays
      * correct if two processes ever run at once.
      */
-    async upsertMany(warehouseId, rows) {
+    async upsertMany(warehouseId, rows, { onlyMissingOrStale = false } = {}) {
         if (!rows.length) return 0;
         const perRow = 17;
         const tuples = rows.map((_, i) => {
@@ -231,7 +285,11 @@ class WarehouseProximityModel extends BaseModel {
                 "poiWatermark" = EXCLUDED."poiWatermark",
                 "computedAt" = now(),
                 attempts = CASE WHEN EXCLUDED.status = 'ROUTING_FAILED'
-                                THEN warehouse_proximity.attempts + 1 ELSE 1 END`;
+                                  AND warehouse_proximity."computedFromLat" IS NOT DISTINCT FROM EXCLUDED."computedFromLat"
+                                  AND warehouse_proximity."computedFromLng" IS NOT DISTINCT FROM EXCLUDED."computedFromLng"
+                                THEN warehouse_proximity.attempts + 1 ELSE 1 END
+                ${onlyMissingOrStale ? `WHERE warehouse_proximity."computedFromLat" IS DISTINCT FROM EXCLUDED."computedFromLat"
+                    OR warehouse_proximity."computedFromLng" IS DISTINCT FROM EXCLUDED."computedFromLng"` : ''}`;
         try {
             return await this.prisma.$executeRawUnsafe(sql, ...params);
         } catch (error) {

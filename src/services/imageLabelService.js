@@ -1,6 +1,7 @@
 // src/services/imageLabelService.js
 const BaseService = require('./baseService');
 const { PRICING, classify, classifyDocumentKind } = require('../utils/imageClassifier');
+const { check } = require('../utils/enrichmentBudget');
 
 /** Job name recorded in cron_run_log. */
 const JOB_NAME = 'sweep_warehouse_image_labels';
@@ -73,14 +74,14 @@ class ImageLabelService extends BaseService {
      * @param {boolean} [opts.dryRun] - Report the backlog, call no APIs, write nothing
      * @returns {Promise<Object>} Summary of the run
      */
-    async sweep({ limit = DEFAULT_LIMIT, model = DEFAULT_MODEL, dryRun = false } = {}) {
+    async sweep({ limit = DEFAULT_LIMIT, model = DEFAULT_MODEL, dryRun = false, signal } = {}) {
         return this.executeOperation(async () => {
             const effectiveLimit = Math.min(Math.max(1, Number(limit) || DEFAULT_LIMIT), MAX_LIMIT);
 
             if (dryRun) {
                 const [remaining, stale] = await Promise.all([
-                    this.imageLabelModel.countUnlabelled(),
-                    this.imageLabelModel.countStale(),
+                    this.imageLabelModel.bounded('countUnlabelled'),
+                    this.imageLabelModel.bounded('countStale'),
                 ]);
                 return {
                     status: 'DRY_RUN', model, limit: effectiveLimit,
@@ -98,30 +99,30 @@ class ImageLabelService extends BaseService {
                 throw error;
             }
 
-            const inFlight = await this.cronRunLogModel.findInFlight(JOB_NAME, STALE_RUN_MS);
-            if (inFlight) {
+            const run = await this.cronRunLogModel.tryStart(JOB_NAME, STALE_RUN_MS, { model, limit: effectiveLimit });
+            if (!run) {
                 return {
                     status: 'SKIPPED',
                     reason: 'another sweep is already running',
-                    startedAt: inFlight.ranAt,
                     processed: 0, labelled: 0, failed: 0,
                 };
             }
 
-            const run = await this.cronRunLogModel.start(JOB_NAME, { model, limit: effectiveLimit });
             const started = Date.now();
 
             try {
-                const summary = await this.processBatch(effectiveLimit, model);
+                const summary = await this.processBatch(effectiveLimit, model, signal);
+                const status = summary.failed ? (summary.labelled ? 'PARTIAL' : 'FAILED')
+                    : summary.deferred ? 'PARTIAL' : 'SUCCESS';
                 const durationMs = Date.now() - started;
                 await this.cronRunLogModel.finish(
                     run.id,
-                    summary.failed && !summary.labelled ? 'FAILED' : 'SUCCESS',
+                    status,
                     durationMs,
                     summary,
                     summary.failed ? `${summary.failed} image(s) failed; they stay unlabelled and retry next sweep` : null,
                 );
-                return { status: 'SUCCESS', model, limit: effectiveLimit, durationMs, ...summary };
+                return { status, model, limit: effectiveLimit, durationMs, ...summary };
             } catch (error) {
                 await this.cronRunLogModel
                     .finish(run.id, 'FAILED', Date.now() - started, null, error.message)
@@ -140,29 +141,38 @@ class ImageLabelService extends BaseService {
      * mechanism, and why no dead-letter table is needed.
      * @private
      */
-    async processBatch(limit, model) {
+    async processBatch(limit, model, signal) {
+        check(signal);
         // Prune first, so a stale row can never block a URL that is still in use
         // from being re-labelled in this same run.
-        const pruned = await this.imageLabelModel.pruneStale();
+        const pruned = await this.imageLabelModel.bounded('pruneStale');
+        check(signal);
 
-        const todo = await this.imageLabelModel.findUnlabelled(limit);
+        const todo = await this.imageLabelModel.bounded('findUnlabelled', limit);
         if (!todo.length) {
             return { processed: 0, labelled: 0, failed: 0, pruned, remaining: 0, costUsd: 0, errors: [] };
         }
 
-        let labelled = 0, failed = 0, inTok = 0, outTok = 0;
+        let labelled = 0, failed = 0, inTok = 0, outTok = 0, processed = 0;
         const errors = [];
 
         for (let offset = 0; offset < todo.length; offset += CHUNK) {
+            if (signal?.aborted) break;
             const batch = todo.slice(offset, offset + CHUNK);
             const results = await this.runPool(
                 batch,
-                (row) => classify(model, row.imageUrl),
+                async (row) => {
+                    if (signal?.aborted) return { deferred: true };
+                    processed++;
+                    try { return await classify(model, row.imageUrl, signal ? { signal } : {}); }
+                    catch { return { error: signal?.aborted ? 'Enrichment time budget exhausted' : 'Image classification failed' }; }
+                },
                 DEFAULT_CONCURRENCY,
             );
 
             const rows = [];
             results.forEach((res, i) => {
+                if (res.deferred) return;
                 if (res.error) {
                     failed++;
                     if (errors.length < 20) errors.push({ imageUrl: batch[i].imageUrl, error: res.error });
@@ -192,10 +202,14 @@ class ImageLabelService extends BaseService {
             // backfill script can fill it in later. Losing the scene label over it
             // would be a strictly worse trade.
             const docs = rows.filter((r) => r.classification === 'DOCUMENT');
-            if (docs.length) {
+            if (docs.length && !signal?.aborted) {
                 const kinds = await this.runPool(
                     docs,
-                    (row) => classifyDocumentKind(model, row.imageUrl),
+                    async (row) => {
+                        if (signal?.aborted) return { error: 'Enrichment time budget exhausted' };
+                        try { return await classifyDocumentKind(model, row.imageUrl, signal ? { signal } : {}); }
+                        catch { return { error: 'Document classification failed' }; }
+                    },
                     DEFAULT_CONCURRENCY,
                 );
                 kinds.forEach((k, i) => {
@@ -206,18 +220,19 @@ class ImageLabelService extends BaseService {
                 });
             }
 
-            if (rows.length) labelled += await this.imageLabelModel.createManyLabels(rows);
+            if (rows.length) labelled += await this.imageLabelModel.bounded('createManyLabels', rows);
         }
 
         const price = PRICING[model];
         const costUsd = price ? (inTok / 1e6) * price.in + (outTok / 1e6) * price.out : null;
 
         return {
-            processed: todo.length,
+            processed,
+            deferred: todo.length - processed,
             labelled,
             failed,
             pruned,
-            remaining: await this.imageLabelModel.countUnlabelled(),
+            remaining: await this.imageLabelModel.bounded('countUnlabelled'),
             costUsd: costUsd === null ? null : Number(costUsd.toFixed(4)),
             errors,
         };
