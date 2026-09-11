@@ -42,6 +42,13 @@ router.get('/',
     warehouseController.getAllWarehouses
 );
 
+/** Authenticated, non-sensitive metadata for dashboard filter comboboxes. */
+router.get('/filter-options',
+    authMiddleware.authenticateJWT,
+    authMiddleware.requireAccess(CAPS.DASHBOARD),
+    warehouseController.getFilterOptions
+);
+
 /**
  * GET /api/warehouses/search
  */

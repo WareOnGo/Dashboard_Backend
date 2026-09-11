@@ -1,6 +1,7 @@
 // src/models/geoModel.js
 const { Prisma } = require('@prisma/client');
 const BaseModel = require('./baseModel');
+const { warehouseMapFilters } = require('../utils/warehouseMapFilters');
 
 /**
  * GeoModel — viewport queries for the map view.
@@ -82,10 +83,10 @@ class GeoModel extends BaseModel {
     /**
      * Warehouses inside a bbox, as points.
      *
-     * Deliberately lean: id, availability and coordinates only. The map needs a
-     * dot and a colour; opening a warehouse fetches the full record.
+     * Deliberately lean: pin identity, labels, availability and coordinates.
+     * Opening a warehouse fetches the full record.
      */
-    async warehousesInBbox(bbox, limit) {
+    async warehousesInBbox(bbox, limit, filters = {}, microMarkets = []) {
         try {
             const envelope = Prisma.sql`ST_MakeEnvelope(${bbox.west}, ${bbox.south}, ${bbox.east}, ${bbox.north}, 4326)::geography`;
             return await this.prisma.$queryRaw`
@@ -94,6 +95,10 @@ class GeoModel extends BaseModel {
                 FROM "WarehouseData" d
                 JOIN "Warehouse" w ON w.id = d."warehouseId"
                 WHERE d.geog && ${envelope}
+                  AND d.longitude BETWEEN ${bbox.west} AND ${bbox.east}
+                  AND d.latitude BETWEEN ${bbox.south} AND ${bbox.north}
+                ${warehouseMapFilters(filters, microMarkets)}
+                ORDER BY w.id
                 LIMIT ${limit}
             `;
         } catch (error) {

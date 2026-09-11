@@ -89,6 +89,14 @@ class WarehouseController extends BaseController {
         }
     });
 
+    getFilterOptions = this.asyncHandler(async (req, res) => {
+        const options = await this.warehouseService.getFilterOptions();
+        req.audit('READ', 'warehouse', null, 'Listed warehouse filter options', {
+            locationCount: options.locations.length,
+        });
+        this.sendSuccess(res, options);
+    });
+
     /**
      * GET /api/warehouses/coordinates
      * Lightweight { id, lat, lng } for ALL warehouses matching the current filters

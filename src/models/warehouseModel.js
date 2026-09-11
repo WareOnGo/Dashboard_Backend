@@ -13,6 +13,22 @@ class WarehouseModel extends BaseModel {
         this.model = this.prisma.warehouse;
     }
 
+    /** Return only distinct location pairs and types, never full listing data. */
+    async findFilterOptions() {
+        try {
+            const [locations, types] = await Promise.all([
+                this.model.groupBy({ by: ['state', 'city'] }),
+                this.model.groupBy({ by: ['warehouseType'] }),
+            ]);
+            return {
+                locations: locations.map(({ state, city }) => ({ state, city })),
+                warehouseTypes: types.map(({ warehouseType }) => warehouseType).filter(Boolean),
+            };
+        } catch (error) {
+            this.handleDatabaseError(error);
+        }
+    }
+
     /**
      * Find all warehouses with WarehouseData relationships
      * @param {Object} options - Query options

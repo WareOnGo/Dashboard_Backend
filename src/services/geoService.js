@@ -1,5 +1,6 @@
 // src/services/geoService.js
 const BaseService = require('./baseService');
+const WarehouseValidator = require('../validators/warehouseValidator');
 
 /**
  * Rows returned per layer per viewport request.
@@ -38,9 +39,10 @@ const POI_CATEGORIES = [
  * be handed to any other GIS tool unchanged.
  */
 class GeoService extends BaseService {
-    constructor(geoModel) {
+    constructor(geoModel, microMarketService = null) {
         super();
         this.geoModel = geoModel;
+        this.microMarketService = microMarketService;
     }
 
     /**
@@ -133,14 +135,31 @@ class GeoService extends BaseService {
     }
 
     /** Warehouses for a viewport. */
-    async warehouses({ bbox, limit }) {
+    async warehouses({ bbox, limit, afterId, ...query }) {
         return this.executeOperation(async () => {
             const box = this.parseBbox(bbox);
             const cap = this.clampLimit(limit);
-            const rows = await this.geoModel.warehousesInBbox(box, cap);
-            return this.toFeatureCollection(rows, (r) => ({
+            const filters = this.validateData(query, data => WarehouseValidator.validateQuery(data));
+            // Optional keyset cursor for complete, bounded warehouse-point reads
+            // (e.g. suggesting a city for a freshly drawn micro-market area).
+            if (afterId != null) {
+                if (!/^\d+$/.test(String(afterId)) || !Number.isSafeInteger(Number(afterId)) || Number(afterId) < 0) {
+                    const error = this.validationError('afterId must be a non-negative integer');
+                    error.issues[0].path = ['afterId'];
+                    throw error;
+                }
+                filters.afterId = Number(afterId);
+            }
+            const term = filters.search?.trim();
+            const microMarkets = term && this.microMarketService
+                ? await this.microMarketService.namesMatching(term)
+                : [];
+            const rows = await this.geoModel.warehousesInBbox(box, cap + 1, filters, microMarkets);
+            const fc = this.toFeatureCollection(rows.slice(0, cap), (r) => ({
                 id: r.id, city: r.city, availability: r.availability, warehouseType: r.warehouseType,
             }), cap);
+            fc.truncated = rows.length > cap;
+            return fc;
         });
     }
 

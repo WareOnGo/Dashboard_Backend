@@ -23,6 +23,11 @@ class WarehouseService extends BaseService {
         this.microMarketService = microMarketService;
     }
 
+    /** Lightweight suggestions from all listings, independent of pagination. */
+    async getFilterOptions() {
+        return this.warehouseModel.findFilterOptions();
+    }
+
     /**
      * Stamp `micromarket` onto a warehouse payload from its coordinates, so the
      * tag is derived server-side the moment coordinates are known (i.e. right
@@ -395,6 +400,7 @@ class WarehouseService extends BaseService {
         const containsFields = [
             'city', 'state', 'zone', 'warehouseType',
             'warehouseOwnerType', 'availability', 'isBroker', 'uploadedBy',
+            'contactPerson', 'listing_type', 'status',
         ];
         for (const field of containsFields) {
             if (filters[field]) {
