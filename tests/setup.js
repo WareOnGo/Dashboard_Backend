@@ -1,9 +1,6 @@
 // Test setup file
 // Add any global test configuration here
 
-// Set test timeout
-jest.setTimeout(10000);
-
 // Mock environment variables for tests
 process.env.NODE_ENV = 'test';
 
@@ -18,3 +15,9 @@ if (process.env.VERBOSE_TESTS !== 'true') {
     error: jest.fn()
   };
 }
+// Node's default HTTP agents can retain idle sockets after Supertest closes its
+// temporary servers. Close those clients explicitly instead of forcing Jest out.
+afterAll(() => {
+  require('http').globalAgent.destroy();
+  require('https').globalAgent.destroy();
+});

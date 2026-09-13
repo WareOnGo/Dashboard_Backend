@@ -177,7 +177,7 @@ router.put('/:id',
  */
 router.delete('/:id',
     authMiddleware.authenticateJWT,
-    authMiddleware.requireAdmin,
+    authMiddleware.requireAccess(CAPS.ADMIN),
     warehouseController.deleteWarehouse
 );
 
@@ -228,7 +228,7 @@ router.post('/files/:fileName/validate',
  */
 router.delete('/files/:fileName',
     authMiddleware.authenticateJWT,
-    authMiddleware.requireAdmin,
+    authMiddleware.requireAccess(CAPS.ADMIN),
     warehouseController.deleteUploadedFile
 );
 

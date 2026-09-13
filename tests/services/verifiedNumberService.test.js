@@ -72,7 +72,7 @@ beforeEach(() => {
 describe('create', () => {
     it('generates an empID rather than trusting the caller', async () => {
         const { model, service } = make();
-        const created = await service.create({ name: 'New Hire', email: 'new@wareongo.com' }, ACTOR);
+        const created = await service.create({ name: 'New Hire', email: 'new@wareongo.com', phone_number: '919800000001' }, ACTOR);
 
         const written = model.createOne.mock.calls[0][0];
         expect(written.empID).toMatch(/^[A-Z0-9]{6}$/);
@@ -97,7 +97,7 @@ describe('create', () => {
         });
 
         await expectStatus(
-            service.create({ name: 'Impostor', email: 'ASHA@wareongo.com' }, ACTOR),
+            service.create({ name: 'Impostor', email: 'ASHA@wareongo.com', phone_number: '919800000001' }, ACTOR),
             409
         );
     });

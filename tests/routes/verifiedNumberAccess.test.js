@@ -90,7 +90,7 @@ describe('GET /api/verified-numbers (POC picker)', () => {
 describe('admin routes', () => {
     const CASES = [
         ['get', '/api/verified-numbers/admin', undefined, 'adminList'],
-        ['post', '/api/verified-numbers/admin', { name: 'X', email: 'x@wareongo.com' }, 'adminCreate'],
+        ['post', '/api/verified-numbers/admin', { name: 'X', email: 'x@wareongo.com', phone_number: '919800000001' }, 'adminCreate'],
         ['patch', '/api/verified-numbers/admin/1', { name: 'X' }, 'adminUpdate'],
     ];
 

@@ -1,5 +1,6 @@
 const { isAdmin } = require('./admin');
 const database = require('./database');
+const LookupCache = require('./lookupCache');
 
 /**
  * How long a resolved capability set is trusted, in ms.
@@ -17,8 +18,7 @@ const database = require('./database');
  */
 const CAPABILITY_TTL_MS = 30 * 1000;
 
-/** email (lowercased) -> { caps, at } */
-const capabilityCache = new Map();
+const capabilityCache = new LookupCache(CAPABILITY_TTL_MS);
 
 /**
  * Capability-based (service-based) access control.
@@ -50,7 +50,7 @@ const CAP_COLUMN = Object.freeze({
 });
 
 const COLUMN_SELECT = Object.freeze(
-    Object.values(CAP_COLUMN).reduce((acc, col) => ({ ...acc, [col]: true }), {})
+    Object.values(CAP_COLUMN).reduce((acc, col) => ({ ...acc, [col]: true }), { is_active: true })
 );
 
 /** A capability map with every capability set to `value`. */
@@ -63,7 +63,7 @@ const allCaps = (value) =>
  * @param {string} [email]
  */
 function invalidateCapabilities(email) {
-    if (typeof email === 'string') capabilityCache.delete(email.toLowerCase());
+    if (typeof email === 'string') capabilityCache.clear(email.toLowerCase());
     else capabilityCache.clear();
 }
 
@@ -82,32 +82,30 @@ async function resolveCapabilities(email) {
     if (!email || typeof email !== 'string') return allCaps(false);
 
     const key = email.toLowerCase();
-    const hit = capabilityCache.get(key);
-    if (hit && Date.now() - hit.at < CAPABILITY_TTL_MS) return hit.caps;
-
     try {
-        const prisma = database.getClient();
-        const row = await prisma.verifiedNumber.findFirst({
-            // Match case-insensitively: OAuth emails are normally lowercase but the
-            // stored VerifiedNumber.email may not be.
-            where: { email: { equals: email, mode: 'insensitive' } },
-            select: COLUMN_SELECT,
-        });
-        const caps = !row
-            ? allCaps(false)
-            : row.adminAccess
-                ? allCaps(true) // DB admin implies everything
-                : {
-                    [CAPS.DASHBOARD]: !!row.dashboardAccess,
-                    [CAPS.CALL_DASHBOARD]: !!row.callDashboardAccess,
-                    [CAPS.REVIEW]: !!row.reviewerAccess,
-                    [CAPS.ADMIN]: false,
-                };
+        return await capabilityCache.get(key, async () => {
+            const prisma = database.getClient();
+            const row = await prisma.verifiedNumber.findFirst({
+                // Match case-insensitively: OAuth emails are normally lowercase but the
+                // stored VerifiedNumber.email may not be.
+                where: { email: { equals: email, mode: 'insensitive' } },
+                select: COLUMN_SELECT,
+            });
+            const caps = !row || row.is_active !== true
+                ? allCaps(false)
+                : row.adminAccess
+                    ? allCaps(true) // DB admin implies everything
+                    : {
+                        [CAPS.DASHBOARD]: !!row.dashboardAccess,
+                        [CAPS.CALL_DASHBOARD]: !!row.callDashboardAccess,
+                        [CAPS.REVIEW]: !!row.reviewerAccess,
+                        [CAPS.ADMIN]: false,
+                    };
 
-        // Only successful lookups are cached. A DB failure must retry on the next
-        // request rather than pin "no access" for the whole TTL.
-        capabilityCache.set(key, { caps, at: Date.now() });
-        return caps;
+            // Only successful lookups are cached. A DB failure must retry on the next
+            // request rather than pin "no access" for the whole TTL.
+            return caps;
+        });
     } catch (err) {
         console.error('resolveCapabilities lookup failed:', err.message);
         return allCaps(false); // fail closed

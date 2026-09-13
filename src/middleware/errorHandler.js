@@ -14,6 +14,21 @@ class ErrorHandler {
      * @param {Function} next - Express next function
      */
     static handle(error, req, res, next) {
+        if (res.headersSent) return next(error);
+
+        // Body-parser errors are client errors. Use fixed messages so malformed
+        // request bodies are not reflected back to the caller or into our logs.
+        const bodyErrors = {
+            'entity.parse.failed': [400, 'INVALID_JSON', 'Request body must be valid JSON'],
+            'entity.too.large': [413, 'PAYLOAD_TOO_LARGE', 'Request body is too large'],
+            'charset.unsupported': [415, 'UNSUPPORTED_ENCODING', 'Request character encoding is not supported'],
+            'encoding.unsupported': [415, 'UNSUPPORTED_ENCODING', 'Request content encoding is not supported'],
+        };
+        if (Object.hasOwn(bodyErrors, error.type)) {
+            const [status, code, message] = bodyErrors[error.type];
+            return res.status(status).json(ErrorHandler.createErrorResponse(message, code, req.path));
+        }
+
         // Log error for debugging
         console.error('Error occurred:', {
             message: error.message,

@@ -20,9 +20,9 @@ const backendRoot = path.resolve(harnessRoot, '..', '..');
  *
  *   standard   3 + n            title + index + n property slides + contact
  *   v2         3 + n            title + index + n property slides + POC
- *   v3         3 + n + p        title + index + a details slide per property,
+ *   v3         3 + n + p + ceil(n/12)        title + index + a details slide per property,
  *                               plus a photos slide for each of the p with
- *                               photographs, + POC.
+ *                               photographs, + pros/cons pages + POC.
  *                               The overview map adds one more, but only when
  *                               Mapbox is reachable — these runs block it, so
  *                               the counts here are the offline shape.
@@ -57,16 +57,13 @@ const VARIANTS = {
   },
   v3: {
     label: 'v3 (TCI columns, photos slide, per-site connectivity)',
-    // cover + index + POC, then per warehouse: specification, photographs (only
-    // when it has any), and connectivity. The connectivity slide is skipped only
-    // when a warehouse has neither proximity data nor a map, which does not happen
-    // once the proximity backfill has run.
+    // Offline default fixture shape: cover + index + POC, specifications,
+    // photograph slides, and the pros/cons table (12 rows per page).
+    // Connectivity is opt-in; fixtures carry no CAD selections.
     slides: (warehouses) => 3 + warehouses.length
         + warehouses.filter(hasPhotos).length
-        + warehouses.length,
-    // Fetches an overview map plus one street map per warehouse from Mapbox.
-    // Refused in these runs, so the counts above are the offline shape and the deck
-    // is asserted to survive without any of them.
+        + Math.ceil(warehouses.length / 12),
+    // The overview map is requested but refused by the offline network guard.
     network: true,
   },
   godamwale: {

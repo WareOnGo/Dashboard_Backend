@@ -1,104 +1,41 @@
 const request = require('supertest');
-const app = require('../../src/app-test');
-const { mockController } = require('../../src/routes/warehouse-test');
+const { app, prisma, reset, tokenFor, active } = require('../helpers/app');
+const warehouse = { id: 123, city: 'Indore', contactNumber: '919800000001', WarehouseData: {} };
 
-describe('Warehouse API Routes', () => {
-  beforeEach(() => {
-    // Reset all mocks before each test
-    jest.clearAllMocks();
+beforeEach(() => {
+  reset();
+  prisma.verifiedNumber.findFirst.mockResolvedValue(active());
+});
+const authorized = path => request(app).get(path).set('Authorization', `Bearer ${tokenFor()}`);
+
+test('production list applies pagination and filters and redacts contact data', async () => {
+  prisma.warehouse.findMany.mockResolvedValue([warehouse]);
+  prisma.warehouse.count.mockResolvedValue(15);
+  const { body } = await authorized('/api/warehouses?page=2&limit=10&city=Indore').expect(200);
+  expect(JSON.stringify(body)).not.toContain(warehouse.contactNumber);
+  expect(prisma.warehouse.findMany).toHaveBeenCalledWith(expect.objectContaining({ skip: 10, take: 10 }));
+  const where = prisma.warehouse.findMany.mock.calls[0][0].where;
+  expect(JSON.stringify(where)).toContain('Indore');
+  expect(prisma.warehouse.count).toHaveBeenCalledWith({ where });
+});
+test('production detail loads the requested record and redacts contact data', async () => {
+  prisma.warehouse.findUnique.mockResolvedValue(warehouse);
+  const { body } = await authorized('/api/warehouses/123').expect(200);
+  expect(body.id).toBe(123);
+  expect(body).not.toHaveProperty('contactNumber');
+  expect(prisma.warehouse.findUnique).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 123 } }));
+});
+test.each(['invalid-id', '123junk', '-1', '0', '1.5', '1e2', '2147483648', '9007199254740993'])
+  ('invalid id %s returns 400 before querying warehouses', async id => {
+    await authorized(`/api/warehouses/${id}`).expect(400);
+    expect(prisma.warehouse.findUnique).not.toHaveBeenCalled();
   });
-
-  describe('GET /api/warehouses', () => {
-    it('should return list of warehouses', async () => {
-      const mockWarehouses = {
-        data: [
-          { id: 1, name: 'Warehouse 1', city: 'New York' },
-          { id: 2, name: 'Warehouse 2', city: 'Los Angeles' }
-        ],
-        pagination: { page: 1, limit: 10, total: 2 }
-      };
-
-      // Mock the service method
-      mockController.mockWarehouseService.getAllWarehouses.mockResolvedValue(mockWarehouses);
-
-      const response = await request(app)
-        .get('/api/warehouses')
-        .expect(200);
-
-      expect(response.body).toEqual(mockWarehouses);
-      expect(mockController.mockWarehouseService.getAllWarehouses).toHaveBeenCalledWith({});
-    });
-  });
-
-  describe('GET /api/warehouses/:id', () => {
-    it('should return a specific warehouse', async () => {
-      const mockWarehouse = {
-        id: 1,
-        name: 'Test Warehouse',
-        city: 'New York',
-        state: 'NY'
-      };
-
-      mockController.mockWarehouseService.getWarehouseById.mockResolvedValue(mockWarehouse);
-
-      const response = await request(app)
-        .get('/api/warehouses/1')
-        .expect(200);
-
-      expect(response.body).toEqual(mockWarehouse);
-      expect(mockController.mockWarehouseService.getWarehouseById).toHaveBeenCalledWith(1);
-    });
-
-    it('should return 500 for invalid ID', async () => {
-      const response = await request(app)
-        .get('/api/warehouses/invalid-id')
-        .expect(500);
-
-      expect(response.body).toHaveProperty('error');
-      expect(response.body).toHaveProperty('code', 'INTERNAL_ERROR');
-    });
-  });
-
-  describe('GET /api/warehouses/search', () => {
-    it('should search warehouses with query parameters', async () => {
-      const mockSearchResults = {
-        data: [
-          { id: 1, name: 'NYC Warehouse', city: 'New York', state: 'NY' }
-        ],
-        pagination: { page: 1, limit: 10, total: 1 }
-      };
-
-      mockController.mockWarehouseService.searchWarehouses.mockResolvedValue(mockSearchResults);
-
-      const response = await request(app)
-        .get('/api/warehouses/search?city=New York&state=NY')
-        .expect(200);
-
-      expect(response.body).toEqual(mockSearchResults);
-      expect(mockController.mockWarehouseService.searchWarehouses).toHaveBeenCalledWith({
-        city: 'New York',
-        state: 'NY'
-      });
-    });
-  });
-
-  describe('GET /api/warehouses/statistics', () => {
-    it('should return warehouse statistics', async () => {
-      const mockStats = {
-        totalWarehouses: 10,
-        averageSpace: 5000,
-        totalCapacity: 50000,
-        byState: { NY: 5, CA: 3, TX: 2 }
-      };
-
-      mockController.mockWarehouseService.getWarehouseStatistics.mockResolvedValue(mockStats);
-
-      const response = await request(app)
-        .get('/api/warehouses/statistics')
-        .expect(200);
-
-      expect(response.body).toEqual(mockStats);
-      expect(mockController.mockWarehouseService.getWarehouseStatistics).toHaveBeenCalled();
-    });
-  });
+test('a missing warehouse returns 404', async () => {
+  prisma.warehouse.findUnique.mockResolvedValue(null);
+  await authorized('/api/warehouses/123').expect(404);
+});
+test('list requires authentication before any database lookup', async () => {
+  await request(app).get('/api/warehouses').expect(401);
+  expect(prisma.verifiedNumber.findFirst).not.toHaveBeenCalled();
+  expect(prisma.warehouse.findMany).not.toHaveBeenCalled();
 });

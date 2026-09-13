@@ -469,23 +469,28 @@ Full list with commentary in `.env.example`.
 
 ## Testing
 
-Jest + Supertest, `testEnvironment: node`. DB and external services are mocked so CI needs
-no live Postgres.
+Jest + Supertest exercise the production Express app, routers, authentication,
+controllers, services, and models with database/storage boundaries replaced.
+Test setup blocks live database credentials and external network calls. The
+former duplicate test app/router have been removed; importing `src/app.js` does
+not connect or listen. `index.js` starts the process through `src/server.js`.
 
+```bash
+npm test -- --runInBand       # unit, component, and HTTP tests
+npm run test:regression      # audited behavior regressions
+npm run test:ci              # full suite with enforced coverage floors
+npm run test:integration     # requires a guarded, disposable TEST_DATABASE_URL
+npm run ppt:eval -- --no-render
 ```
-tests/
-├── app.test.js                     # health, 404, error shape
-├── routes/warehouse.test.js        # endpoint behaviour
-├── services/stagingService.test.js # flat⇄nested mapping, promotion rules, drift guard
-├── middleware/errorHandler.test.js
-└── utils/{constants,deriveZone}.test.js
-```
 
-`src/app-test.js` and `src/routes/warehouse-test.js` are a DB-free app variant used by the
-route tests, and are excluded from coverage.
+CI runs the full suite on Node 22/24, PostgreSQL 16 rollback/concurrency tests in
+a disposable service container, and offline deck evaluation. Coverage and deck
+reports are retained as GitHub artifacts. PRs to `main` and manual dispatch run
+the reusable CI workflow; the deployment workflow calls it on pushes to `main`.
 
-CI (`.github/workflows/ci.yml`) runs `npm run test:ci` on Node 18.x and 20.x for every push
-and PR to `main`, uploading coverage to Codecov.
+See [tests/README.md](tests/README.md) for isolation guarantees and local PostgreSQL
+setup, and the [behavioral fixes report](docs/qa/2026-09-13-behavior-fixes.md) for
+verified results and remaining QA gaps.
 
 ---
 
@@ -494,7 +499,7 @@ and PR to `main`, uploading coverage to Codecov.
 `.github/workflows/deploy-ecr.yml`, on push to `main`:
 
 ```
-test (Node 18 + 20) ──▶ docker build ──▶ push to ECR :latest ──▶ App Runner picks it up
+QA (Node 22/24 + PostgreSQL + deck checks) ──▶ docker build (Node 22) ──▶ push to ECR :latest ──▶ App Runner picks it up
 ```
 
 Required repo secrets: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`,

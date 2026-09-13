@@ -127,8 +127,6 @@ class FileUploadService extends BaseService {
      */
     async validateUploadedFile(fileName, validationOptions = {}) {
         return this.executeOperation(async () => {
-            // This would typically involve checking if the file exists in S3
-            // and validating its properties
             const fileUrl = this.buildPublicUrl(fileName);
             
             // Apply business rules for file validation
@@ -197,7 +195,10 @@ class FileUploadService extends BaseService {
                 });
                 
             } catch (error) {
-                if (error.name === 'NotFound') {
+                if (error.name !== 'NoSuchBucket' && (
+                    error.name === 'NotFound' || error.name === 'NoSuchKey'
+                    || error.$metadata?.httpStatusCode === 404
+                )) {
                     const notFoundError = new Error(`File ${fileName} not found`);
                     notFoundError.name = 'NotFoundError';
                     notFoundError.statusCode = 404;
@@ -245,19 +246,28 @@ class FileUploadService extends BaseService {
      * @returns {Object} Validation result
      * @private
      */
-    async applyFileValidationBusinessRules(fileName, options) {
-        // This is a placeholder for actual file validation logic
-        // In a real implementation, you might:
-        // - Check file size
-        // - Validate file content
-        // - Scan for malware
-        // - Check file integrity
-        
+    async applyFileValidationBusinessRules(fileName, options = {}) {
+        const validated = this.validateData(options, data => WarehouseValidator.fileValidationSchema.safeParse(data));
+        const file = await this.getFileInfo(fileName);
+        const errors = [];
+        const maxSize = validated.maxSize ?? FILE_UPLOAD.MAX_FILE_SIZE;
+        if (!Number.isSafeInteger(file.size) || file.size <= 0) {
+            errors.push('File must contain a non-empty object with a known size');
+        } else if (file.size > maxSize) {
+            errors.push(`File size cannot exceed ${maxSize} bytes`);
+        }
+        const contentType = (file.contentType || '').split(';')[0].trim().toLowerCase();
+        if (!FILE_UPLOAD.ALLOWED_MIME_TYPES.includes(contentType)) {
+            errors.push('File content type is not supported');
+        }
+
+        // HEAD verifies existence and stored metadata. It does not inspect the
+        // object bytes or claim to perform malware/content-integrity scanning.
         return {
-            isValid: true,
-            errors: [],
-            fileSize: null,
-            lastModified: null
+            isValid: errors.length === 0,
+            errors,
+            fileSize: file.size,
+            lastModified: file.lastModified
         };
     }
 

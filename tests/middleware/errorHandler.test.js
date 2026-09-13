@@ -24,6 +24,15 @@ describe('ErrorHandler', () => {
   });
 
   describe('handle', () => {
+    it('delegates errors after headers have been sent without writing another response', () => {
+      const error = new Error('fixture stream failure');
+      res.headersSent = true;
+      ErrorHandler.handle(error, req, res, next);
+      expect(next).toHaveBeenCalledWith(error);
+      expect(res.status).not.toHaveBeenCalled();
+      expect(res.json).not.toHaveBeenCalled();
+    });
+
     it('should handle Prisma known request errors', () => {
       const error = new Prisma.PrismaClientKnownRequestError(
         'Unique constraint failed',

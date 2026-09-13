@@ -235,6 +235,14 @@ class WarehouseValidator extends BaseValidator {
             )
     });
 
+    // The caller may request a tighter size limit, but cannot switch off the
+    // server's checks or increase its upload limit.
+    static fileValidationSchema = z.object({
+        checkSize: z.literal(true).optional(),
+        checkType: z.literal(true).optional(),
+        maxSize: z.number().int().positive().max(FILE_UPLOAD.MAX_FILE_SIZE).optional(),
+    }).strict();
+
     /**
      * Validate warehouse creation data
      * @param {Object} data - Data to validate

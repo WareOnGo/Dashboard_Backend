@@ -23,7 +23,12 @@
 const fs = require('fs');
 const path = require('path');
 
-require('dotenv').config({ path: path.join(__dirname, '..', '..', '.env') });
+// Fixture evaluation never reads the checkout's live credentials. A dummy token
+// exercises the blocked Mapbox request path deterministically.
+process.env.MAPBOX_ACCESS_TOKEN = 'qa-fixture-token';
+for (const key of ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy']) {
+  delete process.env[key];
+}
 
 const { VARIANTS, VARIANT_NAMES, paths } = require('./config');
 const { createSession } = require('./lib/generate');

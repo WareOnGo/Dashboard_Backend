@@ -89,9 +89,16 @@ class BaseController {
      * @throws {Error} If ID is invalid
      */
     extractId(req, paramName = 'id') {
-        const id = parseInt(req.params[paramName]);
-        if (isNaN(id) || id <= 0) {
-            throw new Error(`Invalid ${paramName} parameter`);
+        const raw = req.params[paramName];
+        const id = Number(raw);
+        // These route ids map to PostgreSQL Int columns. Partial numeric strings,
+        // decimals, exponents, and values outside int32 must never reach Prisma.
+        if (!/^\d+$/.test(String(raw)) || !Number.isInteger(id) || id <= 0 || id > 2147483647) {
+            const error = new Error(`Invalid ${paramName} parameter`);
+            error.name = 'ValidationError';
+            error.statusCode = 400;
+            error.issues = [{ path: [paramName], message: `${paramName} must be a positive 32-bit integer` }];
+            throw error;
         }
         return id;
     }

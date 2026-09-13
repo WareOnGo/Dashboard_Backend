@@ -533,11 +533,7 @@ class WarehouseController extends BaseController {
             }
 
             // Extract validation options
-            const validationOptions = {
-                checkSize: req.body.checkSize !== false,
-                checkType: req.body.checkType !== false,
-                maxSize: req.body.maxSize
-            };
+            const validationOptions = req.body || {};
 
             // Validate file through service
             const validationResult = await this.fileUploadService.validateUploadedFile(fileName, validationOptions);

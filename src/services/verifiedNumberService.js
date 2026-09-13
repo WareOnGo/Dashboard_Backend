@@ -5,6 +5,7 @@ const { normalizePhone } = require('./gupshupService');
 const { generateUniqueEmpId } = require('../utils/empIdGenerator');
 const { isAdmin } = require('../utils/admin');
 const { invalidateCapabilities } = require('../utils/access');
+const { clearScoutCache } = require('../middleware/scoutMiddleware');
 const database = require('../utils/database');
 
 const clientError = (message, statusCode, details = null) => {
@@ -192,6 +193,9 @@ class VerifiedNumberService extends BaseService {
     create(payload, actor) {
         return this.executeOperation(async () => {
             const data = this.normalize(payload);
+            if (typeof data.phone_number !== 'string' || !data.phone_number) {
+                throw clientError('phone_number is required and must be a valid phone number', 400);
+            }
             await this.assertUnique(data);
 
             // First real use of the generator: every employee gets a stable empID so
@@ -203,6 +207,7 @@ class VerifiedNumberService extends BaseService {
                 // A brand-new row can already be cached as "no access" if that email
                 // was refused a moment ago, so drop the entry rather than wait it out.
                 invalidateCapabilities(created.email);
+                clearScoutCache(created.empID);
                 return created;
             } catch (err) {
                 if (err.code === 'P2002') {
@@ -246,6 +251,8 @@ class VerifiedNumberService extends BaseService {
                 // the capability TTL. Both addresses matter when the email changed.
                 invalidateCapabilities(existing.email);
                 invalidateCapabilities(row.email);
+                clearScoutCache(existing.empID);
+                clearScoutCache(row.empID);
                 return { row, changes };
             } catch (err) {
                 if (err.code === 'P2025') throw clientError(`Employee with ID ${id} not found`, 404);

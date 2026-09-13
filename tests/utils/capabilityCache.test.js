@@ -14,6 +14,7 @@ jest.mock('../../src/utils/database', () => ({
 }));
 
 const GRANTED = {
+    is_active: true,
     adminAccess: false, callDashboardAccess: false, dashboardAccess: true, reviewerAccess: false,
 };
 
@@ -115,4 +116,34 @@ describe('capability caching', () => {
         expect(asha.DASHBOARD).toBe(true);
         expect(stranger.DASHBOARD).toBe(false);
     });
+});
+
+test.each([false, undefined])('inactive or unknown active flag %s grants no capabilities even to a DB admin', async is_active => {
+    mockFindFirst.mockResolvedValue({ ...GRANTED, is_active, adminAccess: true, reviewerAccess: true, callDashboardAccess: true });
+    expect(Object.values(await access.resolveCapabilities('asha@wareongo.com'))).toEqual([false, false, false, false]);
+    expect(mockFindFirst.mock.calls[0][0].select.is_active).toBe(true);
+});
+test('an active DB admin holds all capabilities', async () => {
+    mockFindFirst.mockResolvedValue({ ...GRANTED, adminAccess: true });
+    expect(Object.values(await access.resolveCapabilities('asha@wareongo.com'))).toEqual([true, true, true, true]);
+});
+test('a concurrent cold burst shares one capability query', async () => {
+    let release;
+    mockFindFirst.mockReturnValue(new Promise(resolve => { release = resolve; }));
+    const pending = Array.from({ length: 30 }, () => access.resolveCapabilities('asha@wareongo.com'));
+    await Promise.resolve();
+    expect(mockFindFirst).toHaveBeenCalledTimes(1);
+    release(GRANTED);
+    expect((await Promise.all(pending)).every(caps => caps.DASHBOARD)).toBe(true);
+});
+test('revocation while a query is pending prevents that stale result from granting access', async () => {
+    let release;
+    mockFindFirst.mockReturnValueOnce(new Promise(resolve => { release = resolve; }))
+        .mockResolvedValue({ ...GRANTED, is_active: false });
+    const pending = access.resolveCapabilities('asha@wareongo.com');
+    await Promise.resolve();
+    access.invalidateCapabilities('ASHA@wareongo.com');
+    release(GRANTED);
+    expect((await pending).DASHBOARD).toBe(false);
+    expect(mockFindFirst).toHaveBeenCalledTimes(2);
 });

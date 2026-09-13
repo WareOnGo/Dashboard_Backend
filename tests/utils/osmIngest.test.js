@@ -1,3 +1,10 @@
+// The importer constructs a client on import. These tests exercise only its pure
+// transformations; an empty double ensures no database methods are available.
+jest.mock('@prisma/client', () => ({
+    ...jest.requireActual('@prisma/client'),
+    PrismaClient: class {},
+}));
+
 const { normalise, coordsOf, parseAge, gridRegions, runPool, simplify } = require('../../scripts/importOsmPois');
 const { categoryFor } = require('../../src/utils/osmCategories');
 

@@ -76,15 +76,16 @@ describe('verifyScoutToken', () => {
   // meant one query per file, and a large submission exhausted the connection
   // pooler. A whole submission must now cost a single query.
   it('queries once for a burst of requests carrying the same empID', async () => {
-    mockFindUnique.mockResolvedValue(ACTIVE_ROW);
-
-    for (let i = 0; i < 30; i += 1) {
-      const r = { body: { uploadedBy: 'VBHIWH' }, headers: {} };
-      await verifyScoutToken(r, res, next);
-      expect(r.scout).toMatchObject({ empid: 'VBHIWH' });
-    }
-
+    let release;
+    mockFindUnique.mockReturnValue(new Promise(resolve => { release = resolve; }));
+    const requests = Array.from({ length: 30 }, () => ({ body: { uploadedBy: 'VBHIWH' }, headers: {} }));
+    const pending = requests.map(r => verifyScoutToken(r, res, next));
+    await Promise.resolve();
     expect(mockFindUnique).toHaveBeenCalledTimes(1);
+    expect(next).not.toHaveBeenCalled();
+    release(ACTIVE_ROW);
+    await Promise.all(pending);
+    requests.forEach(r => expect(r.scout).toMatchObject({ empid: 'VBHIWH' }));
     expect(next).toHaveBeenCalledTimes(30);
   });
 
@@ -143,4 +144,22 @@ describe('verifyScoutToken', () => {
     expect(mockFindUnique).toHaveBeenCalledTimes(2);
     expect(second.scout).toMatchObject({ empid: 'VBHIWH' });
   });
+});
+
+test('revocation during an in-flight Scout lookup denies its waiting requests', async () => {
+  clearScoutCache();
+  mockFindUnique.mockReset();
+  let release;
+  mockFindUnique.mockReturnValueOnce(new Promise(resolve => { release = resolve; }))
+    .mockResolvedValue({ ...ACTIVE_ROW, is_active: false });
+  const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+  const next = jest.fn();
+  const pending = verifyScoutToken({ headers: { 'x-scout-token': 'VBHIWH' } }, res, next);
+  await Promise.resolve();
+  clearScoutCache(' vbhiwh ');
+  release(ACTIVE_ROW);
+  await pending;
+  expect(next).not.toHaveBeenCalled();
+  expect(res.status).toHaveBeenCalledWith(403);
+  expect(mockFindUnique).toHaveBeenCalledTimes(2);
 });

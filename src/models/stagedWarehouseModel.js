@@ -165,19 +165,37 @@ class StagedWarehouseModel extends BaseModel {
      */
     async reopen(row, reviewer) {
         try {
-            const claim = await this.model.updateMany({
-                where: { id: row.id, reviewStatus: { in: ['APPROVED', 'REJECTED'] } },
-                data: { reviewStatus: 'PENDING', warehouseId: null, reviewedBy: null, reviewedAt: null, rejectionReason: null },
-            });
-            if (claim.count === 0) {
-                throw conflict('Only approved or rejected submissions can be moved back to pending.');
+            // One database statement: a failed DELETE rolls back the staging reset
+            // too, without an interactive transaction through the pooler. The
+            // snapshot guards stop a stale review page from revoking a newer claim.
+            // DELETE depends on UPDATE's RETURNING result, so a lost claim cannot
+            // remove a warehouse. An already absent warehouse is a valid no-op.
+            const rows = await this.prisma.$queryRaw`
+                WITH reopened AS (
+                    UPDATE "StagedWarehouse"
+                    SET "reviewStatus" = 'PENDING', "warehouseId" = NULL,
+                        "reviewedBy" = NULL, "reviewedAt" = NULL, "rejectionReason" = NULL
+                    WHERE id = ${row.id}
+                        AND "reviewStatus" IN ('APPROVED', 'REJECTED')
+                        AND "reviewStatus"::text = ${row.reviewStatus}
+                        AND "warehouseId" IS NOT DISTINCT FROM ${row.warehouseId ?? null}::integer
+                        AND "reviewedBy" IS NOT DISTINCT FROM ${row.reviewedBy ?? null}::text
+                        AND "reviewedAt" IS NOT DISTINCT FROM ${row.reviewedAt ?? null}::timestamp
+                    RETURNING *
+                ), removed AS (
+                    DELETE FROM "Warehouse"
+                    WHERE id = ${row.warehouseId ?? null}::integer
+                        AND ${row.reviewStatus}::text = 'APPROVED'
+                        AND EXISTS (SELECT 1 FROM reopened)
+                    RETURNING id
+                )
+                SELECT reopened.*, EXISTS (SELECT 1 FROM removed) AS "_warehouseRemoved"
+                FROM reopened
+            `;
+            if (!rows.length) {
+                throw conflict('Submission changed or is no longer approved/rejected. Refresh before reopening.');
             }
-
-            // Revoking an approval pulls the promoted warehouse back out of the master table.
-            if (row.reviewStatus === 'APPROVED' && row.warehouseId) {
-                await this.prisma.warehouse.delete({ where: { id: row.warehouseId } })
-                    .catch(() => { /* already removed */ });
-            }
+            const { _warehouseRemoved, ...reopened } = rows[0];
 
             await this.prisma.auditLog.create({
                 data: {
@@ -187,7 +205,8 @@ class StagedWarehouseModel extends BaseModel {
                     context: `Moved staged warehouse ${row.id} back to PENDING (was ${row.reviewStatus})`,
                     metadata: {
                         previousStatus: row.reviewStatus,
-                        removedWarehouseId: row.reviewStatus === 'APPROVED' ? row.warehouseId : null,
+                        previousWarehouseId: row.warehouseId ?? null,
+                        removedWarehouseId: _warehouseRemoved ? row.warehouseId : null,
                     },
                     userEmail: reviewer.email,
                     userName: reviewer.name || null,
@@ -197,7 +216,7 @@ class StagedWarehouseModel extends BaseModel {
                 console.error('StagedWarehouseModel: failed to write REOPEN audit', auditError.message);
             });
 
-            return this.model.findUnique({ where: { id: row.id } });
+            return reopened;
         } catch (error) {
             this.handleDatabaseError(error);
         }

@@ -1,5 +1,6 @@
 // src/middleware/scoutMiddleware.js
 const database = require('../utils/database');
+const LookupCache = require('../utils/lookupCache');
 
 /**
  * How long a successful empID verification stays cached, in milliseconds.
@@ -15,29 +16,15 @@ const database = require('../utils/database');
  */
 const VERIFY_CACHE_TTL_MS = 60 * 1000;
 
-/**
- * empID -> { scout, expiresAt }. Only successful verifications are cached;
- * unknown or revoked empIDs always re-query so that granting access takes
- * effect immediately.
- * @type {Map<string, { scout: Object, expiresAt: number }>}
- */
-const verifyCache = new Map();
-
-/**
- * Drop expired entries so the map cannot grow without bound.
- */
-const pruneCache = (now) => {
-    for (const [key, entry] of verifyCache) {
-        if (entry.expiresAt <= now) verifyCache.delete(key);
-    }
-};
+// Only active rows are cached; overlapping cold requests share one DB lookup.
+const verifyCache = new LookupCache(VERIFY_CACHE_TTL_MS, row => row?.is_active === true);
 
 /**
  * Clear the verification cache. Call after changing a scout's access so the
  * change is picked up without waiting for the TTL.
  */
 const clearScoutCache = (empID) => {
-    if (empID) verifyCache.delete(String(empID).trim().toUpperCase());
+    if (empID) verifyCache.clear(String(empID).trim().toUpperCase());
     else verifyCache.clear();
 };
 
@@ -59,18 +46,11 @@ const verifyScoutToken = async (req, res, next) => {
 
     const empID = String(rawEmpId).trim().toUpperCase();
 
-    const now = Date.now();
-    const cached = verifyCache.get(empID);
-    if (cached && cached.expiresAt > now) {
-        req.scout = cached.scout;
-        return next();
-    }
-
     let verified;
     try {
-        verified = await database.getClient().verifiedNumber.findUnique({
+        verified = await verifyCache.get(empID, () => database.getClient().verifiedNumber.findUnique({
             where: { empID }
-        });
+        }));
     } catch (error) {
         // A database failure is not an authentication failure. Reporting it as
         // a 500 "failed to verify scout token" sent callers looking for a bad
@@ -104,9 +84,6 @@ const verifyScoutToken = async (req, res, next) => {
         email: verified.email,
         status: 'ACTIVE',
     };
-
-    pruneCache(now);
-    verifyCache.set(empID, { scout, expiresAt: now + VERIFY_CACHE_TTL_MS });
 
     req.scout = scout;
     next();
