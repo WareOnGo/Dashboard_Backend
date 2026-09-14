@@ -167,8 +167,19 @@ class WarehouseService extends BaseService {
             // Validate ID parameter
             this.validateData({ id: id.toString() }, (data) => WarehouseValidator.validateId(data));
             
-            // Fetch warehouse from model
-            const warehouse = await this.warehouseModel.findById(id);
+            // Load computed proximity only for a single warehouse's view/edit screen.
+            const warehouse = await this.warehouseModel.findById(id, {
+                include: {
+                    WarehouseData: true,
+                    WarehouseProximity: {
+                        select: {
+                            category: true, status: true, landmarkName: true,
+                            roadKm: true, driveMinutes: true, warnings: true,
+                            computedFromLat: true, computedFromLng: true,
+                        },
+                    },
+                },
+            });
             
             if (!warehouse) {
                 const error = new Error(`Warehouse with ID ${id} not found`);

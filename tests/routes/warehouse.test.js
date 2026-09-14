@@ -15,15 +15,22 @@ test('production list applies pagination and filters and redacts contact data', 
   expect(JSON.stringify(body)).not.toContain(warehouse.contactNumber);
   expect(prisma.warehouse.findMany).toHaveBeenCalledWith(expect.objectContaining({ skip: 10, take: 10 }));
   const where = prisma.warehouse.findMany.mock.calls[0][0].where;
+  expect(prisma.warehouse.findMany.mock.calls[0][0].include).not.toHaveProperty('WarehouseProximity');
   expect(JSON.stringify(where)).toContain('Indore');
   expect(prisma.warehouse.count).toHaveBeenCalledWith({ where });
 });
-test('production detail loads the requested record and redacts contact data', async () => {
-  prisma.warehouse.findUnique.mockResolvedValue(warehouse);
+test('production detail reads saved proximity and redacts contact data', async () => {
+  const proximity = [{ category: 'aerodrome', status: 'OK', landmarkName: 'Indore Airport', roadKm: 24.6, driveMinutes: 35 }];
+  prisma.warehouse.findUnique.mockResolvedValue({ ...warehouse, WarehouseProximity: proximity });
   const { body } = await authorized('/api/warehouses/123').expect(200);
   expect(body.id).toBe(123);
   expect(body).not.toHaveProperty('contactNumber');
-  expect(prisma.warehouse.findUnique).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 123 } }));
+  expect(body.WarehouseProximity).toEqual(proximity);
+  const query = prisma.warehouse.findUnique.mock.calls[0][0];
+  expect(query.where).toEqual({ id: 123 });
+  expect(query.include.WarehouseData).toBe(true);
+  expect(query.include.WarehouseProximity.select).toMatchObject({ category: true, roadKm: true, driveMinutes: true });
+  expect(query.include.WarehouseProximity.select).not.toHaveProperty('lastError');
 });
 test.each(['invalid-id', '123junk', '-1', '0', '1.5', '1e2', '2147483648', '9007199254740993'])
   ('invalid id %s returns 400 before querying warehouses', async id => {

@@ -406,7 +406,7 @@ class WarehouseModel extends BaseModel {
      * Find warehouses by ID for PPT generation.
      *
      * Deliberately separate from findAll/findById: the deck builders need the
-     * WarehouseData relation and nothing else, with no ordering applied here
+     * WarehouseData and WarehouseProximity relations, with no ordering applied here
      * (PptGenerationService re-sorts to the caller's chosen slide order).
      *
      * @param {number[]} ids - Warehouse IDs
@@ -416,10 +416,8 @@ class WarehouseModel extends BaseModel {
         try {
             return await this.model.findMany({
                 where: { id: { in: ids } },
-                // WarehouseProximity is included HERE and deliberately not on the
-                // other WarehouseData includes: it is ~9 rows per warehouse, which
-                // is nothing for a deck of five but megabytes for an `all=true`
-                // listing that never renders it.
+                // As with single-warehouse details, include proximity here, but
+                // keep it off bulk listings that never render these rows.
                 include: { WarehouseData: true, WarehouseProximity: true }
             });
         } catch (error) {
