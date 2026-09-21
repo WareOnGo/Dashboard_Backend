@@ -49,3 +49,56 @@ test('metadata errors propagate so the client can offer retry', async () => {
     const service = new WarehouseService({ findFilterOptions: jest.fn().mockRejectedValue(new Error('Unavailable')) });
     await expect(service.getFilterOptions()).rejects.toThrow('Unavailable');
 });
+
+test.each(['9876543210', '+91 (98765) 43210', '0091 98765-43210', '09876543210'])(
+    'mobile search %s combines with other filters for list, count, and coordinates', async search => {
+        const model = {
+            findIdsByContactNumber: jest.fn().mockResolvedValue([7, 9]),
+            findIdsByNumericRange: jest.fn().mockResolvedValue([9, 12]),
+            findAll: jest.fn().mockResolvedValue([{ id: 9, contactNumber: '+919876543210' }]),
+            count: jest.fn().mockResolvedValue(1),
+            findCoordinates: jest.fn().mockResolvedValue([
+                { id: 9, WarehouseData: { latitude: 22.7, longitude: 75.8 } },
+            ]),
+        };
+        const service = new WarehouseService(model);
+        const filters = { search, city: 'Indore', ids: '9,12', minArea: '5000' };
+        const result = await service.getAllWarehouses({ ...filters, page: '2', limit: '10' });
+        await service.getWarehouseCoordinates(filters);
+        expect(model.findIdsByContactNumber).toHaveBeenCalledWith('9876543210');
+        const where = model.findAll.mock.calls[0][0].where;
+        expect(where.OR).toEqual(expect.arrayContaining([
+            { id: { in: [7, 9] } }, { address: { contains: search, mode: 'insensitive' } },
+        ]));
+        expect(where.OR.filter(clause => typeof clause.id === 'number')).toEqual([]);
+        expect(where).toMatchObject({
+            id: { in: [9, 12] }, city: { contains: 'Indore', mode: 'insensitive' },
+            AND: [{ id: { in: [9, 12] } }],
+        });
+        expect(model.findAll.mock.calls[0][0]).toMatchObject({ skip: 10, take: 10 });
+        expect(model.count).toHaveBeenCalledWith(where);
+        expect(model.findCoordinates).toHaveBeenCalledWith(where);
+        expect(result.data[0]).not.toHaveProperty('contactNumber');
+        expect(result.pagination.total).toBe(1);
+    },
+);
+
+test('an unmatched mobile number keeps text search available and cannot match all IDs', async () => {
+    const service = new WarehouseService({ findIdsByContactNumber: jest.fn().mockResolvedValue([]) });
+    const where = await service.buildWhere({ search: '9876543210' });
+    expect(where.OR).toContainEqual({ id: { in: [] } });
+    expect(where.OR).toContainEqual({ address: { contains: '9876543210', mode: 'insensitive' } });
+});
+
+test.each(['42', 'Sector 9876', '   '])('search %s avoids a phone query', async search => {
+    const model = { findIdsByContactNumber: jest.fn() };
+    const where = await new WarehouseService(model).buildWhere({ search });
+    expect(model.findIdsByContactNumber).not.toHaveBeenCalled();
+    if (search === '42') expect(where.OR).toContainEqual({ id: 42 });
+    if (!search.trim()) expect(where).toEqual({});
+});
+
+test('phone lookup failures propagate instead of returning misleading empty results', async () => {
+    const model = { findIdsByContactNumber: jest.fn().mockRejectedValue(new Error('Unavailable')) };
+    await expect(new WarehouseService(model).getAllWarehouses({ search: '9876543210' })).rejects.toThrow('Unavailable');
+});

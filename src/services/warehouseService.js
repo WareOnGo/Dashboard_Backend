@@ -2,6 +2,7 @@
 const BaseService = require('./baseService');
 const WarehouseValidator = require('../validators/warehouseValidator');
 const { computeChanges } = require('../utils/auditDiff');
+const { phoneSearchDigits, warehouseSearchId } = require('../utils/warehouseSearch');
 
 /** Server-side pagination defaults for the warehouse list. */
 const DEFAULT_PAGE_SIZE = 20;
@@ -359,10 +360,9 @@ class WarehouseService extends BaseService {
     /**
      * Build a Prisma `where` clause from validated query filters.
      *
-     * Step 1 covers the "easy" filters (top-level string/boolean columns + free-text
-     * search). The harder ones — budget range (ratePerSqft is a String), area range
-     * (totalSpaceSqft is Int[]), and nested WarehouseData filters (fireNoc/landType) —
-     * are handled in a later step.
+     * Combines string/boolean and nested WarehouseData filters with free-text
+     * search. Formatted phone matches are resolved to IDs; numeric area and budget
+     * ranges are intersected afterwards by resolveWhere.
      *
      * @param {Object} filters - Validated query params
      * @returns {Promise<Object>} Prisma where clause ({} = match all)
@@ -374,8 +374,7 @@ class WarehouseService extends BaseService {
         // compose cleanly with the top-level keys and the search OR.
         const and = [];
 
-        // Free-text search across the common string columns. A purely numeric term
-        // also matches the warehouse id exactly (substring-on-id is a separate step).
+        // Free-text search also matches normalized contact numbers and valid IDs.
         if (filters.search && filters.search.trim()) {
             const term = filters.search.trim();
             const or = [
@@ -385,7 +384,13 @@ class WarehouseService extends BaseService {
                 { warehouseType: { contains: term, mode: 'insensitive' } },
                 { warehouseOwnerType: { contains: term, mode: 'insensitive' } },
             ];
-            if (/^\d+$/.test(term)) or.push({ id: Number(term) });
+            const id = warehouseSearchId(term);
+            if (id !== null) or.push({ id });
+            const phoneDigits = phoneSearchDigits(term);
+            if (phoneDigits) {
+                const ids = await this.warehouseModel.findIdsByContactNumber(phoneDigits);
+                or.push({ id: { in: ids } });
+            }
 
             // Micro-market is a text[], and Prisma can only match scalar lists by
             // exact equality — so resolve the term to real tag names first (spelling-

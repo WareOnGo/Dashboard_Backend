@@ -2,6 +2,7 @@
 const { Prisma } = require('@prisma/client');
 const BaseModel = require('./baseModel');
 const { photosToMedia } = require('../utils/mediaUtils');
+const { phoneSearchCondition } = require('../utils/warehouseSearch');
 
 /**
  * WarehouseModel class for handling warehouse data operations
@@ -57,6 +58,19 @@ class WarehouseModel extends BaseModel {
     async count(where = {}) {
         try {
             return await this.model.count({ where });
+        } catch (error) {
+            this.handleDatabaseError(error);
+        }
+    }
+
+    /** Resolve formatted primary/alternate phone matches before paging or counting. */
+    async findIdsByContactNumber(digits) {
+        try {
+            const condition = phoneSearchCondition(digits);
+            const rows = await this.prisma.$queryRaw`
+                SELECT w.id FROM "Warehouse" w WHERE ${condition}
+            `;
+            return rows.map((row) => Number(row.id));
         } catch (error) {
             this.handleDatabaseError(error);
         }

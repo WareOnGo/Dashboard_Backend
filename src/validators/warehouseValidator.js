@@ -191,8 +191,8 @@ class WarehouseValidator extends BaseValidator {
         // other filters via AND. Used by the PPT/itinerary tools to resolve a handful
         // of warehouses without pulling the full table (pair with all=true).
         ids: z.string().regex(/^\s*\d+\s*(,\s*\d+\s*)*$/, "ids must be comma-separated integers").optional(),
-        // Free-text search (matches across address/city/contactPerson/type/owner-type,
-        // plus exact id when the term is numeric).
+        // Free-text search across address/city/contactPerson/type/owner-type,
+        // normalized primary/alternate phone numbers, and valid numeric IDs.
         search: z.string().optional(),
         city: z.string().optional(),
         state: z.string().optional(),

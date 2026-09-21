@@ -1,4 +1,5 @@
 const { Prisma } = require('@prisma/client');
+const { phoneSearchDigits, phoneSearchCondition, warehouseSearchId } = require('./warehouseSearch');
 
 // These column names are fixed here; request values are always SQL parameters.
 const TEXT_FIELDS = [
@@ -20,7 +21,10 @@ function warehouseMapFilters(filters = {}, microMarkets = []) {
     const term = filters.search?.trim();
     if (term) {
         const search = SEARCH_FIELDS.map(field => contains(field, term));
-        if (/^\d+$/.test(term)) search.push(Prisma.sql`w.id = ${Number(term)}`);
+        const id = warehouseSearchId(term);
+        if (id !== null) search.push(Prisma.sql`w.id = ${id}`);
+        const phoneDigits = phoneSearchDigits(term);
+        if (phoneDigits) search.push(phoneSearchCondition(phoneDigits));
         if (microMarkets.length) search.push(Prisma.sql`w.micromarket && ARRAY[${Prisma.join(microMarkets)}]::text[]`);
         conditions.push(Prisma.sql`(${Prisma.join(search, ' OR ')})`);
     }

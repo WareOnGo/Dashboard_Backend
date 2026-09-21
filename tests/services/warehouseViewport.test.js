@@ -60,6 +60,22 @@ test('one indexed spatial query applies all filters before its cap with paramete
     expect(query.values.at(-1)).toBe(2001);
 });
 
+test.each(['9876543210', '+91 (98765) 43210', '00919876543210', '09876543210'])(
+    'viewport mobile search %s normalizes both phone fields before the cap', async search => {
+        const prisma = { $queryRaw: jest.fn().mockResolvedValue([]) };
+        await new GeoModel(prisma).warehousesInBbox(box, 26, { search, city: 'Indore' });
+        const query = Prisma.sql(...prisma.$queryRaw.mock.calls[0]);
+        expect(query.text).toContain('w."contactNumber"');
+        expect(query.text).toContain('w."alt_phone_number"');
+        expect(query.text.indexOf('w."contactNumber"')).toBeLessThan(query.text.indexOf('LIMIT'));
+        expect(query.text).not.toContain('w.id = $');
+        expect(query.text).not.toContain('9876543210');
+        expect(query.values.filter(value => value === '%9876543210%').length).toBeGreaterThanOrEqual(2);
+        expect(query.values).toContain('%Indore%');
+        expect(query.values.at(-1)).toBe(26);
+    },
+);
+
 test('the ordinary GIS call still uses the same bounded query without dashboard filters', async () => {
     const model = { warehousesInBbox: jest.fn().mockResolvedValue([row(7)]) };
     const service = new GeoService(model);

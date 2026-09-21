@@ -60,7 +60,10 @@ completion. The fixtures contain the columns and foreign-key constraints needed
 for reopening. They exercise the production model's parameterized SQL and the
 real Prisma client against PostgreSQL, including rollback after a restricted
 DELETE, cascade behavior, stale snapshots, retry, and 30 competing requests.
-They do **not** validate all production tables, PostGIS/vector extensions,
+The warehouse-search suite also verifies phone formatting and Indian dialling
+prefixes against primary/alternate contacts, list/count/map agreement, and
+composition with location, numeric ranges, explicit IDs, and pagination.
+These tests do **not** validate all production tables, PostGIS/vector extensions,
 Supabase pooler configuration, or migration history. No schema push, migrations,
 production seed, or shared database is involved.
 

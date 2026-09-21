@@ -378,8 +378,14 @@ Supported list filters: `search`, `ids`, `city`, `state`, `zone`, `warehouseType
 `fireNoc`, `minArea`/`maxArea`, `minRate`/`maxRate`, plus `page`, `limit` (max 100),
 `sortBy`, `sortOrder`, `all`.
 
-Two filters can't be expressed directly in a Prisma `where`: **area** (`totalSpaceSqft` is
-`Int[]`) and **budget** (`ratePerSqft` is a `String`). Those run a raw id pre-query
+`search` includes primary and alternate mobile numbers. It ignores phone formatting
+in stored values and accepts complete Indian numbers with `+91`, `91`, `0091`, or
+a leading `0`, as well as the local ten-digit number. Phone fragments need at least
+four digits. Matching IDs join the text-search OR before pagination and counting;
+coordinate and viewport map reads use the same matching rules.
+
+The numeric filters **area** (`totalSpaceSqft` is `Int[]`) and **budget** (`ratePerSqft`
+is a `String`) also need a raw id pre-query
 (`findIdsByNumericRange`) whose result is intersected via `where.id.in`. `resolveWhere()` is
 shared by the list and the coordinates endpoint so the map and the list can never disagree.
 
