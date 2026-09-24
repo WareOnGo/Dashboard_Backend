@@ -2,8 +2,8 @@
 
 Updated 2026-09-24. Both backends now use the extended `labeled_warehouse_images`
 table automatically. No read/write feature flags need to be added to hosting
-settings. The additive Supabase schema and JPEG metadata columns are already
-applied; `Warehouse.media` and original files are preserved.
+settings. The shared Supabase image schema is already applied; unused JPEG variant
+columns are retired. `Warehouse.media`, original files and WebP results are preserved.
 
 1. **Deploy the dashboard backend first.** Push the image-pipeline changes through
    its existing main-branch release workflow. Registration on warehouse saves,

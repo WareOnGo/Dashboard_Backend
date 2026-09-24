@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { PrismaClient } = require('@prisma/client');
 const root = path.resolve(__dirname, '..');
-const sqlFiles = ['imageCompressionMetadata.sql', 'imagePipeline.sql', 'imageJpegVariant.sql'];
+const sqlFiles = ['imageCompressionMetadata.sql', 'imagePipeline.sql'];
 
 async function snapshot(tx, table, keys) {
     const metadata = await tx.$queryRawUnsafe(`SELECT column_name FROM information_schema.columns
@@ -45,7 +45,7 @@ async function migrate(prisma, apply = false, files = sqlFiles) {
     }, { maxWait: 10000, timeout: 60000 });
 }
 
-module.exports = { migrate };
+module.exports = { migrate, snapshot };
 if (require.main === module) {
     require('dotenv').config({ path: path.join(root, '.env'), quiet: true });
     const args = process.argv.slice(2);

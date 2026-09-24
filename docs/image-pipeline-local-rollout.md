@@ -11,8 +11,8 @@ has one result even when several warehouses reference it. The table's warehouseI
 is provenance, not exclusive ownership or gallery order.
 
 WebP is explicit: `webpUrl`, `webpObjectKey`, `webpBytes`, `webpAt`, `webpVersion`,
-`webpStatus` and WebP-specific attempt/lease/error fields. JPEG variants use
-their own six fields described below and never overwrite the WebP fields.
+`webpStatus` and WebP-specific attempt/lease/error fields. Separate JPEG variants
+are not part of the current pipeline.
 The initial generic compression columns are retained unchanged for compatibility.
 The migration copies their reusable results into the WebP fields without making
 model calls, converting images or uploading objects.
@@ -155,27 +155,19 @@ their first label row. The focused checks are
 `node tests/image-pipeline/backfill-webp.cjs` and
 `node tests/image-pipeline/backfill-webp-native.cjs`.
 
-**JPEG schema — 24 September 2026**
+**Unused JPEG columns removed — 24 September 2026**
 
-The existing image table has six additional fields: `jpegUrl` (the full public
-R2 URL), `jpegBytes`, `jpegAt`, `jpegVersion`, `jpegStatus`, and `jpegError`.
-`imageUrl` and the original R2 object remain the original; `Warehouse.media`
-continues to define membership and order. JPEGs will be new R2 objects under
-`jpeg/images/<source-url-hash>/<encoder-version>.jpg`, alongside the originals
-and WebPs. The URL identifies the object; another bucket/key pair is unnecessary.
+The unused JPEG variant fields (`jpegUrl`, `jpegBytes`, `jpegAt`, `jpegVersion`,
+`jpegStatus`, `jpegError`) are retired. Originals, explicit WebP fields, labels,
+captions and `Warehouse.media` retain their existing values. Original JPEG files
+are still originals; this cleanup does not touch R2 objects.
 
-The intended JPEG preset is the benchmarked maximum edge of 1920px, quality 82,
-progressive 4:2:0, auto-orientation, no enlargement, and white for transparency.
-The version records that preset. Status is PENDING, READY, FAILED or UNSUPPORTED;
-READY requires the JPEG URL, positive byte size, creation time and version.
-Successful JPEG metadata can remain available while a retry reports a failure.
+`node scripts/dropUnusedImageJpeg.js` previews the columns and populated-row count.
+`--apply` locks briefly, refuses any populated JPEG metadata or non-default status,
+drops only those six fields without CASCADE, and verifies every remaining image
+and warehouse value in the same transaction. It rolls back on a mismatch and can
+be repeated. Normal pipeline migrations no longer create JPEG variant columns.
 
-`node scripts/migrateImageJpeg.js` previews only this additive JPEG migration;
-`--apply` adds the six fields and verifies all existing values in one transaction.
-Run `TEST_DATABASE_URL=postgresql://warehouse_test:warehouse_test@127.0.0.1:55439/warehouse_qa node tests/image-pipeline/jpeg-schema.cjs`
-after the local test setup to check preservation, validation and repeatability.
-
-This step adds storage metadata only. It does not start a backfill, add a new
-cron/queue worker, or change PPT exports. Detailed worker/lease fields are omitted;
-a future queue can own that bookkeeping. Full-sized drawing exports still need
-separate treatment from the photo preset.
+After local test setup, run
+`TEST_DATABASE_URL=postgresql://warehouse_test:warehouse_test@127.0.0.1:55439/warehouse_qa node tests/image-pipeline/drop-unused-jpeg.cjs`
+to check preservation, refusal when data exists, dependency protection and repeatability.

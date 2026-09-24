@@ -889,7 +889,7 @@ model LabeledWarehouseImage {
   compressionVersion   String?
 
 
-  /// Explicit WebP variant, independent of JPEG and labeling.
+  /// Explicit WebP variant, independent of labeling.
   webpUrl                  String?
   webpObjectKey            String?
   webpBytes                BigInt?
@@ -898,15 +898,6 @@ model LabeledWarehouseImage {
   webpError                String?
   webpCheckedAt            DateTime? @db.Timestamptz(3)
   webpVersion              String?
-
-  /// JPEG export variant: auto-oriented, max edge 1920px, quality 82, progressive.
-  /// Original files and WebP results remain independent and available as fallbacks.
-  jpegUrl                  String?
-  jpegBytes                BigInt?
-  jpegAt                   DateTime? @db.Timestamptz(3)
-  jpegVersion              String?
-  jpegStatus               String    @default("PENDING") @db.VarChar(16)
-  jpegError                String?
 
   /// Processing attempts are independent; successful results survive retries.
   labelStatus              String    @default("READY") @db.VarChar(16)
@@ -929,7 +920,6 @@ model LabeledWarehouseImage {
   unreferencedAt           DateTime? @db.Timestamptz(3)
 
   @@index([webpStatus])
-  @@index([jpegStatus])
   @@index([labelStatus])
   @@index([documentStatus])
   @@index([warehouseId])
