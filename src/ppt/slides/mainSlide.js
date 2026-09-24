@@ -1,6 +1,5 @@
 // ppt-slides/mainSlide.js
-const axios = require('axios');
-const { normalizeImageBuffer } = require('../utils/image');
+const { fetchWarehouseImage } = require('../utils/image');
 
 async function generateMainSlide(pptx, warehouse, selectedPhotoUrls, optionIndex, includeLocation = false) {
     const mainSlide = pptx.addSlide();
@@ -70,10 +69,9 @@ async function generateMainSlide(pptx, warehouse, selectedPhotoUrls, optionIndex
     // Helper function to add an image and catch errors
     const addImageToSlide = async (url, options) => {
         try {
-            const response = await axios.get(url, { responseType: 'arraybuffer' });
             // Normalise EXIF orientation (phone uploads) before embedding; PPT
             // renderers ignore the EXIF tag, so a rotated photo would show sideways.
-            const { data: base64Image } = await normalizeImageBuffer(Buffer.from(response.data), url);
+            const { data: base64Image } = await fetchWarehouseImage(pptx, url);
             await mainSlide.addImage({ data: base64Image, ...options });
         } catch (err) {
             console.error(`\nFailed to download image: ${url}`);

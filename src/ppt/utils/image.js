@@ -9,6 +9,17 @@ const sharp = (() => {
     try { return require('sharp'); } catch (_) { return null; }
 })();
 
+// URLs and response headers can lie (including extensionless R2 URLs). The
+// bytes determine both the PPT media extension and its content type.
+const imageMime = (buf) => {
+    if (!buf || buf.length < 12) return null;
+    if (buf.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))) return 'image/png';
+    if (buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF) return 'image/jpeg';
+    if (/^GIF8[79]a$/.test(buf.subarray(0, 6).toString('ascii'))) return 'image/gif';
+    if (buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP') return 'image/webp';
+    return null;
+};
+
 // Decode pixel dimensions from the file's own header bytes. pptxgenjs's
 // `sizing.cover` path uses the addImage call's top-level w/h as the *source*
 // image dimensions when computing the crop rect — so if we pass the box w/h at
@@ -30,12 +41,12 @@ const readImageDimensions = (buf) => {
     if (buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46
         && buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50) {
         const fourCC = buf.slice(12, 16).toString('ascii');
-        if (fourCC === 'VP8 ') return { w: buf.readUInt16LE(26) & 0x3FFF, h: buf.readUInt16LE(28) & 0x3FFF };
-        if (fourCC === 'VP8L') {
+        if (fourCC === 'VP8 ' && buf.length >= 30) return { w: buf.readUInt16LE(26) & 0x3FFF, h: buf.readUInt16LE(28) & 0x3FFF };
+        if (fourCC === 'VP8L' && buf.length >= 25) {
             const b0 = buf[21], b1 = buf[22], b2 = buf[23], b3 = buf[24];
             return { w: 1 + (((b1 & 0x3F) << 8) | b0), h: 1 + (((b3 & 0x0F) << 10) | (b2 << 2) | ((b1 & 0xC0) >> 6)) };
         }
-        if (fourCC === 'VP8X') return { w: 1 + (buf[24] | (buf[25] << 8) | (buf[26] << 16)), h: 1 + (buf[27] | (buf[28] << 8) | (buf[29] << 16)) };
+        if (fourCC === 'VP8X' && buf.length >= 30) return { w: 1 + (buf[24] | (buf[25] << 8) | (buf[26] << 16)), h: 1 + (buf[27] | (buf[28] << 8) | (buf[29] << 16)) };
     }
     // JPEG: walk markers until SOF (0xC0–0xCF, excluding DHT/DAC/DRI), read 16-bit height then width.
     if (buf[0] === 0xFF && buf[1] === 0xD8) {
@@ -96,7 +107,7 @@ const readExifOrientation = (buf) => {
 // already-upright case is never decoded/re-encoded. Returns { data, dims },
 // where dims reflects the corrected (rotated) dimensions.
 const normalizeImageBuffer = async (buffer, url = '') => {
-    let mime = url.toLowerCase().includes('.png') ? 'image/png' : 'image/jpeg';
+    let mime = imageMime(buffer) || (url.toLowerCase().includes('.png') ? 'image/png' : 'image/jpeg');
     const orientation = mime === 'image/jpeg' ? readExifOrientation(buffer) : null;
     if (sharp && orientation && orientation !== 1) {
         try {
@@ -112,9 +123,25 @@ const normalizeImageBuffer = async (buffer, url = '') => {
 
 // Download a remote image and return its orientation-normalised data URI + dims.
 // `axiosOptions` is merged into the request (callers can pass timeout/headers).
-const fetchImage = async (url, axiosOptions = {}) => {
+const fetchImage = async (url, axiosOptions = {}, { validateWebp = false } = {}) => {
     const response = await axios.get(url, { responseType: 'arraybuffer', ...axiosOptions });
-    return normalizeImageBuffer(Buffer.from(response.data), url);
+    const buffer = Buffer.from(response.data);
+    if (validateWebp) {
+        if (imageMime(buffer) !== 'image/webp' || buffer.length < 30
+            || buffer.readUInt32LE(4) + 8 !== buffer.length || !sharp) {
+            throw new Error('Invalid or incomplete WebP image');
+        }
+        // Decode once to catch damaged pixel data, not just a plausible header.
+        // The original WebP bytes are embedded unchanged; no encoding occurs.
+        await sharp(buffer, { failOn: 'warning', limitInputPixels: 40_000_000 }).raw().toBuffer();
+    }
+    return normalizeImageBuffer(buffer, url);
 };
 
-module.exports = { fetchImage, normalizeImageBuffer, readImageDimensions, readExifOrientation };
+// The optional loader belongs to this presentation, never to global state.
+// Every warehouse image (including repeated strips/heroes) uses it. Branding
+// and generated maps retain their own image paths.
+const fetchWarehouseImage = (pptx, url, axiosOptions = {}) =>
+    (pptx.warehouseImageLoader || fetchImage)(url, axiosOptions);
+
+module.exports = { fetchImage, fetchWarehouseImage, normalizeImageBuffer, readImageDimensions, readExifOrientation, imageMime };

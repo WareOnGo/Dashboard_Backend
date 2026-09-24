@@ -54,7 +54,7 @@ class PptController extends BaseController {
     recordExport(req, details) {
         const {
             variant, warehouseIds, outcome, httpStatus,
-            bytes, durationMs, errorMessage, customDetails = {}, selectedImages = {},
+            bytes, durationMs, errorMessage, customDetails = {}, selectedImages = {}, compressedPpt = false, imageStats,
         } = details;
 
         const clientName = customDetails.clientName?.trim() || undefined;
@@ -85,8 +85,10 @@ class PptController extends BaseController {
                 companyName,
                 clientRequirement: customDetails.clientRequirement?.trim() || undefined,
                 errorMessage,
+                ...(variant !== 'last-mile' ? { compressedPpt, ...(compressedPpt ? { imageStats: { ...imageStats } } : {}) } : {}),
                 selectedImageCount: Object.values(selectedImages)
-                    .reduce((n, list) => n + (Array.isArray(list) ? list.length : 0), 0),
+                    .reduce((n, list) => n + (Array.isArray(list) ? list.length
+                        : (Array.isArray(list?.photos) ? list.photos.length : 0) + (Array.isArray(list?.cad) ? list.cad.length : 0)), 0),
                 // Server-observed, unlike the legacy client-reported rows which
                 // carry reportedBy: 'client'. Keep this so the two eras of data
                 // stay distinguishable.
@@ -115,9 +117,11 @@ class PptController extends BaseController {
      */
     handleGenerate({ variant, label, allowEmptyIds = false, contentType = PPTX_CONTENT_TYPE, fileType = 'PPT' }) {
         return this.asyncHandler(async (req, res) => {
-            const { ids, selectedImages = {}, customDetails = {}, includeLocation = false } = req.body || {};
+            const { ids, selectedImages = {}, customDetails = {}, includeLocation = false, compressedPpt = false } = req.body || {};
             const warehouseIds = this.pptGenerationService.parseIds(ids);
             const startedAt = Date.now();
+            const useWebp = variant !== 'last-mile' && compressedPpt === true;
+            const imageStats = {};
 
             // Did the caller hang up before we could answer? A deck the client
             // never received is not a success, however well generation went, and
@@ -128,10 +132,16 @@ class PptController extends BaseController {
             res.on('close', () => { if (!res.writableFinished) clientGone = true; });
 
             const audit = (outcome, extra = {}) => this.recordExport(req, {
-                variant, warehouseIds, customDetails, selectedImages,
+                variant, warehouseIds, customDetails, selectedImages, compressedPpt: useWebp, imageStats,
                 outcome: clientGone && outcome === 'success' ? 'abandoned' : outcome,
                 durationMs: Date.now() - startedAt, ...extra,
             });
+
+            if (variant !== 'last-mile' && typeof compressedPpt !== 'boolean') {
+                const errorMessage = 'compressedPpt must be a boolean.';
+                audit('failed', { httpStatus: 400, errorMessage });
+                return res.status(400).json({ error: errorMessage });
+            }
 
             if (warehouseIds.length === 0 && !allowEmptyIds) {
                 logWarn('pptController', variant, 'Invalid or no warehouse IDs provided', { bodyIds: ids });
@@ -158,11 +168,13 @@ class PptController extends BaseController {
                 });
 
                 const buffer = await this.pptGenerationService.createBuffer(
-                    variant, warehouses, selectedImages, customDetails, includeLocation
+                    variant, warehouses, selectedImages, customDetails, includeLocation,
+                    { compressedPpt: useWebp, imageStats }
                 );
 
                 logInfo('pptController', variant, `Successfully generated ${label} presentation`, {
                     warehouseIds, bufferSize: buffer.length, durationMs: Date.now() - startedAt,
+                    compressedPpt: useWebp, ...(useWebp ? { imageStats } : {}),
                 });
 
                 res.setHeader('Content-Type', contentType);

@@ -1,6 +1,6 @@
 const { LAYOUT, COLORS, FONT, FONT_SEMIBOLD, addSlideTitle } = require('./layoutV3');
 const { addFooter, addTopRightLogo } = require('../v2/chromeV2');
-const { fetchImage } = require('../../utils/image');
+const { fetchWarehouseImage } = require('../../utils/image');
 const { logWarn } = require('../../utils/logger');
 const { propertyFields } = require('../propertyFields');
 
@@ -140,7 +140,7 @@ async function generateDetailedSlideV3(
         : null;
     if (stripUrl) {
         try {
-            stripImage = await fetchImage(stripUrl);
+            stripImage = await fetchWarehouseImage(pptx, stripUrl);
         } catch (err) {
             logWarn('detailedSlideV3', 'generateDetailedSlideV3', 'Strip photograph failed to load',
                 { warehouseId: warehouse && warehouse.id, error: err && err.message });

@@ -6,8 +6,9 @@ const { generateMainSlide } = require('../slides/mainSlide');
 const { generateContactSlide } = require('../slides/contactSlide');
 
 // Creates the complete presentation and returns it as a buffer
-const createPptBuffer = async (warehouses, selectedImages, customDetails, includeLocation = false) => {
+const createPptBuffer = async (warehouses, selectedImages, customDetails, includeLocation = false, { imageLoader } = {}) => {
     let pptx = new PptxGenJS();
+    pptx.warehouseImageLoader = imageLoader;
     pptx.layout = 'LAYOUT_WIDE';
 
     generateTitleSlide(pptx, warehouses[0], customDetails);

@@ -7,6 +7,7 @@ const pptServiceGodamwale = require('../ppt/services/pptServiceGodamwale');
 const pptServiceTci = require('../ppt/services/pptServiceTci');
 const detailedPptService = require('../ppt/services/detailedPptService');
 const { createLastMileBuffer } = require('../xlsx/lastMileService');
+const { createPptImageLoader } = require('./pptImageService');
 
 /**
  * PPT generation service.
@@ -71,22 +72,36 @@ class PptGenerationService {
      * @param {boolean} includeLocation - standard variant only
      * @returns {Promise<Buffer>}
      */
-    async createBuffer(variant, warehouses, selectedImages = {}, customDetails = {}, includeLocation = false) {
+    async createBuffer(variant, warehouses, selectedImages = {}, customDetails = {}, includeLocation = false, options = {}) {
+        const imageOptions = [];
+        if (variant !== 'last-mile' && options.compressedPpt === true) {
+            const urls = warehouses.flatMap(warehouse => {
+                const selection = selectedImages[warehouse.id];
+                const { photos, cad } = pptServiceV3.splitSelection(selection);
+                const originals = [...photos, ...cad];
+                // These templates can use a warehouse photo without an explicit
+                // selection: Detailed's technical hero and TCI's default grid.
+                if (variant === 'detailed') originals.push(...detailedPptService.parsePhotos(warehouse.photos).slice(0, 1));
+                if (variant === 'tci' && !selection) originals.push(...detailedPptService.parsePhotos(warehouse.photos).slice(0, 4));
+                return originals;
+            });
+            imageOptions.push({ imageLoader: await createPptImageLoader(this.warehouseModel.prisma, urls, options.imageStats) });
+        }
         switch (variant) {
             case 'last-mile':
                 return createLastMileBuffer(warehouses, selectedImages, customDetails);
             case 'standard':
-                return pptService.createPptBuffer(warehouses, selectedImages, customDetails, includeLocation);
+                return pptService.createPptBuffer(warehouses, selectedImages, customDetails, includeLocation, ...imageOptions);
             case 'v2':
-                return pptServiceV2.createPptBufferV2(warehouses, selectedImages, customDetails);
+                return pptServiceV2.createPptBufferV2(warehouses, selectedImages, customDetails, ...imageOptions);
             case 'v3':
-                return pptServiceV3.createPptBufferV3(warehouses, selectedImages, customDetails);
+                return pptServiceV3.createPptBufferV3(warehouses, selectedImages, customDetails, ...imageOptions);
             case 'godamwale':
-                return pptServiceGodamwale.createPptBufferGodamwale(warehouses, selectedImages, customDetails);
+                return pptServiceGodamwale.createPptBufferGodamwale(warehouses, selectedImages, customDetails, ...imageOptions);
             case 'tci':
-                return pptServiceTci.createPptBufferTci(warehouses, selectedImages, customDetails);
+                return pptServiceTci.createPptBufferTci(warehouses, selectedImages, customDetails, ...imageOptions);
             case 'detailed':
-                return detailedPptService.createDetailedPptBuffer(warehouses, selectedImages, customDetails);
+                return detailedPptService.createDetailedPptBuffer(warehouses, selectedImages, customDetails, ...imageOptions);
             default:
                 throw new Error(`Unknown PPT variant: ${variant}`);
         }

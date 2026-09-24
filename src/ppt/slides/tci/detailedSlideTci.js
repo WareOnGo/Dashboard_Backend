@@ -1,6 +1,6 @@
 const { COLORS, LAYOUT, FONT } = require('./themeTci');
 const { addOptionSlideChrome } = require('./chromeTci');
-const { fetchImage } = require('../../utils/image');
+const { fetchWarehouseImage } = require('../../utils/image');
 const { propertyFields } = require('../propertyFields');
 
 const MAX_CELL_CHARS = 110;
@@ -19,7 +19,7 @@ const addImageOrPlaceholder = async (pptx, slide, url, box) => {
         return;
     }
     try {
-        const { data, dims } = await fetchImage(url);
+        const { data, dims } = await fetchWarehouseImage(pptx, url);
         if (dims && dims.w > 0 && dims.h > 0) {
             // Scale source pixel dims to inches preserving aspect; the absolute
             // size is irrelevant because pptxgenjs's `cover` only uses the

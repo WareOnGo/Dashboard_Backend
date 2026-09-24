@@ -4,8 +4,9 @@ const { generateTitleSlideGodamwale } = require('../slides/godamwale/titleSlideG
 const { generateIndexSlideGodamwale } = require('../slides/godamwale/indexSlideGodamwale');
 const { generateDetailedSlideGodamwale } = require('../slides/godamwale/detailedSlideGodamwale');
 
-const createPptBufferGodamwale = async (warehouses, selectedImages = {}, customDetails = {}) => {
+const createPptBufferGodamwale = async (warehouses, selectedImages = {}, customDetails = {}, { imageLoader } = {}) => {
     const pptx = new PptxGenJS();
+    pptx.warehouseImageLoader = imageLoader;
     pptx.layout = 'LAYOUT_16x9';
 
     await generateTitleSlideGodamwale(pptx, warehouses, customDetails);

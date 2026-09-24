@@ -1,6 +1,6 @@
 const { LAYOUT, COLORS, addSlideTitle } = require('./layoutV3');
 const { addFooter, addTopRightLogo } = require('../v2/chromeV2');
-const { fetchImage } = require('../../utils/image');
+const { fetchWarehouseImage } = require('../../utils/image');
 
 /**
  * An option's photographs, on their own slide.
@@ -98,7 +98,7 @@ const addImageOrPlaceholder = async (pptx, slide, url, box) => {
     });
     if (!url) return placeholder();
     try {
-        const { data, dims } = await fetchImage(url);
+        const { data, dims } = await fetchWarehouseImage(pptx, url);
         if (dims && dims.w > 0 && dims.h > 0) {
             // pptxgenjs's `cover` reads the aspect from the top-level w/h, so
             // those carry the source's true ratio while `sizing` pins placement.

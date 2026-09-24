@@ -1,6 +1,6 @@
 const { COLORS, FONT } = require('./themeV2');
 const { addFooter, addTopRightLogo } = require('./chromeV2');
-const { fetchImage } = require('../../utils/image');
+const { fetchWarehouseImage } = require('../../utils/image');
 const { formatHandover } = require('../../utils/handover');
 
 const SIDEBAR_W = 2.85;
@@ -119,7 +119,7 @@ const addImageOrPlaceholder = async (pptx, slide, url, box) => {
         return;
     }
     try {
-        const { data, dims } = await fetchImage(url);
+        const { data, dims } = await fetchWarehouseImage(pptx, url);
         if (dims && dims.w > 0 && dims.h > 0) {
             const sourceAspect = dims.w / dims.h;
             const topW = 10, topH = 10 / sourceAspect;

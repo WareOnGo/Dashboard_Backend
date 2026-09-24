@@ -71,8 +71,9 @@ function splitSelection(entry) {
     return { photos: [], cad: [], classified: false };
 }
 
-const createPptBufferV3 = async (warehouses, selectedImages = {}, customDetails = {}) => {
+const createPptBufferV3 = async (warehouses, selectedImages = {}, customDetails = {}, { imageLoader } = {}) => {
     const pptx = new PptxGenJS();
+    pptx.warehouseImageLoader = imageLoader;
     pptx.layout = 'LAYOUT_16x9';
 
     // Same display flags as v2, with the same defaults, so a caller can switch

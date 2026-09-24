@@ -1,6 +1,6 @@
 const { LAYOUT, COLORS, FONT, addSlideTitle } = require('./layoutV3');
 const { addFooter, addTopRightLogo } = require('../v2/chromeV2');
-const { fetchImage } = require('../../utils/image');
+const { fetchWarehouseImage } = require('../../utils/image');
 const { logWarn } = require('../../utils/logger');
 
 /**
@@ -88,7 +88,7 @@ async function generateCadSlidesV3(pptx, warehouse, cadUrls, optionIndex) {
         let fetched = null;
         try {
             // eslint-disable-next-line no-await-in-loop
-            fetched = await fetchImage(url);
+            fetched = await fetchWarehouseImage(pptx, url);
         } catch (err) {
             logWarn('cadSlideV3', 'generateCadSlidesV3', 'Could not fetch a layout drawing',
                 { warehouseId: warehouse && warehouse.id, error: err && err.message });

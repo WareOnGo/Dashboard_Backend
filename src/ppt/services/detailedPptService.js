@@ -164,9 +164,10 @@ async function enrichWarehouseWithGeospatialData(warehouse) {
  * @param {Object} customDetails - Custom details for title and contact slides
  * @returns {Promise<Buffer>} PowerPoint file buffer
  */
-async function createDetailedPptBuffer(warehouses, selectedImages, customDetails) {
+async function createDetailedPptBuffer(warehouses, selectedImages, customDetails, { imageLoader } = {}) {
   // Initialize PptxGenJS with widescreen layout
   const pptx = new PptxGenJS();
+  pptx.warehouseImageLoader = imageLoader;
   pptx.layout = 'LAYOUT_WIDE';
 
   // Generate title slide using existing function

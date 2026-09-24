@@ -5,8 +5,9 @@ const { generateIndexSlideV2 } = require('../slides/v2/indexSlideV2');
 const { generateDetailedSlideV2 } = require('../slides/v2/detailedSlideV2');
 const { generateContactSlideV2 } = require('../slides/v2/contactSlideV2');
 
-const createPptBufferV2 = async (warehouses, selectedImages = {}, customDetails = {}) => {
+const createPptBufferV2 = async (warehouses, selectedImages = {}, customDetails = {}, { imageLoader } = {}) => {
     const pptx = new PptxGenJS();
+    pptx.warehouseImageLoader = imageLoader;
     pptx.layout = 'LAYOUT_16x9';
 
     // Display flags. Each defaults to true so existing callers that omit them
