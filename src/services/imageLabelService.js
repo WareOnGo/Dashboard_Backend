@@ -1,3 +1,6 @@
+const { ImagePipelineRepository } = require('../models/imagePipelineRepository.cjs');
+const { serializeImage } = require('../utils/imageContract.cjs');
+const { invalidateImageCache } = require('../utils/imageCacheInvalidation');
 // src/services/imageLabelService.js
 const BaseService = require('./baseService');
 const { PRICING, classify, classifyDocumentKind } = require('../utils/imageClassifier');
@@ -34,9 +37,6 @@ const DEFAULT_CONCURRENCY = 8;
  */
 const MAX_BULK_IDS = 120;
 
-/** Rows per database write. Chunked so a mid-sweep failure keeps earlier work. */
-const CHUNK = 50;
-
 /**
  * A RUNNING row older than this is treated as abandoned, so a container that
  * died mid-sweep cannot wedge the job forever.
@@ -44,15 +44,8 @@ const CHUNK = 50;
 const STALE_RUN_MS = 15 * 60 * 1000;
 
 /**
- * ImageLabelService — forward-fill classification of warehouse listing images.
- *
- * Deliberately a sweep rather than a hook on each submit path. The three submit
- * routes (dashboard, scout, partner ingest) all converge on
- * StagingService.approveSubmission, but PUT /api/warehouses/:id writes straight
- * to the master table and bypasses staging entirely, so a promotion-time hook
- * would silently miss edited listings. Asking "what is unlabelled?" covers every
- * writer, past and future, and self-heals transient API failures on the next run
- * with no dead-letter handling.
+ * Labeling owns scene labels/captions and document subtypes in the shared image
+ * table. Each stage uses independent claims and retries.
  */
 class ImageLabelService extends BaseService {
     constructor(imageLabelModel, cronRunLogModel) {
@@ -86,7 +79,7 @@ class ImageLabelService extends BaseService {
                 return {
                     status: 'DRY_RUN', model, limit: effectiveLimit,
                     processed: 0, labelled: 0, failed: 0,
-                    // What a real run would prune, without deleting anything.
+                    // Historical response name; real runs mark retention rather than delete.
                     wouldPrune: stale,
                     remaining, durationMs: 0,
                 };
@@ -112,15 +105,17 @@ class ImageLabelService extends BaseService {
 
             try {
                 const summary = await this.processBatch(effectiveLimit, model, signal);
-                const status = summary.failed ? (summary.labelled ? 'PARTIAL' : 'FAILED')
-                    : summary.deferred ? 'PARTIAL' : 'SUCCESS';
+                const unfinished = summary.remaining > 0 || Object.entries(summary.documentBacklog || {})
+                    .some(([state, count]) => state !== 'READY' && count > 0);
+                const status = summary.failed ? (summary.labelled || summary.documents ? 'PARTIAL' : 'FAILED')
+                    : summary.deferred || unfinished ? 'PARTIAL' : 'SUCCESS';
                 const durationMs = Date.now() - started;
                 await this.cronRunLogModel.finish(
                     run.id,
                     status,
                     durationMs,
                     summary,
-                    summary.failed ? `${summary.failed} image(s) failed; they stay unlabelled and retry next sweep` : null,
+                    summary.failed ? `${summary.failed} image(s) failed; unfinished stages retain their retry state` : null,
                 );
                 return { status, model, limit: effectiveLimit, durationMs, ...summary };
             } catch (error) {
@@ -133,109 +128,59 @@ class ImageLabelService extends BaseService {
         });
     }
 
-    /**
-     * Classify one batch and persist it in chunks.
-     *
-     * Failed images are deliberately not written, so they reappear in the next
-     * sweep's findUnlabelled() and get retried — that is the whole retry
-     * mechanism, and why no dead-letter table is needed.
-     * @private
-     */
+    /** Classify a batch using independent stage claims and retries. */
     async processBatch(limit, model, signal) {
+        return this.processPipelineBatch(limit, model, signal);
+    }
+
+    // Stage-specific claims preserve successful scene labels during subtype retries.
+    async processPipelineBatch(limit, model, signal) {
+        const repository = new ImagePipelineRepository(this.imageLabelModel.prisma);
         check(signal);
-        // Prune first, so a stale row can never block a URL that is still in use
-        // from being re-labelled in this same run.
-        const pruned = await this.imageLabelModel.bounded('pruneStale');
-        check(signal);
-
-        const todo = await this.imageLabelModel.bounded('findUnlabelled', limit);
-        if (!todo.length) {
-            return { processed: 0, labelled: 0, failed: 0, pruned, remaining: 0, costUsd: 0, errors: [] };
-        }
-
-        let labelled = 0, failed = 0, inTok = 0, outTok = 0, processed = 0;
-        const errors = [];
-
-        for (let offset = 0; offset < todo.length; offset += CHUNK) {
-            if (signal?.aborted) break;
-            const batch = todo.slice(offset, offset + CHUNK);
-            const results = await this.runPool(
-                batch,
-                async (row) => {
-                    if (signal?.aborted) return { deferred: true };
-                    processed++;
-                    try { return await classify(model, row.imageUrl, signal ? { signal } : {}); }
-                    catch { return { error: signal?.aborted ? 'Enrichment time budget exhausted' : 'Image classification failed' }; }
-                },
-                DEFAULT_CONCURRENCY,
-            );
-
-            const rows = [];
-            results.forEach((res, i) => {
-                if (res.deferred) return;
-                if (res.error) {
-                    failed++;
-                    if (errors.length < 20) errors.push({ imageUrl: batch[i].imageUrl, error: res.error });
-                    return;
+        const { registered, retained } = await repository.reconcile();
+        const summary = { processed: 0, labelled: 0, documents: 0, failed: 0, deferred: 0,
+            registered, retained, pruned: 0, errors: [], costUsd: 0 };
+        let inTok = 0, outTok = 0;
+        try {
+            for (const stage of ['label', 'document']) {
+                let remainingBudget = limit;
+                while (remainingBudget > 0 && !signal?.aborted) {
+                    // Claim only work that can start immediately, so waiting in
+                    // our own pool cannot consume another image's lease.
+                    const rows = await repository.claim(stage, { limit: Math.min(DEFAULT_CONCURRENCY, remainingBudget) });
+                    if (!rows.length) break;
+                    remainingBudget -= rows.length;
+                    await this.runPool(rows, async row => {
+                        if (signal?.aborted) {
+                            summary.deferred++;
+                            await repository.fail(stage, row, '', { deferred: true });
+                            return;
+                        }
+                        summary.processed++;
+                        let result;
+                        try {
+                            result = await (stage === 'label' ? classify : classifyDocumentKind)(model, row.imageUrl, signal ? { signal } : {});
+                        } catch { result = { error: 'Image classification failed' }; }
+                        if (result.error || !(stage === 'label' ? result.classification : result.documentKind)) {
+                            summary.failed++;
+                            if (summary.errors.length < 20) summary.errors.push({ imageUrl: row.imageUrl, stage, error: 'Image classification failed' });
+                            await repository.fail(stage, row, signal?.aborted ? 'Processing time budget exhausted' : 'Image classification failed');
+                            return;
+                        }
+                        inTok += result.inputTokens || 0; outTok += result.outputTokens || 0;
+                        const saved = await repository.complete(stage, row, { ...result, model });
+                        summary[stage === 'label' ? 'labelled' : 'documents'] += saved;
+                    }, DEFAULT_CONCURRENCY);
                 }
-                inTok += res.inputTokens;
-                outTok += res.outputTokens;
-                rows.push({
-                    warehouseId: batch[i].warehouseId,
-                    imageUrl: batch[i].imageUrl,
-                    classification: res.classification,
-                    description: res.description,
-                    model,
-                    confidence: res.confidence,
-                });
-            });
-
-            // SECOND PASS, DOCUMENTS ONLY. DOCUMENT holds both the drawings a deck
-            // wants and the paperwork it must never show, and the scene prompt
-            // cannot separate them — it was tuned and measured on where the camera
-            // is. Asked only of documents because they are ~1.6% of labelled images
-            // (223 of ~14,000), so folding the question into every photograph's
-            // prompt would cost sixty times more to answer something inapplicable.
-            //
-            // A failure here leaves documentKind null and does NOT fail the row: a
-            // document with no sub-label is still correctly a document, and the
-            // backfill script can fill it in later. Losing the scene label over it
-            // would be a strictly worse trade.
-            const docs = rows.filter((r) => r.classification === 'DOCUMENT');
-            if (docs.length && !signal?.aborted) {
-                const kinds = await this.runPool(
-                    docs,
-                    async (row) => {
-                        if (signal?.aborted) return { error: 'Enrichment time budget exhausted' };
-                        try { return await classifyDocumentKind(model, row.imageUrl, signal ? { signal } : {}); }
-                        catch { return { error: 'Document classification failed' }; }
-                    },
-                    DEFAULT_CONCURRENCY,
-                );
-                kinds.forEach((k, i) => {
-                    if (k.error || !k.documentKind) return;
-                    inTok += k.inputTokens || 0;
-                    outTok += k.outputTokens || 0;
-                    docs[i].documentKind = k.documentKind;
-                });
             }
-
-            if (rows.length) labelled += await this.imageLabelModel.bounded('createManyLabels', rows);
+        } finally {
+            if (summary.labelled || summary.documents) await invalidateImageCache();
         }
-
         const price = PRICING[model];
-        const costUsd = price ? (inTok / 1e6) * price.in + (outTok / 1e6) * price.out : null;
-
-        return {
-            processed,
-            deferred: todo.length - processed,
-            labelled,
-            failed,
-            pruned,
-            remaining: await this.imageLabelModel.bounded('countUnlabelled'),
-            costUsd: costUsd === null ? null : Number(costUsd.toFixed(4)),
-            errors,
-        };
+        summary.costUsd = price ? Number(((inTok * price.in + outTok * price.out) / 1e6).toFixed(4)) : null;
+        summary.remaining = await this.imageLabelModel.countUnlabelled();
+        summary.documentBacklog = await repository.backlog('document');
+        return summary;
     }
 
     /**
@@ -286,6 +231,7 @@ class ImageLabelService extends BaseService {
                     classification: r.classification,
                     description: r.description,
                     confidence: r.confidence,
+                    documentKind: r.documentKind ?? null,
                 };
             }
             return {
@@ -293,6 +239,7 @@ class ImageLabelService extends BaseService {
                 total: rows.length,
                 labelled: Object.keys(labels).length,
                 labels,
+                images: rows.map(r => serializeImage(r.imageUrl, r)),
             };
         });
     }
@@ -332,8 +279,9 @@ class ImageLabelService extends BaseService {
             const warehouses = {};
             for (const r of rows) {
                 const key = String(r.warehouseId);
-                if (!warehouses[key]) warehouses[key] = { total: 0, labelled: 0, labels: {} };
+                if (!warehouses[key]) warehouses[key] = { total: 0, labelled: 0, labels: {}, images: [] };
                 warehouses[key].total += 1;
+                warehouses[key].images.push(serializeImage(r.imageUrl, r));
                 if (!r.classification) continue;
                 warehouses[key].labelled += 1;
                 warehouses[key].labels[r.imageUrl] = {
@@ -349,7 +297,7 @@ class ImageLabelService extends BaseService {
             // Ids with no images at all still get an entry, so a caller can cache
             // "this one has nothing" instead of re-requesting it forever.
             for (const id of ids) {
-                if (!warehouses[String(id)]) warehouses[String(id)] = { total: 0, labelled: 0, labels: {} };
+                if (!warehouses[String(id)]) warehouses[String(id)] = { total: 0, labelled: 0, labels: {}, images: [] };
             }
             return { requested: ids.length, warehouses };
         });

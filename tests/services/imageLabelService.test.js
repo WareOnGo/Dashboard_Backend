@@ -1,6 +1,6 @@
 const ImageLabelService = require('../../src/services/imageLabelService');
 
-// The OpenAI call is the one thing these tests must not make for real.
+// Keep classifier, database and cache calls local to the test fixtures.
 jest.mock('../../src/utils/imageClassifier', () => ({
     PRICING: { 'gpt-5.6-terra': { in: 2.0, out: 12.0 } },
     classify: jest.fn(),
@@ -9,7 +9,10 @@ jest.mock('../../src/utils/imageClassifier', () => ({
     // fixture crash on `undefined is not a function` rather than fail a claim.
     classifyDocumentKind: jest.fn(),
 }));
+jest.mock('../../src/models/imagePipelineRepository.cjs', () => ({ ImagePipelineRepository: jest.fn() }));
+jest.mock('../../src/utils/imageCacheInvalidation', () => ({ invalidateImageCache: jest.fn(async () => {}) }));
 const { classify, classifyDocumentKind } = require('../../src/utils/imageClassifier');
+const { ImagePipelineRepository } = require('../../src/models/imagePipelineRepository.cjs');
 
 const ok = (classification = 'INDOOR') => ({
     classification, description: 'a description', confidence: 0.99,
@@ -18,18 +21,33 @@ const ok = (classification = 'INDOOR') => ({
 
 const makeModels = ({ unlabelled = [], inFlight = null } = {}) => {
     let remaining = unlabelled.length;
-    const imageLabelModel = {
-        findUnlabelled: jest.fn(async (limit) => unlabelled.slice(0, limit)),
-        countUnlabelled: jest.fn(async () => remaining),
-        createManyLabels: jest.fn(async (rows) => {
-            remaining = Math.max(0, remaining - rows.length);
-            return rows.length;
+    const pending = { label: [...unlabelled], document: [] };
+    const documentFailures = [];
+    const repository = {
+        reconcile: jest.fn(async () => ({ registered: unlabelled.length, retained: 0 })),
+        claim: jest.fn(async (stage, { limit }) => pending[stage].splice(0, limit)),
+        complete: jest.fn(async (stage, row, result) => {
+            if (stage === 'label') {
+                remaining--;
+                if (result.classification === 'DOCUMENT') pending.document.push(row);
+            }
+            return 1;
         }),
+        fail: jest.fn(async (stage, row) => {
+            if (stage === 'document') documentFailures.push(row);
+            return 1;
+        }),
+        backlog: jest.fn(async () => ({ PENDING: pending.document.length, FAILED: documentFailures.length })),
+    };
+    ImagePipelineRepository.mockImplementation(() => repository);
+    const imageLabelModel = {
+        prisma: {},
+        countUnlabelled: jest.fn(async () => remaining),
         countByClassification: jest.fn(async () => [{ classification: 'INDOOR', count: 2 }]),
         countAll: jest.fn(async () => 2),
-        pruneStale: jest.fn(async () => 0),
         countStale: jest.fn(async () => 0),
         findForWarehouse: jest.fn(async () => []),
+        findForWarehouses: jest.fn(async () => []),
     };
     const cronRunLogModel = {
         tryStart: jest.fn(async () => inFlight ? null : ({ id: 1n })),
@@ -39,7 +57,7 @@ const makeModels = ({ unlabelled = [], inFlight = null } = {}) => {
         recent: jest.fn(async () => [{ id: 2n, ranAt: new Date(), status: 'SUCCESS', durationMs: 10, metadata: null, notes: null }]),
     };
     imageLabelModel.bounded = jest.fn(async (method, ...args) => imageLabelModel[method](...args));
-    return { imageLabelModel, cronRunLogModel };
+    return { imageLabelModel, cronRunLogModel, repository };
 };
 
 const images = (n) => Array.from({ length: n }, (_, i) => ({ warehouseId: i + 1, imageUrl: `https://x/${i}.jpg` }));
@@ -73,14 +91,16 @@ describe('ImageLabelService.sweep', () => {
     });
 
     it('stops starting image requests when the budget expires while keeping completed labels', async () => {
-        const { imageLabelModel, cronRunLogModel } = makeModels({ unlabelled: images(20) });
+        const { imageLabelModel, cronRunLogModel, repository } = makeModels({ unlabelled: images(20) });
         const controller = new AbortController();
         classify.mockImplementation(async () => { controller.abort(); return ok(); });
         const svc = new ImageLabelService(imageLabelModel, cronRunLogModel);
         const result = await svc.sweep({ signal: controller.signal });
         expect(classify).toHaveBeenCalledTimes(1);
-        expect(result).toMatchObject({ status: 'PARTIAL', processed: 1, labelled: 1, deferred: 19 });
-        expect(imageLabelModel.createManyLabels.mock.calls[0][0]).toHaveLength(1);
+        expect(result).toMatchObject({ status: 'PARTIAL', processed: 1, labelled: 1, deferred: 7, remaining: 19 });
+        expect(repository.complete).toHaveBeenCalledTimes(1);
+        expect(repository.fail).toHaveBeenCalledTimes(7);
+        expect(repository.fail).toHaveBeenCalledWith('label', expect.any(Object), '', { deferred: true });
     });
 
     it('skips when another sweep is already in flight, without calling the API', async () => {
@@ -98,8 +118,8 @@ describe('ImageLabelService.sweep', () => {
         expect(cronRunLogModel.start).not.toHaveBeenCalled();
     });
 
-    it('does not write failed images, so they are retried by the next sweep', async () => {
-        const { imageLabelModel, cronRunLogModel } = makeModels({ unlabelled: images(3) });
+    it('keeps failed images pending for retry without saving a failed label', async () => {
+        const { imageLabelModel, cronRunLogModel, repository } = makeModels({ unlabelled: images(3) });
         classify
             .mockImplementationOnce(async () => ok())
             .mockImplementationOnce(async () => ({ error: 'http 400: bad image' }))
@@ -110,56 +130,60 @@ describe('ImageLabelService.sweep', () => {
 
         expect(res.labelled).toBe(2);
         expect(res.failed).toBe(1);
-        const written = imageLabelModel.createManyLabels.mock.calls[0][0];
+        const written = repository.complete.mock.calls.map(([, row]) => row);
         expect(written).toHaveLength(2);
         expect(written.map((r) => r.imageUrl)).not.toContain('https://x/1.jpg');
+        expect(repository.fail).toHaveBeenCalledWith('label', expect.objectContaining({ imageUrl: 'https://x/1.jpg' }), 'Image classification failed');
+        expect(res.remaining).toBe(1);
     });
 
     it('caps the limit so one invocation cannot run unbounded', async () => {
-        const { imageLabelModel, cronRunLogModel } = makeModels({ unlabelled: images(10) });
+        const { imageLabelModel, cronRunLogModel } = makeModels({ unlabelled: images(501) });
         const svc = new ImageLabelService(imageLabelModel, cronRunLogModel);
 
-        await svc.sweep({ limit: 99999 });
+        const result = await svc.sweep({ limit: 99999 });
 
-        expect(imageLabelModel.findUnlabelled).toHaveBeenCalledWith(500); // MAX_LIMIT
+        expect(result).toMatchObject({ limit: 500, labelled: 500, remaining: 1, status: 'PARTIAL' });
+        expect(classify).toHaveBeenCalledTimes(500);
     });
 
-    it('prunes stale rows and reports the count', async () => {
-        const { imageLabelModel, cronRunLogModel } = makeModels({ unlabelled: images(2) });
-        imageLabelModel.pruneStale.mockResolvedValueOnce(7);
+    it('retains stale metadata and reports the count without deleting rows', async () => {
+        const { imageLabelModel, cronRunLogModel, repository } = makeModels({ unlabelled: images(2) });
+        repository.reconcile.mockResolvedValueOnce({ registered: 2, retained: 7 });
         const svc = new ImageLabelService(imageLabelModel, cronRunLogModel);
 
         const res = await svc.sweep();
 
-        expect(res.pruned).toBe(7);
+        expect(res.pruned).toBe(0);
+        expect(res.retained).toBe(7);
         expect(res.labelled).toBe(2);
     });
 
-    it('prunes BEFORE labelling, so a stale row cannot block a live url', async () => {
-        const { imageLabelModel, cronRunLogModel } = makeModels({ unlabelled: images(1) });
+    it('reconciles current image references before labelling', async () => {
+        const { imageLabelModel, cronRunLogModel, repository } = makeModels({ unlabelled: images(1) });
         const order = [];
-        imageLabelModel.pruneStale.mockImplementation(async () => { order.push('prune'); return 1; });
-        imageLabelModel.findUnlabelled.mockImplementation(async () => { order.push('find'); return images(1); });
+        repository.reconcile.mockImplementation(async () => { order.push('reconcile'); return { registered: 1, retained: 0 }; });
+        classify.mockImplementation(async () => { order.push('classify'); return ok(); });
         const svc = new ImageLabelService(imageLabelModel, cronRunLogModel);
 
         await svc.sweep();
 
-        expect(order).toEqual(['prune', 'find']);
+        expect(order).toEqual(['reconcile', 'classify']);
     });
 
-    it('dry run reports what would be pruned without deleting', async () => {
-        const { imageLabelModel, cronRunLogModel } = makeModels({ unlabelled: images(5) });
+    it('dry run reports stale references without changing retention', async () => {
+        const { imageLabelModel, cronRunLogModel, repository } = makeModels({ unlabelled: images(5) });
         imageLabelModel.countStale.mockResolvedValueOnce(4);
         const svc = new ImageLabelService(imageLabelModel, cronRunLogModel);
 
         const res = await svc.sweep({ dryRun: true });
 
         expect(res.wouldPrune).toBe(4);
-        expect(imageLabelModel.pruneStale).not.toHaveBeenCalled();
+        expect(repository.reconcile).not.toHaveBeenCalled();
     });
 
     it('dry run reports the backlog without calling the API or writing', async () => {
-        const { imageLabelModel, cronRunLogModel } = makeModels({ unlabelled: images(5) });
+        const { imageLabelModel, cronRunLogModel, repository } = makeModels({ unlabelled: images(5) });
         const svc = new ImageLabelService(imageLabelModel, cronRunLogModel);
 
         const res = await svc.sweep({ dryRun: true });
@@ -167,7 +191,8 @@ describe('ImageLabelService.sweep', () => {
         expect(res.status).toBe('DRY_RUN');
         expect(res.remaining).toBe(5);
         expect(classify).not.toHaveBeenCalled();
-        expect(imageLabelModel.createManyLabels).not.toHaveBeenCalled();
+        expect(repository.complete).not.toHaveBeenCalled();
+        expect(repository.claim).not.toHaveBeenCalled();
         expect(cronRunLogModel.start).not.toHaveBeenCalled();
         expect(cronRunLogModel.tryStart).not.toHaveBeenCalled();
     });
@@ -182,8 +207,8 @@ describe('ImageLabelService.sweep', () => {
     });
 
     it('marks the run FAILED and rethrows if the batch blows up', async () => {
-        const { imageLabelModel, cronRunLogModel } = makeModels({ unlabelled: images(1) });
-        imageLabelModel.findUnlabelled.mockRejectedValueOnce(new Error('db exploded'));
+        const { imageLabelModel, cronRunLogModel, repository } = makeModels({ unlabelled: images(1) });
+        repository.claim.mockRejectedValueOnce(new Error('db exploded'));
         const svc = new ImageLabelService(imageLabelModel, cronRunLogModel);
 
         await expect(svc.sweep()).rejects.toThrow('db exploded');
@@ -208,6 +233,10 @@ describe('ImageLabelService.getForWarehouse', () => {
         expect(res.labels['a.jpg'].classification).toBe('INDOOR');
         // Absent, not null — the consumer falls back per-image.
         expect(res.labels['b.jpg']).toBeUndefined();
+        expect(res.images).toEqual([
+            expect.objectContaining({ originalUrl: 'a.jpg', displayUrl: 'a.jpg', caption: 'inside' }),
+            expect.objectContaining({ originalUrl: 'b.jpg', displayUrl: 'b.jpg', classification: null }),
+        ]);
     });
 
     it('accepts a numeric string id, as it arrives from a route param', async () => {
@@ -234,7 +263,24 @@ describe('ImageLabelService.getForWarehouse', () => {
 
         const res = await svc.getForWarehouse(7);
 
-        expect(res).toMatchObject({ warehouseId: 7, total: 0, labelled: 0, labels: {} });
+        expect(res).toEqual({ warehouseId: 7, total: 0, labelled: 0, labels: {}, images: [] });
+    });
+});
+
+describe('ImageLabelService.getForWarehouses', () => {
+    it('always returns image pairs, original fallbacks and empty arrays for empty warehouses', async () => {
+        const { imageLabelModel, cronRunLogModel } = makeModels();
+        imageLabelModel.findForWarehouses.mockResolvedValueOnce([
+            { warehouseId: 1, imageUrl: 'https://x/a.jpg', webpUrl: 'https://x/a.webp', classification: 'INDOOR', description: 'inside' },
+            { warehouseId: 1, imageUrl: 'https://x/b.jpg', classification: null },
+        ]);
+        const result = await new ImageLabelService(imageLabelModel, cronRunLogModel).getForWarehouses([1, 2]);
+        expect(result.warehouses['1'].images).toEqual([
+            expect.objectContaining({ originalUrl: 'https://x/a.jpg', displayUrl: 'https://x/a.webp', caption: 'inside' }),
+            expect.objectContaining({ originalUrl: 'https://x/b.jpg', displayUrl: 'https://x/b.jpg', classification: null }),
+        ]);
+        expect(result.warehouses['1'].labelled).toBe(1);
+        expect(result.warehouses['2']).toEqual({ total: 0, labelled: 0, labels: {}, images: [] });
     });
 });
 
@@ -294,13 +340,12 @@ describe('ImageLabelService.sweep — document sub-labels', () => {
 
         await svc.sweep({ limit: 2 });
 
-        const rows = models.imageLabelModel.createManyLabels.mock.calls[0][0];
-        const doc = rows.find((r) => r.classification === 'DOCUMENT');
-        const photo = rows.find((r) => r.classification === 'INDOOR');
-        expect(doc.documentKind).toBe('LAYOUT');
-        // Not "NOT_A_DOCUMENT" and not an empty string: absent, so the column stays
-        // null and a reader can tell "not a document" from "not asked".
-        expect(photo.documentKind).toBeUndefined();
+        const writes = models.repository.complete.mock.calls;
+        const documents = writes.filter(([stage]) => stage === 'document');
+        expect(documents).toEqual([
+            ['document', expect.objectContaining({ imageUrl: 'https://x/0.jpg' }), expect.objectContaining({ documentKind: 'LAYOUT' })],
+        ]);
+        expect(writes.filter(([stage]) => stage === 'label')).toHaveLength(2);
     });
 
     it('keeps the scene label when the sub-label call fails', async () => {
@@ -314,11 +359,10 @@ describe('ImageLabelService.sweep — document sub-labels', () => {
 
         const res = await svc.sweep({ limit: 1 });
 
-        const rows = models.imageLabelModel.createManyLabels.mock.calls[0][0];
-        expect(rows).toHaveLength(1);
-        expect(rows[0].classification).toBe('DOCUMENT');
-        expect(rows[0].documentKind).toBeUndefined();
-        expect(res.labelled ?? res.data?.labelled).toBe(1);
+        expect(models.repository.complete).toHaveBeenCalledTimes(1);
+        expect(models.repository.complete).toHaveBeenCalledWith('label', expect.any(Object), expect.objectContaining({ classification: 'DOCUMENT' }));
+        expect(models.repository.fail).toHaveBeenCalledWith('document', expect.any(Object), 'Image classification failed');
+        expect(res).toMatchObject({ labelled: 1, documents: 0, failed: 1, status: 'PARTIAL' });
     });
 
     it('ignores a sub-label the schema does not define', async () => {
@@ -329,7 +373,8 @@ describe('ImageLabelService.sweep — document sub-labels', () => {
 
         await svc.sweep({ limit: 1 });
 
-        const rows = models.imageLabelModel.createManyLabels.mock.calls[0][0];
-        expect(rows[0].documentKind).toBeUndefined();
+        expect(models.repository.complete).toHaveBeenCalledTimes(1);
+        expect(models.repository.complete.mock.calls[0][0]).toBe('label');
+        expect(models.repository.fail).toHaveBeenCalledWith('document', expect.any(Object), 'Image classification failed');
     });
 });

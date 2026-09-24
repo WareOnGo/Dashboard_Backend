@@ -38,9 +38,13 @@ class WarehouseController extends BaseController {
         try {
             const ids = rows.map((r) => r.id).filter((id) => Number.isInteger(id));
             if (!ids.length) return;
-            const { warehouses } = await this.imageLabelService.getForWarehouses(ids);
+            const warehouses = {};
+            for (let offset = 0; offset < ids.length; offset += 120) {
+                Object.assign(warehouses, (await this.imageLabelService.getForWarehouses(ids.slice(offset, offset + 120))).warehouses);
+            }
             for (const row of rows) {
                 row.imageLabels = warehouses[String(row.id)]?.labels ?? {};
+                if (warehouses[String(row.id)]?.images) row.images = warehouses[String(row.id)].images;
             }
         } catch (error) {
             console.error('attachImageLabels failed; returning rows without labels:', error.message);
@@ -65,7 +69,7 @@ class WarehouseController extends BaseController {
             // second round trip. Off by default because the full-table consumers
             // (PPT builder, itinerary, micro-market mapping) call this with
             // all=true and would pay ~3MB for data they never render.
-            if (req.query.includeImageLabels === 'true' && Array.isArray(result?.data) && result.data.length) {
+            if ((req.query.includeImageLabels === 'true' || req.query.includeImages === 'true') && Array.isArray(result?.data) && result.data.length) {
                 await this.attachImageLabels(result.data);
             }
 
@@ -131,6 +135,7 @@ class WarehouseController extends BaseController {
             
             // Get warehouse from service
             const warehouse = await this.warehouseService.getWarehouseById(id);
+            await this.attachImageLabels([warehouse]);
 
             req.audit('READ', 'warehouse', id, `Viewed warehouse ${id}`);
 

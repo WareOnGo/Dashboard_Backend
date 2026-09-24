@@ -1,3 +1,4 @@
+const { imageUrls } = require('../utils/imageContract.cjs');
 const ExcelJS = require('exceljs');
 const sharp = require('sharp');
 const { lastMileFields } = require('./lastMileFields');
@@ -13,7 +14,7 @@ async function addPhotos(workbook, sheet, warehouse, selection, column) {
     cell.value = 'Images NA';
     // As with client decks, only explicitly selected photos are exported. Require
     // them to belong to the loaded listing before making any remote request.
-    const allowed = new Set((warehouse.photos || '').split(',').map((url) => url.trim()));
+    const allowed = new Set(imageUrls(warehouse));
     const urls = [...new Set(Array.isArray(selection) ? selection : [])].slice(0, 4)
         .filter((url) => typeof url === 'string' && allowed.has(url) && /^https?:\/\//i.test(url));
     const photos = (await Promise.all(urls.map(async (url) => {

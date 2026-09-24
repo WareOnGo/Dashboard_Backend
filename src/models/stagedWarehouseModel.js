@@ -1,3 +1,4 @@
+const { registerWarehouseImages } = require('./imagePipelineRepository.cjs');
 // src/models/stagedWarehouseModel.js
 const BaseModel = require('./baseModel');
 const { photosToMedia } = require('../utils/mediaUtils');
@@ -351,6 +352,7 @@ class StagedWarehouseModel extends BaseModel {
                 console.error('StagedWarehouseModel: failed to write APPROVE audit', auditError.message);
             });
 
+            await registerWarehouseImages(this.prisma, created.id);
             return created;
         } catch (error) {
             this.handleDatabaseError(error);

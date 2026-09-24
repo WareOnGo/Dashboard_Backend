@@ -1,3 +1,4 @@
+const { registerWarehouseImages } = require('./imagePipelineRepository.cjs');
 // src/models/warehouseModel.js
 const { Prisma } = require('@prisma/client');
 const BaseModel = require('./baseModel');
@@ -180,7 +181,7 @@ class WarehouseModel extends BaseModel {
                 warehouse.media = incomingMedia;
             }
 
-            return await this.model.create({
+            const created = await this.model.create({
                 data: {
                     ...warehouse,
                     WarehouseData: {
@@ -189,6 +190,8 @@ class WarehouseModel extends BaseModel {
                 },
                 include: { WarehouseData: true },
             });
+            await registerWarehouseImages(this.prisma, created.id);
+            return created;
         } catch (error) {
             this.handleDatabaseError(error);
         }
@@ -225,7 +228,11 @@ class WarehouseModel extends BaseModel {
                 include: { WarehouseData: true },
             };
 
-            return await this.model.update(updatePayload);
+            const updated = await this.model.update(updatePayload);
+            if (Object.hasOwn(updateData, 'media') || Object.hasOwn(updateData, 'photos')) {
+                await registerWarehouseImages(this.prisma, updated.id);
+            }
+            return updated;
         } catch (error) {
             this.handleDatabaseError(error);
         }

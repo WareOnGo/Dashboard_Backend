@@ -847,8 +847,8 @@ model PointOfInterest {
   @@map("point_of_interest")
 }
 
-/// Scene-type labels for warehouse listing images, produced by the vision
-/// classification experiment (scripts/classifyWarehouseImagesSample.js).
+/// Original image URL, scene labels/caption, and the matching compressed image.
+/// Compression metadata is backfilled independently of the existing label sweep.
 ///
 /// warehouseId is a logical reference to Warehouse.id. It is deliberately NOT a
 /// Prisma @relation, so the Warehouse model stays untouched and this table can
@@ -858,9 +858,9 @@ model LabeledWarehouseImage {
   id             Int           @id @default(autoincrement())
   warehouseId    Int
   imageUrl       String        @unique
-  classification ImageClass
+  classification ImageClass?
   description    String?
-  model          String
+  model          String?
   confidence     Float?
   createdAt      DateTime      @default(now())
   /// Sub-label, set only where classification is DOCUMENT. Null everywhere else,
@@ -872,9 +872,70 @@ model LabeledWarehouseImage {
   /// cannot.
   documentKind   DocumentKind?
 
+  /// imageUrl remains the original URL and description remains the caption.
+  /// Legacy generic compression columns are retained unchanged for compatibility.
+  /// New producers/readers use the explicit webp* fields below.
+  storageBucket        String?
+  originalObjectKey    String?
+  compressedImageUrl   String?
+  compressedObjectKey  String?
+  compressedBytes      BigInt?
+  compressedAt         DateTime? @db.Timestamptz(3)
+  /// PENDING, RUNNING, READY, FAILED or UNSUPPORTED. READY requires an R2 object.
+  compressionStatus    String    @default("PENDING") @db.VarChar(16)
+  compressionError     String?
+  compressionCheckedAt DateTime? @db.Timestamptz(3)
+  /// Null for imported variants whose original encoder settings are unknown.
+  compressionVersion   String?
+
+
+  /// Explicit WebP variant, independent of JPEG and labeling.
+  webpUrl                  String?
+  webpObjectKey            String?
+  webpBytes                BigInt?
+  webpAt                   DateTime? @db.Timestamptz(3)
+  webpStatus               String    @default("PENDING") @db.VarChar(16)
+  webpError                String?
+  webpCheckedAt            DateTime? @db.Timestamptz(3)
+  webpVersion              String?
+
+  /// JPEG export variant: auto-oriented, max edge 1920px, quality 82, progressive.
+  /// Original files and WebP results remain independent and available as fallbacks.
+  jpegUrl                  String?
+  jpegBytes                BigInt?
+  jpegAt                   DateTime? @db.Timestamptz(3)
+  jpegVersion              String?
+  jpegStatus               String    @default("PENDING") @db.VarChar(16)
+  jpegError                String?
+
+  /// Processing attempts are independent; successful results survive retries.
+  labelStatus              String    @default("READY") @db.VarChar(16)
+  labelledAt               DateTime? @db.Timestamptz(3)
+  labelAttempts            Int       @default(0)
+  labelError               String?
+  labelNextAttemptAt       DateTime? @db.Timestamptz(3)
+  labelClaimToken          String?
+  labelLeaseUntil          DateTime? @db.Timestamptz(3)
+  documentStatus           String    @default("PENDING") @db.VarChar(16)
+  documentAttempts         Int       @default(0)
+  documentError            String?
+  documentNextAttemptAt    DateTime? @db.Timestamptz(3)
+  documentClaimToken       String?
+  documentLeaseUntil       DateTime? @db.Timestamptz(3)
+  webpAttempts     Int       @default(0)
+  webpNextAttemptAt DateTime? @db.Timestamptz(3)
+  webpClaimToken    String?
+  webpLeaseUntil    DateTime? @db.Timestamptz(3)
+  unreferencedAt           DateTime? @db.Timestamptz(3)
+
+  @@index([webpStatus])
+  @@index([jpegStatus])
+  @@index([labelStatus])
+  @@index([documentStatus])
   @@index([warehouseId])
   @@index([classification])
   @@index([documentKind])
+  @@index([compressionStatus])
   @@map("labeled_warehouse_images")
 }
 
