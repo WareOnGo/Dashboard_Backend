@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { PrismaClient } = require('@prisma/client');
 const root = path.resolve(__dirname, '..');
-const sqlFiles = ['imageCompressionMetadata.sql', 'imagePipeline.sql', 'imageJpegVariant.sql'];
+const sqlFiles = ['imageCompressionMetadata.sql', 'imagePipeline.sql', 'imageJpegVariant.sql', 'imageWebsiteApproval.sql'];
 
 async function snapshot(tx, table, keys) {
     const metadata = await tx.$queryRawUnsafe(`SELECT column_name FROM information_schema.columns

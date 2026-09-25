@@ -1,13 +1,13 @@
 const { randomUUID } = require('node:crypto');
 const { imageUrls, imagesForWarehouse } = require('../utils/imageContract.cjs');
 
-const STAGES = new Set(['label', 'document', 'webp']);
+const STAGES = new Set(['label', 'document', 'webp', 'website']);
 const MAX_ATTEMPTS = 5;
 const refs = `SELECT w.id AS "warehouseId", w.visibility, u.url
   FROM "Warehouse" w CROSS JOIN LATERAL unnest(public.wareongo_image_urls(w.media::jsonb, w.photos)) u(url)`;
 const columns = `l.id, l."imageUrl", l.classification, l.description, l.confidence,
   l."documentKind", l."webpUrl", l."jpegUrl"`;
-const missing = { label: 'l.classification IS NULL', document: `l.classification = 'DOCUMENT' AND l."documentKind" IS NULL`, webp: 'TRUE' };
+const missing = { label: 'l.classification IS NULL', document: `l.classification = 'DOCUMENT' AND l."documentKind" IS NULL`, webp: 'TRUE', website: `l."websiteStatus" <> 'READY'` };
 function stageName(stage) {
     if (!STAGES.has(stage)) throw new Error('Invalid image processing stage');
     return stage;
@@ -36,8 +36,9 @@ class ImagePipelineRepository {
         return { registered, retained };
     }
 
-    async claim(stage, { limit = 50, warehouseId = null } = {}) {
+    async claim(stage, { limit = 50, warehouseId = null, allEntries = false } = {}) {
         stageName(stage);
+        if (allEntries && stage !== 'website') throw new Error('All-entry claims are only supported for website backfills');
         if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new Error('Invalid image batch size');
         // An interrupted final attempt becomes visible as an exhausted failure.
         await this.prisma.$executeRawUnsafe(`UPDATE labeled_warehouse_images SET "${stage}Status" = 'FAILED',
@@ -45,9 +46,12 @@ class ImagePipelineRepository {
           "${stage}LeaseUntil" = NULL, "${stage}NextAttemptAt" = NULL
           WHERE "${stage}Status" = 'RUNNING' AND "${stage}LeaseUntil" < now() AND "${stage}Attempts" >= $1`, MAX_ATTEMPTS);
         const token = randomUUID();
+        const active = allEntries
+            ? `SELECT "imageUrl" AS url, false AS visible FROM labeled_warehouse_images WHERE ($3::integer IS NULL OR "warehouseId" = $3)`
+            : `SELECT url, bool_or(visibility) AS visible FROM (${refs}
+              WHERE ($3::integer IS NULL OR w.id = $3)) r GROUP BY url`;
         return this.prisma.$queryRawUnsafe(`WITH active AS MATERIALIZED (
-            SELECT url, bool_or(visibility) AS visible FROM (${refs}
-              WHERE ($3::integer IS NULL OR w.id = $3)) r GROUP BY url
+            ${active}
           ), picked AS (
             SELECT l.id FROM labeled_warehouse_images l JOIN active a ON a.url = l."imageUrl"
             WHERE ${missing[stage]} AND l."${stage}Attempts" < $4 AND (
@@ -74,6 +78,9 @@ class ImagePipelineRepository {
           "documentStatus" = CASE WHEN $3::jsonb->>'classification' = 'DOCUMENT' AND $3::jsonb->>'documentKind' IS NULL
             THEN 'PENDING' ELSE 'READY' END`;
         else if (stage === 'document') assignments = `"documentKind" = ($3::jsonb->>'documentKind')::"DocumentKind"`;
+        else if (stage === 'website') assignments = `"websiteDecision" = $3::jsonb->>'decision',
+          "websiteQualityTier" = $3::jsonb->>'qualityTier', "websiteAssessment" = $3::jsonb->'assessment',
+          "websiteAssessedAt" = now()`;
         else assignments = `"storageBucket" = $3::jsonb->>'storageBucket',
           "originalObjectKey" = $3::jsonb->>'originalObjectKey', "webpUrl" = $3::jsonb->>'webpUrl',
           "webpObjectKey" = $3::jsonb->>'webpObjectKey', "webpBytes" = ($3::jsonb->>'webpBytes')::bigint,
@@ -100,11 +107,12 @@ class ImagePipelineRepository {
         deferred ? null : String(reason).slice(0, 500), next, deferred ? 1 : 0, row.imageUrl);
     }
 
-    async backlog(stage) {
+    async backlog(stage, { allEntries = false } = {}) {
         stageName(stage);
+        if (allEntries && stage !== 'website') throw new Error('All-entry backlog is only supported for website backfills');
         const rows = await this.prisma.$queryRawUnsafe(`SELECT l."${stage}Status" AS status, count(*)::int AS count
           FROM labeled_warehouse_images l WHERE ${missing[stage]}
-          AND EXISTS (SELECT 1 FROM (${refs}) r WHERE r.url = l."imageUrl") GROUP BY l."${stage}Status"`);
+          ${allEntries ? '' : `AND EXISTS (SELECT 1 FROM (${refs}) r WHERE r.url = l."imageUrl")`} GROUP BY l."${stage}Status"`);
         return Object.fromEntries(rows.map(row => [row.status, row.count]));
     }
 

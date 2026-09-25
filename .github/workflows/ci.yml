@@ -63,6 +63,10 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run test:integration
+      - name: Website image migration, leases and source preservation
+        run: |
+          node tests/image-pipeline/setup.cjs
+          node tests/image-pipeline/website-approval.cjs
 
   ppt:
     name: Offline deck regression evaluation

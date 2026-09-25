@@ -908,6 +908,20 @@ model LabeledWarehouseImage {
   jpegStatus               String    @default("PENDING") @db.VarChar(16)
   jpegError                String?
 
+  /// Website-only approval/quality; never overwrites original scene labels or media.
+  websiteDecision      String    @default("PENDING") @db.VarChar(16)
+  websiteQualityTier   String?   @db.VarChar(16)
+  websiteAssessment    Json?
+  websiteAssessedAt    DateTime? @db.Timestamptz(3)
+  websiteOverride      Json?
+  /// Independent, resumable execution state; same lease/retry contract as other stages.
+  websiteStatus        String    @default("PENDING") @db.VarChar(16)
+  websiteAttempts      Int       @default(0)
+  websiteError         String?
+  websiteNextAttemptAt DateTime? @db.Timestamptz(3)
+  websiteClaimToken    String?
+  websiteLeaseUntil    DateTime? @db.Timestamptz(3)
+
   /// Processing attempts are independent; successful results survive retries.
   labelStatus              String    @default("READY") @db.VarChar(16)
   labelledAt               DateTime? @db.Timestamptz(3)
@@ -930,6 +944,7 @@ model LabeledWarehouseImage {
 
   @@index([webpStatus])
   @@index([jpegStatus])
+  @@index([websiteStatus, websiteNextAttemptAt], map: "labeled_warehouse_images_websiteStatus_idx")
   @@index([labelStatus])
   @@index([documentStatus])
   @@index([warehouseId])
