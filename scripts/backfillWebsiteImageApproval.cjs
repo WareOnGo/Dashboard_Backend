@@ -6,7 +6,7 @@ const { spawn } = require('node:child_process');
 const { setTimeout: delay } = require('node:timers/promises');
 const { ImagePipelineRepository } = require('../src/models/imagePipelineRepository.cjs');
 const WebsiteImageService = require('../src/services/websiteImageService');
-const { MODEL, VERSION } = require('../src/utils/websiteImageAssessment.cjs');
+const { MODEL, VERSION, assessWebsiteImage } = require('../src/utils/websiteImageAssessment.cjs');
 const { retryDatabase, isTransientDatabaseError } = require('../src/utils/websiteImageDatabase.cjs');
 
 async function stats(prisma) {
@@ -27,7 +27,9 @@ async function run(prisma, { apply = false, concurrency = 12, limit = 100000, ou
     if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY is not configured');
     const repository = new ImagePipelineRepository(prisma);
     const registered = await repository.register();
-    const service = new WebsiteImageService(repository, null);
+    const service = new WebsiteImageService(repository, null, {
+        assess: (url, options) => assessWebsiteImage(url, { ...options, preferUrl: true }),
+    });
     fs.mkdirSync(output, { recursive: true, mode: 0o700 });
     const journal = path.join(output, 'progress.jsonl');
     const started = Date.now(); let processed = 0, assessed = 0, totalFailed = 0, lastLogged = 0;

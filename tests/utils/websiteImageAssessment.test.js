@@ -70,3 +70,31 @@ test('source network failures use a stable error code and never call the model',
         .rejects.toMatchObject({code:'source_download_failed'});
     expect(modelCall).not.toHaveBeenCalled();
 });
+async function transportFixture() {
+    const bytes=await require('sharp')({create:{width:1000,height:600,channels:3,background:'#999'}}).jpeg().toBuffer();
+    return {bytes,http:async()=>new Response(bytes)};
+}
+test('local backfills can submit the same original R2 URL after downloading and checking its bytes',async()=>{
+    const {http}=await transportFixture();const modelCall=jest.fn(async()=>base);
+    const result=await assessWebsiteImage(url,{http,modelCall,preferUrl:true});
+    expect(modelCall).toHaveBeenCalledTimes(1);expect(modelCall.mock.calls[0][1]).toBe(url);
+    expect(result.assessment.inputTransport).toBe('original-url');
+    expect(result.assessment.sourceSha256).toMatch(/^[a-f0-9]{64}$/);
+});
+test.each([400,422])('provider image-fetch HTTP %s falls back to the checked original bytes',async status=>{
+    const {bytes,http}=await transportFixture();const modelCall=jest.fn()
+        .mockResolvedValueOnce({error:`http ${status}: failed to download image`}).mockResolvedValueOnce(base);
+    const result=await assessWebsiteImage(url,{http,modelCall,preferUrl:true});
+    expect(modelCall).toHaveBeenCalledTimes(2);
+    expect(modelCall.mock.calls[1][1]).toBe(`data:image/jpeg;base64,${bytes.toString('base64')}`);
+    expect(result.assessment.inputTransport).toBe('original-bytes');
+});
+test('URL mode does not double-submit authentication failures or cancelled work',async()=>{
+    const {http}=await transportFixture();const modelCall=jest.fn(async()=>({error:'http 401: invalid credentials'}));
+    await expect(assessWebsiteImage(url,{http,modelCall,preferUrl:true})).rejects.toMatchObject({code:'model_http_401'});
+    expect(modelCall).toHaveBeenCalledTimes(1);
+    const controller=new AbortController();modelCall.mockClear();
+    modelCall.mockImplementation(async()=>{controller.abort();return {error:'http 400: image download cancelled'};});
+    await expect(assessWebsiteImage(url,{http,modelCall,preferUrl:true,signal:controller.signal})).rejects.toThrow();
+    expect(modelCall).toHaveBeenCalledTimes(1);
+});

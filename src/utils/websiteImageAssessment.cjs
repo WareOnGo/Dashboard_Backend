@@ -89,7 +89,7 @@ function normalizeAssessment(raw, source) {
         sourceBytes: source.bytes, sourceFormat: source.format, sourceEtag: source.etag || null,
     } };
 }
-async function assessWebsiteImage(imageUrl, { signal, http = fetch, modelCall = callModel } = {}) {
+async function assessWebsiteImage(imageUrl, { signal, http = fetch, modelCall = callModel, preferUrl = false } = {}) {
     const deadline = AbortSignal.timeout(110000);
     const requestSignal = signal ? AbortSignal.any([signal, deadline]) : deadline;
     const downloadSignal = AbortSignal.any([requestSignal, AbortSignal.timeout(30000)]);
@@ -112,10 +112,20 @@ async function assessWebsiteImage(imageUrl, { signal, http = fetch, modelCall = 
         width: swapped ? metadata.height : metadata.width, height: swapped ? metadata.width : metadata.height,
         format: metadata.format, etag };
     const mime = metadata.format === 'jpeg' ? 'image/jpeg' : `image/${metadata.format}`;
+    let inputTransport = preferUrl ? 'original-url' : 'original-bytes';
+    const request = input => modelCall(MODEL, input, PROMPT, SCHEMA,
+        { detail: 'high', maxAttempts: 2, schemaName: 'website_image_eval', signal: requestSignal });
     let response;
     try {
-        response = await modelCall(MODEL, `data:${mime};base64,${buffer.toString('base64')}`, PROMPT, SCHEMA,
-            { detail: 'high', maxAttempts: 2, schemaName: 'website_image_eval', signal: requestSignal });
+        response = await request(preferUrl ? validateSource(imageUrl) : `data:${mime};base64,${buffer.toString('base64')}`);
+        // The backfill uses immutable original R2 URLs to avoid a second large
+        // transfer over the local uplink. Provider-side fetch failures use the
+        // exact original bytes we already downloaded, checked and hashed.
+        if (preferUrl && !requestSignal.aborted && /^http (400|422):/.test(response.error || '')
+            && /image|download/i.test(response.error)) {
+            inputTransport = 'original-bytes';
+            response = await request(`data:${mime};base64,${buffer.toString('base64')}`);
+        }
     } catch {
         throw new AssessmentError(requestSignal.aborted ? 'model_timeout' : 'model_response_failed');
     }
@@ -123,7 +133,9 @@ async function assessWebsiteImage(imageUrl, { signal, http = fetch, modelCall = 
         const status = /^http (\d+)/.exec(response.error)?.[1];
         throw new AssessmentError(status ? `model_http_${status}` : requestSignal.aborted ? 'model_timeout' : 'model_request_failed');
     }
-    return { ...normalizeAssessment(response, source), usage: { inputTokens: response.inputTokens || 0,
+    const result = normalizeAssessment(response, source);
+    result.assessment.inputTransport = inputTransport;
+    return { ...result, usage: { inputTokens: response.inputTokens || 0,
         outputTokens: response.outputTokens || 0, latencyMs: response.latencyMs || 0 } };
 }
 module.exports = { MODEL, VERSION, MAX_BYTES, MAX_PIXELS, AssessmentError, validateSource,

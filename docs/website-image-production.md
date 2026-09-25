@@ -72,7 +72,7 @@ oversized, animated or unsupported originals become UNSUPPORTED; exhausted failu
 remain visible. Neither means approval. Transient database failures retry saving
 the same result without paying for another model call.
 
-The local backfill limits concurrency to 16, originals to 20 MiB and dimensions to
+Each local backfill process limits concurrency to 16, originals to 20 MiB and dimensions to
 40 million pixels. It holds only active images in RAM, creates no R2 objects and
 keeps no local originals. Its background process has a 1 GiB V8 heap cap; monitor
 RSS too because native buffers are additional. Source/API/database interruptions
@@ -80,6 +80,15 @@ can extend the throughput estimate.
 The local CLI allows two seconds for each connection address-family attempt;
 this avoids premature connection failures on high-latency local routes while
 retaining the existing overall download and model deadlines.
+To avoid re-uploading every original over a slow local connection, the CLI
+submits the original R2 URL after downloading, validating and hashing its bytes.
+Provider image-fetch errors fall back to those exact original bytes. The stored
+`inputTransport` records the successful route; older results without that key
+used inline bytes. The deployed cron keeps its existing inline-byte default.
+A paired check on 17 previously reviewed images (nine restricted, eight clean)
+produced identical approval decisions in both modes; median request times were
+5.06 seconds for URLs and 8.42 seconds for bytes on this machine. This small check
+does not establish general model accuracy. No resized/compressed variant is used.
 
 For rollback, deploy the previous backend image and retain the additive columns
 and completed results. Old writers remain compatible. Do not drop metadata or
