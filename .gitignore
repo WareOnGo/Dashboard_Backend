@@ -151,3 +151,6 @@ tools/ppt-preview/out/
 
 # Batch-script logs (error/recovery JSONL, written to the repo root by default)
 *.jsonl
+
+# Private Batch API image snapshots/results; never commit listing data.
+tools/website-image-review-batches/

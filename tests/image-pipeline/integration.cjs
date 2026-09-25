@@ -9,6 +9,8 @@ const ImageLabelModel = require('../../src/models/imageLabelModel');
 const ImageLabelService = require('../../src/services/imageLabelService');
 const contract = require('../../src/utils/imageContract.cjs');
 const { migrate } = require('../../scripts/migrateImagePipeline');
+const { migrateWebsiteApproval } = require('../../scripts/migrateWebsiteImageApproval');
+const { normalizeAssessment } = require('../../src/utils/websiteImageAssessment.cjs');
 
 const databaseUrl = testDatabaseUrl(process.env.TEST_DATABASE_URL);
 process.env.DATABASE_URL = databaseUrl;
@@ -29,14 +31,17 @@ async function warehouse(id, images, extra = {}) {
 async function rowFor(source) {
     return (await prisma.$queryRawUnsafe('SELECT * FROM labeled_warehouse_images WHERE "imageUrl" = $1', source))[0];
 }
-before(async () => { webpModule = await import(pathToFileURL(path.join(site, 'services/webpPipeline.js'))); });
+before(async () => {
+    await migrateWebsiteApproval(prisma, true);
+    webpModule = await import(pathToFileURL(path.join(site, 'services/webpPipeline.js')));
+});
 beforeEach(async () => {
     // Guarded dedicated local test database; never falls back to DATABASE_URL.
     await prisma.$executeRawUnsafe('TRUNCATE "Warehouse", labeled_warehouse_images RESTART IDENTITY CASCADE');
 });
 after(() => prisma.$disconnect());
 
-test('both real backend read paths return the same pairs; public list/detail still hide private stock', async () => {
+test('dashboard retains all pairs while public list/detail select only approved photos and hide private stock', async () => {
     for (const [name, type] of Object.entries({ address: 'text', city: 'text', state: 'text', postalCode: 'text',
         totalSpaceSqft: 'int[]', clearHeightFt: 'text', compliances: 'text', otherSpecifications: 'text',
         ratePerSqft: 'text', warehouseType: 'text', zone: 'text', micromarket: 'text[]',
@@ -50,6 +55,12 @@ test('both real backend read paths return the same pairs; public list/detail sti
       compliances = '', "ratePerSqft" = '', zone = '', "warehouseType" = 'Industrial',
       "createdAt" = now(), status_updated_at = now(), "totalSpaceSqft" = ARRAY[1000]`);
     await repository.register();
+    const approved = normalizeAssessment({ decision:'ALLOW', reasons:[], scene:'INDOOR', qualityTier:'T2', qualityIssues:[],
+        view:'INTERIOR_OVERVIEW', coverSuitable:true, decisionReason:'No contact details.', qualityReason:'Useful overview.',
+        confidence:0.9, evidence:[] }, {sha256:'a'.repeat(64),width:1280,height:720,bytes:100,format:'jpeg'});
+    await prisma.$executeRawUnsafe(`UPDATE labeled_warehouse_images SET classification='INDOOR',
+      "websiteStatus"='READY',"websiteDecision"='ALLOW',"websiteQualityTier"='T2',
+      "websiteAssessment"=$1::jsonb,"websiteAssessedAt"=now() WHERE "imageUrl"=$2`,JSON.stringify(approved.assessment),url('a'));
     const [variant] = await repository.claim('webp', { limit: 1, warehouseId: 1 });
     await repository.complete('webp', variant, webp);
     await prisma.$executeRawUnsafe(`UPDATE labeled_warehouse_images SET "jpegUrl" = $1,
@@ -77,18 +88,21 @@ test('both real backend read paths return the same pairs; public list/detail sti
     try {
         const dash = await (await fetch(`${endpoint}/dashboard/1`)).json();
         const detail = await (await fetch(`${endpoint}/website/1`)).json();
-        assert.deepEqual((dash.data ?? dash).images, detail.images);
-        assert.equal(detail.images[1].displayUrl, url('pending'));
+        const dashboardImages = (dash.data ?? dash).images;
+        assert.equal(dashboardImages.length, 2);
+        assert.equal(dashboardImages[1].displayUrl, url('pending'));
+        assert.deepEqual(detail.images, [dashboardImages[0]]);
+        assert.deepEqual(detail.photos, [url('a')]);
         assert.equal(detail.images[0].webpUrl, webp.webpUrl);
         assert.equal(detail.images[0].jpegUrl, `${base}/jpeg/a.jpg`);
         assert.equal(detail.images[0].displayUrl, webp.webpUrl);
-        assert.equal(detail.images[1].jpegUrl, null);
+        assert.equal(dashboardImages[1].jpegUrl, null);
         assert.equal((await fetch(`${endpoint}/website/2`)).status, 404);
         const list = await (await fetch(`${endpoint}/website`)).json();
         assert.equal(list.pagination.totalItems, 1);
         assert.deepEqual(list.data[0].images, detail.images);
         assert.equal(Object.hasOwn(list.data[0], 'media'), false);
-        assert.ok([...cached.keys()][0].startsWith('warehouses:v8-images:'));
+        assert.ok([...cached.keys()][0].startsWith('warehouses:v9-approved-images:'));
     } finally {
         await new Promise(resolve => server.close(resolve));
         await websitePrisma.$disconnect();
