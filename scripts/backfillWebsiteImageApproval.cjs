@@ -77,6 +77,9 @@ async function run(prisma, { apply = false, concurrency = 12, limit = 100000, ou
 }
 module.exports={run,stats};
 if(require.main===module){
+    // Local high-latency routes can exceed Node's default 250 ms address-family
+    // attempt window. Keep the overall source/model deadlines unchanged.
+    require('node:net').setDefaultAutoSelectFamilyAttemptTimeout(2000);
     require('dotenv').config({path:path.resolve(__dirname,'../.env'),quiet:true});
     const options={apply:false,concurrency:12,limit:100000}; let background=false;
     for(const arg of process.argv.slice(2)){

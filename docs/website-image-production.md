@@ -77,6 +77,9 @@ The local backfill limits concurrency to 16, originals to 20 MiB and dimensions 
 keeps no local originals. Its background process has a 1 GiB V8 heap cap; monitor
 RSS too because native buffers are additional. Source/API/database interruptions
 can extend the throughput estimate.
+The local CLI allows two seconds for each connection address-family attempt;
+this avoids premature connection failures on high-latency local routes while
+retaining the existing overall download and model deadlines.
 
 For rollback, deploy the previous backend image and retain the additive columns
 and completed results. Old writers remain compatible. Do not drop metadata or
