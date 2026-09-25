@@ -123,17 +123,23 @@ const normalizeImageBuffer = async (buffer, url = '') => {
 
 // Download a remote image and return its orientation-normalised data URI + dims.
 // `axiosOptions` is merged into the request (callers can pass timeout/headers).
-const fetchImage = async (url, axiosOptions = {}, { validateWebp = false } = {}) => {
+const fetchImage = async (url, axiosOptions = {}, { validateJpeg = false, convertWebpToPng = false } = {}) => {
     const response = await axios.get(url, { responseType: 'arraybuffer', ...axiosOptions });
-    const buffer = Buffer.from(response.data);
-    if (validateWebp) {
-        if (imageMime(buffer) !== 'image/webp' || buffer.length < 30
-            || buffer.readUInt32LE(4) + 8 !== buffer.length || !sharp) {
-            throw new Error('Invalid or incomplete WebP image');
+    let buffer = Buffer.from(response.data);
+    if (validateJpeg) {
+        if (imageMime(buffer) !== 'image/jpeg' || !sharp) {
+            throw new Error('Invalid JPEG image');
         }
         // Decode once to catch damaged pixel data, not just a plausible header.
-        // The original WebP bytes are embedded unchanged; no encoding occurs.
-        await sharp(buffer, { failOn: 'warning', limitInputPixels: 40_000_000 }).raw().toBuffer();
+        // stats() avoids retaining a full raw-pixel output buffer. Published
+        // JPEG bytes are embedded unchanged; no export-time encoding occurs.
+        await sharp(buffer, { failOn: 'warning', limitInputPixels: 40_000_000 }).stats();
+    }
+    if (convertWebpToPng && imageMime(buffer) === 'image/webp') {
+        if (!sharp) throw new Error('WebP fallback conversion unavailable');
+        // An original can itself be WebP. Keep compressed exports compatible
+        // with older PPT viewers by embedding a lossless PNG in this rare case.
+        buffer = await sharp(buffer, { failOn: 'warning', limitInputPixels: 40_000_000 }).rotate().png().toBuffer();
     }
     return normalizeImageBuffer(buffer, url);
 };

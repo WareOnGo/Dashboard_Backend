@@ -1,9 +1,12 @@
 # Shared image registry: deployment
 
-Updated 2026-09-24. Both backends now use the extended `labeled_warehouse_images`
+Updated 2026-09-25. Both backends now use the extended `labeled_warehouse_images`
 table automatically. No read/write feature flags need to be added to hosting
-settings. The shared Supabase image schema is already applied; unused JPEG variant
-columns are retired. `Warehouse.media`, original files and WebP results are preserved.
+settings. The shared Supabase image schema is already applied. Six JPEG variant
+fields have been restored, and the JPEG pilot led to a manual two-pass backfill
+at 1280px for photos (1920px for drawings). JPEG processing is not part of the
+scheduled workers. See [JPEG pilot and backfill](jpeg-ppt-pilot.md).
+`Warehouse.media`, original files and WebP results are preserved.
 
 1. **Deploy the dashboard backend first.** Push the image-pipeline changes through
    its existing main-branch release workflow. Registration on warehouse saves,
@@ -13,7 +16,7 @@ columns are retired. `Warehouse.media`, original files and WebP results are pres
    instances are updated, then resume it.
 2. **Deploy the website backend.** Its existing WebP maintenance job and manual CLI
    now use the image table automatically. List/detail responses include `images`,
-   and the `v7-images` cache namespace avoids reusing older cached responses.
+   and the `v8-images` cache namespace avoids reusing older cached responses.
    Keep the existing job schedules; no additional service is required.
 3. **Deploy the frontend changes and rebuild the website.** The galleries consume
    explicit original/WebP pairs. Existing originals, media ordering, labels and

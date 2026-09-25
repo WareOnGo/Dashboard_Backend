@@ -12,7 +12,7 @@ is provenance, not exclusive ownership or gallery order.
 
 WebP is explicit: `webpUrl`, `webpObjectKey`, `webpBytes`, `webpAt`, `webpVersion`,
 `webpStatus` and WebP-specific attempt/lease/error fields. Separate JPEG variants
-are not part of the current pipeline.
+are supported by the manual [JPEG pilot and backfill](jpeg-ppt-pilot.md), not the scheduled workers.
 The initial generic compression columns are retained unchanged for compatibility.
 The migration copies their reusable results into the WebP fields without making
 model calls, converting images or uploading objects.
@@ -24,6 +24,7 @@ Both API serializers return ordered image objects:
   "id": 123,
   "originalUrl": "https://images.example/original.jpg",
   "webpUrl": "https://images.example/webp/images/hash/sharp-w1280-q75-v1.webp",
+  "jpegUrl": "https://images.example/jpeg/images/hash/jpeg-1280-q82-progressive-420-v1/content.jpg",
   "displayUrl": "https://images.example/webp/images/hash/sharp-w1280-q75-v1.webp",
   "classification": "INDOOR",
   "documentKind": null,
@@ -94,7 +95,7 @@ Do not use Prisma db push against the shared database.
 4. Deploy both frontend consumers and rebuild the static website. Dashboard
    list reads stay opt-in via includeImageLabels/includeImages; detail and
    image-label endpoints expose images automatically. Public visibility rules
-   remain unchanged and website list cache keys use v7-images.
+   remain unchanged and website list cache keys use v8-images.
 5. Verify a new submission, an image edit, original-only fallback, and successful
    label/WebP processing. Later static HTML follows the existing build schedule;
    processing completion does not start a site deployment.
@@ -157,8 +158,9 @@ their first label row. The focused checks are
 
 **Unused JPEG columns removed — 24 September 2026**
 
-The unused JPEG variant fields (`jpegUrl`, `jpegBytes`, `jpegAt`, `jpegVersion`,
-`jpegStatus`, `jpegError`) are retired. Originals, explicit WebP fields, labels,
+The then-unused JPEG variant fields (`jpegUrl`, `jpegBytes`, `jpegAt`, `jpegVersion`,
+`jpegStatus`, `jpegError`) were removed on 24 September and restored for the
+[JPEG pilot](jpeg-ppt-pilot.md) on 25 September. Originals, explicit WebP fields, labels,
 captions and `Warehouse.media` retain their existing values. Original JPEG files
 are still originals; this cleanup does not touch R2 objects.
 
@@ -166,7 +168,8 @@ are still originals; this cleanup does not touch R2 objects.
 `--apply` locks briefly, refuses any populated JPEG metadata or non-default status,
 drops only those six fields without CASCADE, and verifies every remaining image
 and warehouse value in the same transaction. It rolls back on a mismatch and can
-be repeated. Normal pipeline migrations no longer create JPEG variant columns.
+be repeated while the fields are unused. It now refuses to drop them because the
+pilot has published JPEG results. Normal pipeline migrations include their schema.
 
 After local test setup, run
 `TEST_DATABASE_URL=postgresql://warehouse_test:warehouse_test@127.0.0.1:55439/warehouse_qa node tests/image-pipeline/drop-unused-jpeg.cjs`

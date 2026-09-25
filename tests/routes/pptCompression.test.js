@@ -26,7 +26,7 @@ beforeEach(() => {
     jest.clearAllMocks();
     mockService.findWarehousesByIds.mockResolvedValue([{ id: 1 }]);
     mockService.createBuffer.mockImplementation(async (...args) => {
-        Object.assign(args[5].imageStats, { webpImages: 2, originalFallbacks: 1, failedImages: 0 });
+        Object.assign(args[5].imageStats, { jpegImages: 2, originalFallbacks: 1, failedImages: 0 });
         return Buffer.from('deck');
     });
 });
@@ -39,7 +39,7 @@ it.each(['generate-ppt', 'generate-ppt-v2', 'generate-ppt-v3', 'generate-detaile
         expect(mockService.createBuffer.mock.calls[0][5].compressedPpt).toBe(true);
         expect(mockAudit.log.mock.calls[0][0].metadata).toMatchObject({
             compressedPpt: true, outcome: 'success', selectedImageCount: 3,
-            imageStats: { webpImages: 2, originalFallbacks: 1, failedImages: 0 },
+            imageStats: { jpegImages: 2, originalFallbacks: 1, failedImages: 0 },
         });
     },
 );

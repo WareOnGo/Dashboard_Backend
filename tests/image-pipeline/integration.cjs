@@ -52,6 +52,9 @@ test('both real backend read paths return the same pairs; public list/detail sti
     await repository.register();
     const [variant] = await repository.claim('webp', { limit: 1, warehouseId: 1 });
     await repository.complete('webp', variant, webp);
+    await prisma.$executeRawUnsafe(`UPDATE labeled_warehouse_images SET "jpegUrl" = $1,
+      "jpegBytes" = 123, "jpegAt" = now(), "jpegVersion" = 'test-1280', "jpegStatus" = 'READY' WHERE id = $2`,
+      `${base}/jpeg/a.jpg`, variant.id);
     const websitePrisma = (await import(pathToFileURL(path.join(site, 'models/prismaClient.js')))).default;
     const siteController = await import(pathToFileURL(path.join(site, 'controllers/warehouseController.js')));
     const redis = (await import(pathToFileURL(path.join(site, 'services/redisService.js')))).default;
@@ -77,12 +80,15 @@ test('both real backend read paths return the same pairs; public list/detail sti
         assert.deepEqual((dash.data ?? dash).images, detail.images);
         assert.equal(detail.images[1].displayUrl, url('pending'));
         assert.equal(detail.images[0].webpUrl, webp.webpUrl);
+        assert.equal(detail.images[0].jpegUrl, `${base}/jpeg/a.jpg`);
+        assert.equal(detail.images[0].displayUrl, webp.webpUrl);
+        assert.equal(detail.images[1].jpegUrl, null);
         assert.equal((await fetch(`${endpoint}/website/2`)).status, 404);
         const list = await (await fetch(`${endpoint}/website`)).json();
         assert.equal(list.pagination.totalItems, 1);
         assert.deepEqual(list.data[0].images, detail.images);
         assert.equal(Object.hasOwn(list.data[0], 'media'), false);
-        assert.ok([...cached.keys()][0].startsWith('warehouses:v7-images:'));
+        assert.ok([...cached.keys()][0].startsWith('warehouses:v8-images:'));
     } finally {
         await new Promise(resolve => server.close(resolve));
         await websitePrisma.$disconnect();

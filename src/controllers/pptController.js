@@ -120,7 +120,7 @@ class PptController extends BaseController {
             const { ids, selectedImages = {}, customDetails = {}, includeLocation = false, compressedPpt = false } = req.body || {};
             const warehouseIds = this.pptGenerationService.parseIds(ids);
             const startedAt = Date.now();
-            const useWebp = variant !== 'last-mile' && compressedPpt === true;
+            const useCompressedImages = variant !== 'last-mile' && compressedPpt === true;
             const imageStats = {};
 
             // Did the caller hang up before we could answer? A deck the client
@@ -132,7 +132,7 @@ class PptController extends BaseController {
             res.on('close', () => { if (!res.writableFinished) clientGone = true; });
 
             const audit = (outcome, extra = {}) => this.recordExport(req, {
-                variant, warehouseIds, customDetails, selectedImages, compressedPpt: useWebp, imageStats,
+                variant, warehouseIds, customDetails, selectedImages, compressedPpt: useCompressedImages, imageStats,
                 outcome: clientGone && outcome === 'success' ? 'abandoned' : outcome,
                 durationMs: Date.now() - startedAt, ...extra,
             });
@@ -169,12 +169,12 @@ class PptController extends BaseController {
 
                 const buffer = await this.pptGenerationService.createBuffer(
                     variant, warehouses, selectedImages, customDetails, includeLocation,
-                    { compressedPpt: useWebp, imageStats }
+                    { compressedPpt: useCompressedImages, imageStats }
                 );
 
                 logInfo('pptController', variant, `Successfully generated ${label} presentation`, {
                     warehouseIds, bufferSize: buffer.length, durationMs: Date.now() - startedAt,
-                    compressedPpt: useWebp, ...(useWebp ? { imageStats } : {}),
+                    compressedPpt: useCompressedImages, ...(useCompressedImages ? { imageStats } : {}),
                 });
 
                 res.setHeader('Content-Type', contentType);

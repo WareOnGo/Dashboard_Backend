@@ -35,7 +35,7 @@ beforeEach(async () => {
       (1,'https://fixture.r2.dev/raw.jpg','INDOOR','Original caption','fixture',now(),'READY','fixture-bucket','raw.jpg',
        'https://fixture.r2.dev/webp/raw.webp','webp/raw.webp',1234,'READY')`);
 });
-after(() => prisma.$disconnect());
+after(async () => { await migrate(prisma, true); await prisma.$disconnect(); });
 
 test('preview is read-only; cleanup preserves every other value and can be repeated', async () => {
     const [before] = await snapshot();
@@ -55,7 +55,7 @@ test('preview is read-only; cleanup preserves every other value and can be repea
     assert.deepEqual((await dropUnusedJpeg(prisma, true)).removedColumns, []);
     assert.deepEqual(await snapshot(), [after]);
     await migrate(prisma, true);
-    assert.deepEqual(await jpegColumns(), [], 'Normal migrations must not recreate retired JPEG fields');
+    assert.deepEqual(await jpegColumns(), [...JPEG_FIELDS].sort(), 'The JPEG pilot migration restores its fields');
 });
 
 for (const [field, value] of [

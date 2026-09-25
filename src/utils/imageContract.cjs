@@ -25,8 +25,10 @@ function imageUrls(warehouse) {
 function serializeImage(originalUrl, row) {
     const webpUrl = row?.webpUrl && isImageUrl(row.webpUrl)
         ? row.webpUrl : null;
+    const jpegUrl = row?.jpegUrl && isImageUrl(row.jpegUrl)
+        ? row.jpegUrl : null;
     return {
-        id: row?.id ?? null, originalUrl, webpUrl,
+        id: row?.id ?? null, originalUrl, webpUrl, jpegUrl,
         displayUrl: webpUrl || originalUrl,
         classification: row?.classification ?? null,
         documentKind: row?.documentKind ?? null,

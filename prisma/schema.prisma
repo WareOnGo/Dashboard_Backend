@@ -899,6 +899,15 @@ model LabeledWarehouseImage {
   webpCheckedAt            DateTime? @db.Timestamptz(3)
   webpVersion              String?
 
+  /// JPEG export variant: 1280px photos / 1920px drawings, quality 82, or a verified small original.
+  /// jpegUrl stores the R2 URL; originals and WebPs remain independent.
+  jpegUrl                  String?
+  jpegBytes                BigInt?
+  jpegAt                   DateTime? @db.Timestamptz(3)
+  jpegVersion              String?
+  jpegStatus               String    @default("PENDING") @db.VarChar(16)
+  jpegError                String?
+
   /// Processing attempts are independent; successful results survive retries.
   labelStatus              String    @default("READY") @db.VarChar(16)
   labelledAt               DateTime? @db.Timestamptz(3)
@@ -920,6 +929,7 @@ model LabeledWarehouseImage {
   unreferencedAt           DateTime? @db.Timestamptz(3)
 
   @@index([webpStatus])
+  @@index([jpegStatus])
   @@index([labelStatus])
   @@index([documentStatus])
   @@index([warehouseId])

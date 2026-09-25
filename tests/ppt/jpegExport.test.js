@@ -8,13 +8,13 @@ const { normalizeImageBuffer, readImageDimensions } = require('../../src/ppt/uti
 // Stub only storage/network boundaries. All deck builders and ZIP packaging run.
 const original = 'https://images.test/one/photo.jpg';
 const other = 'https://images.test/two/photo.jpg'; // Same filename, different image.
-const variant = 'https://images.test/hashed/published.jpg'; // Bytes, not extension, are WebP.
+const variant = 'https://images.test/hashed/published.jpg'; // Published JPEG pairing, independent of original filenames.
 const warehouse = {
     id: 1, city: 'Bengaluru', state: 'Karnataka', address: 'Fixture warehouse',
     warehouseType: 'PEB', totalSpaceSqft: [50000], ratePerSqft: 20,
     photos: `${original},${other}`, googleLocation: '', WarehouseData: {},
 };
-let jpeg, png, webp, rotated;
+let jpeg, compressedJpeg, png, webp, rotated;
 let get, findMany, service, stats;
 const details = { clientName: 'Fixture', mapsLocation: false, pocSlide: false };
 const selection = { 1: [original, other] };
@@ -23,10 +23,11 @@ const bodies = new Map();
 beforeAll(async () => {
     const pixels = { create: { width: 120, height: 80, channels: 3, background: '#0066cc' } };
     jpeg = await sharp(pixels).jpeg().toBuffer();
+    compressedJpeg = await sharp(pixels).resize(80, 53).jpeg({ quality: 82, progressive: true }).toBuffer();
     png = await sharp({ create: { width: 80, height: 120, channels: 3, background: '#ee8822' } }).png().toBuffer();
     webp = await sharp(pixels).webp().toBuffer();
     rotated = await sharp(pixels).jpeg().withMetadata({ orientation: 6 }).toBuffer();
-    bodies.set(original, jpeg); bodies.set(other, png); bodies.set(variant, webp);
+    bodies.set(original, jpeg); bodies.set(other, png); bodies.set(variant, compressedJpeg);
 });
 
 beforeEach(() => {
@@ -35,7 +36,7 @@ beforeEach(() => {
         if (!bodies.has(url)) throw new Error(`Unexpected URL: ${url}`);
         return { data: bodies.get(url) };
     });
-    findMany = jest.fn(async () => [{ imageUrl: original, webpUrl: variant }]);
+    findMany = jest.fn(async () => [{ imageUrl: original, jpegUrl: variant }]);
     service = new PptGenerationService({ prisma: { labeledWarehouseImage: { findMany } } });
 });
 afterEach(() => { jest.restoreAllMocks(); jest.useRealTimers(); });
@@ -53,18 +54,20 @@ const unzipImages = async buffer => {
 const contains = (media, body) => media.some(image => image.body.equals(body));
 
 it.each(['standard', 'v2', 'v3', 'godamwale', 'tci', 'detailed'])(
-    '%s embeds native WebP, falls back by original identity, and caches repeats', async type => {
+    '%s embeds native JPEG, falls back by original identity, and caches repeats', async type => {
         const buffer = await service.createBuffer(type, [warehouse], selection, details, false,
             { compressedPpt: true, imageStats: stats });
         const { zip, media } = await unzipImages(buffer);
-        expect(media.filter(image => image.name.endsWith('.webp')).some(image => image.body.equals(webp))).toBe(true);
-        expect(await zip.file('[Content_Types].xml').async('string')).toContain('ContentType="image/webp"');
+        expect(media.filter(image => /\.jpe?g$/.test(image.name)).some(image => image.body.equals(compressedJpeg))).toBe(true);
+        expect(media.some(image => image.name.endsWith('.webp'))).toBe(false);
+        expect(await zip.file('[Content_Types].xml').async('string')).toContain('ContentType="image/jpeg"');
         expect(contains(media, jpeg)).toBe(false);
         expect(contains(media, png)).toBe(true);
         expect(findMany).toHaveBeenCalledTimes(1);
         expect(findMany.mock.calls[0][0].where.imageUrl.in).toEqual([original, other]);
+        expect(findMany.mock.calls[0][0].select).toEqual({ imageUrl: true, jpegUrl: true });
         expect(get.mock.calls.map(call => call[0]).sort()).toEqual([variant, other].sort());
-        expect(stats).toEqual({ webpImages: 1, originalFallbacks: 1, failedImages: 0, registryLookupFailed: false });
+        expect(stats).toEqual({ jpegImages: 1, originalFallbacks: 1, failedImages: 0, registryLookupFailed: false });
     },
 );
 
@@ -89,7 +92,7 @@ it('keeps simultaneous compressed and normal requests isolated', async () => {
 });
 
 it('uses the same fallback for a V3 layout drawing while keeping it on a separate slide', async () => {
-    findMany.mockResolvedValue([{ imageUrl: other, webpUrl: variant }]);
+    findMany.mockResolvedValue([{ imageUrl: other, jpegUrl: variant }]);
     get.mockImplementation(async url => {
         if (url === variant) throw new Error('404');
         return { data: bodies.get(url) };
@@ -108,25 +111,25 @@ it('uses the same fallback for a V3 layout drawing while keeping it on a separat
 it.each(['detailed', 'tci'])('%s resolves its implicit warehouse images too', async type => {
     const { media } = await unzipImages(await service.createBuffer(type, [warehouse], {}, details, false,
         { compressedPpt: true }));
-    expect(contains(media, webp)).toBe(true);
+    expect(contains(media, compressedJpeg)).toBe(true);
     expect(contains(media, jpeg)).toBe(false);
 });
 
 it.each(['missing', 'null-url', 'invalid-url', 'database-error', '404', 'timeout', 'html', 'wrong-type', 'truncated', 'corrupt'])(
     'falls back for %s and retries neither variant nor original within the deck', async failure => {
         if (failure === 'missing') findMany.mockResolvedValue([]);
-        if (failure === 'null-url') findMany.mockResolvedValue([{ imageUrl: original, webpUrl: null }]);
-        if (failure === 'invalid-url') findMany.mockResolvedValue([{ imageUrl: original, webpUrl: 'file:///tmp/image.webp' }]);
+        if (failure === 'null-url') findMany.mockResolvedValue([{ imageUrl: original, jpegUrl: null }]);
+        if (failure === 'invalid-url') findMany.mockResolvedValue([{ imageUrl: original, jpegUrl: 'file:///tmp/image.webp' }]);
         if (failure === 'database-error') findMany.mockRejectedValue(new Error('DB unavailable'));
         get.mockImplementation(async (url, options) => {
             if (url === original) return { data: jpeg };
             expect(options.timeout).toBeLessThanOrEqual(5000);
             if (failure === '404' || failure === 'timeout') throw new Error(failure);
             if (failure === 'html') return { data: Buffer.from('<html>storage error</html>') };
-            if (failure === 'wrong-type') return { data: jpeg };
-            if (failure === 'truncated') return { data: webp.subarray(0, 29) };
-            const corrupt = Buffer.from(webp);
-            corrupt.fill(0, 20, 30); // Invalid VP8 frame inside an intact RIFF container.
+            if (failure === 'wrong-type') return { data: webp };
+            if (failure === 'truncated') return { data: compressedJpeg.subarray(0, compressedJpeg.length - 2) };
+            const corrupt = Buffer.from(compressedJpeg);
+            corrupt.fill(0, 20, corrupt.length - 2); // JPEG magic and EOI intact, damaged image data.
             return { data: corrupt };
         });
         const load = await loader([original, original]);
@@ -165,6 +168,39 @@ it('leaves an unavailable original to the existing slide fallback and caches the
     expect(results.every(result => result.status === 'rejected')).toBe(true);
     expect(get).toHaveBeenCalledTimes(2);
     expect(stats.failedImages).toBe(1);
+});
+
+it('uses a small original registered as its own JPEG without re-encoding', async () => {
+    findMany.mockResolvedValue([{ imageUrl: original, jpegUrl: original }]);
+    const load = await loader();
+    const [a, b] = await Promise.all([load(original), load(original)]);
+    expect(a).toBe(b);
+    expect(a.data).toBe(`data:image/jpeg;base64,${jpeg.toString('base64')}`);
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(stats.jpegImages).toBe(1);
+    expect(stats.originalFallbacks).toBe(0);
+});
+
+it.each(['404', 'corrupt'])('does not fetch a reused original twice after %s', async failure => {
+    findMany.mockResolvedValue([{ imageUrl: original, jpegUrl: original }]);
+    if (failure === '404') get.mockRejectedValue(new Error('404'));
+    else get.mockResolvedValue({ data: Buffer.from('Not a JPEG') });
+    const load = await loader();
+    const results = await Promise.allSettled([load(original), load(original)]);
+    expect(results.every(result => result.status === 'rejected')).toBe(true);
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(stats.failedImages).toBe(1);
+});
+
+it('converts an original WebP fallback to lossless PNG for compatible PPT playback', async () => {
+    findMany.mockResolvedValue([]);
+    get.mockResolvedValue({ data: webp });
+    const image = await (await loader([original]))(original);
+    expect(image.data).toContain('data:image/png;');
+    const bytes = Buffer.from(image.data.split(',')[1], 'base64');
+    expect(await sharp(bytes).raw().toBuffer()).toEqual(await sharp(webp).raw().toBuffer());
+    expect(image.dims).toEqual({ w: 120, h: 80 });
+    expect(stats.originalFallbacks).toBe(1);
 });
 
 it.each(['lossy', 'lossless', 'extended'])('keeps %s WebP bytes and dimensions unchanged despite a .jpg URL', async kind => {

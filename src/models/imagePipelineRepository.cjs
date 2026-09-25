@@ -6,7 +6,7 @@ const MAX_ATTEMPTS = 5;
 const refs = `SELECT w.id AS "warehouseId", w.visibility, u.url
   FROM "Warehouse" w CROSS JOIN LATERAL unnest(public.wareongo_image_urls(w.media::jsonb, w.photos)) u(url)`;
 const columns = `l.id, l."imageUrl", l.classification, l.description, l.confidence,
-  l."documentKind", l."webpUrl"`;
+  l."documentKind", l."webpUrl", l."jpegUrl"`;
 const missing = { label: 'l.classification IS NULL', document: `l.classification = 'DOCUMENT' AND l."documentKind" IS NULL`, webp: 'TRUE' };
 function stageName(stage) {
     if (!STAGES.has(stage)) throw new Error('Invalid image processing stage');
