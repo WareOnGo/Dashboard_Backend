@@ -162,7 +162,9 @@ Required fields:
 | `uploadedBy`       | string         | non-empty (typically user email) |
 | `warehouseData`    | object         | nested — see below, all fields optional |
 
-Optional top-level fields: `warehouseOwnerType`, `googleLocation`, `postalCode`, `offeredSpaceSqft`, `numberOfDocks`, `clearHeightFt`, `otherSpecifications`, `availability`, `visibility` (bool), `isBroker`, `photos`, `media`.
+Optional top-level fields: `warehouseOwnerType`, `googleLocation`, `postalCode`, `numberOfDocks`, `clearHeightFt`, `otherSpecifications`, `availability`, `visibility` (bool), `isBroker`, `photos`, `media`.
+
+Offered Area uses only `totalSpaceSqft`. Keep separate area options as array entries; do not sum them. The legacy `offeredSpaceSqft` input is ignored.
 
 `media` shape (all arrays default to `[]`):
 ```json

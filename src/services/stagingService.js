@@ -499,6 +499,7 @@ class StagingService extends BaseService {
         }
         const warehouse = {};
         for (const [key, value] of Object.entries(row)) {
+            if (key === 'offeredSpaceSqft') continue;
             if (STAGING_META_FIELDS.has(key)) continue;
             if (WAREHOUSE_DATA_FIELDS.includes(key)) continue;
             warehouse[key] = value;

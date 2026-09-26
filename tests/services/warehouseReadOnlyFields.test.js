@@ -1,5 +1,18 @@
 const WarehouseService = require('../../src/services/warehouseService');
 
+test('area updates use totalSpaceSqft and discard legacy offeredSpaceSqft input', async () => {
+    const saved = { id: 123, totalSpaceSqft: [10000], offeredSpaceSqft: '8000', WarehouseData: {} };
+    const model = {
+        findById: jest.fn().mockResolvedValue(saved),
+        update: jest.fn().mockResolvedValue(saved),
+    };
+    await new WarehouseService(model).updateWarehouse(123, {
+        totalSpaceSqft: [25000, 50000], offeredSpaceSqft: '99999',
+    });
+    expect(model.update.mock.calls[0][1]).toMatchObject({ totalSpaceSqft: [25000, 50000] });
+    expect(model.update.mock.calls[0][1]).not.toHaveProperty('offeredSpaceSqft');
+});
+
 test('warehouse updates ignore client-supplied proximity while preserving editable fields', async () => {
     const saved = { id: 123, city: 'Lucknow', WarehouseData: {} };
     const model = {

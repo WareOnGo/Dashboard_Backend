@@ -76,7 +76,6 @@ function makeWarehouse(index, { imageBase }) {
     // Multi-value on even rows: the area breakdown renders differently for one
     // figure versus several.
     totalSpaceSqft: index % 2 === 0 ? [offered, Math.round(offered * 0.6)] : [offered],
-    offeredSpaceSqft: String(offered),
     chargeableArea: Math.round(offered * 1.05),
     numberOfDocks: index % 5 === 0 ? null : String(pick(index, 3, 1, 14)),
     clearHeightFt: String(pick(index, 4, 18, 44)),

@@ -71,7 +71,6 @@ class WarehouseValidator extends BaseValidator {
         warehouseOwnerType: z.string().optional().nullable(),
         googleLocation: z.string().optional().nullable(),
         postalCode: z.string().optional().nullable(),
-        offeredSpaceSqft: z.string().optional().nullable(),
         numberOfDocks: z.string().optional().nullable(),
         clearHeightFt: z.string().optional().nullable(),
         otherSpecifications: z.string().optional().nullable(),

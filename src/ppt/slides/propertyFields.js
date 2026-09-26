@@ -55,14 +55,11 @@ function propertyFields(warehouse, flags = {}) {
         || (hasCoords ? `https://www.google.com/maps/search/?api=1&query=${lat},${lng}` : null);
     const coordsText = hasCoords ? `${lat}, ${lng}` : (warehouse.googleLocation ? 'See link' : 'Available on demand');
 
-    // Offered area is the canonical value — fall back to totalSpaceSqft only
-    // when offeredSpaceSqft isn't set.
-    const offered = asValue(warehouse.offeredSpaceSqft);
-    const area = offered
-        ? `Offered area – ${offered} sq. ft.`
-        : (Array.isArray(warehouse.totalSpaceSqft) && warehouse.totalSpaceSqft.length
-            ? `Offered area – ${warehouse.totalSpaceSqft.join(', ')} sq. ft.`
-            : 'N/A');
+    // The dashboard's Offered Area and the index both use totalSpaceSqft.
+    // offeredSpaceSqft is a legacy column and can contain stale values.
+    const area = Array.isArray(warehouse.totalSpaceSqft) && warehouse.totalSpaceSqft.length
+        ? `Offered area – ${warehouse.totalSpaceSqft.join(', ')} sq. ft.`
+        : 'N/A';
 
     // Fire safety: concatenate measures with NOC status. "NA"/"N/A"/blank
     // measures are treated as null so we only show the NOC half when the

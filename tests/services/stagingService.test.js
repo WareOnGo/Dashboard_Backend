@@ -70,11 +70,14 @@ describe('StagingService mapping', () => {
                 submittedAt: new Date(), reviewedBy: null, reviewedAt: null, rejectionReason: null,
                 warehouseId: null, rawPayload: {}, flags: null, reviewMeta: null,
                 city: 'Bengaluru', ratePerSqft: '30', latitude: 12.9, powerKva: '750',
+                totalSpaceSqft: [25000, 50000], offeredSpaceSqft: '99999',
             };
             const payload = svc.buildPromotionPayload(flatRow);
 
             expect(payload.city).toBe('Bengaluru');
             expect(payload.ratePerSqft).toBe('30');
+            expect(payload.totalSpaceSqft).toEqual([25000, 50000]);
+            expect(payload).not.toHaveProperty('offeredSpaceSqft');
             expect(payload.warehouseData.latitude).toBe(12.9);
             expect(payload.warehouseData.powerKva).toBe('750');
             // metadata must not leak into the warehouse payload

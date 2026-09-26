@@ -219,7 +219,7 @@ async function generateDetailedSlideGodamwale(pptx, warehouse, selectedPhotoUrls
     sectionLabel(slide, 'Specifications', specsLabelY - LABEL_LIFT);
     const area = Array.isArray(warehouse.totalSpaceSqft) && warehouse.totalSpaceSqft.length
         ? `${warehouse.totalSpaceSqft.join(', ')} sqft`
-        : (warehouse.offeredSpaceSqft || 'N/A');
+        : 'N/A';
     const wd = warehouse.WarehouseData || {};
     const yn = (v) => (v ? 'Y' : 'N');
     const landTypeStr = (wd.landType || '').trim();

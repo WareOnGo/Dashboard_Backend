@@ -66,9 +66,7 @@ function normalizePhone(raw) {
  */
 function buildFinalIdLabel(outcome, row, warehouseId) {
     const city = (row.city || '').trim();
-    const sqft = (row.offeredSpaceSqft || (Array.isArray(row.totalSpaceSqft) ? row.totalSpaceSqft.join('/') : '') || '')
-        .toString()
-        .trim();
+    const sqft = Array.isArray(row.totalSpaceSqft) ? row.totalSpaceSqft.join('/') : '';
     const owner = (row.contactPerson || row.ownerCompanyName || '').trim();
 
     const parts = [];

@@ -81,6 +81,40 @@ it.each(['standard', 'v2', 'v3', 'godamwale', 'tci', 'detailed'])(
     },
 );
 
+describe.each(['v2', 'v3', 'godamwale', 'tci'])('%s offered area', type => {
+    it.each([false, true])('uses dashboard areas with compression=%s despite stale legacy values', async compressedPpt => {
+        // Both columns can be populated, but only totalSpaceSqft is maintained
+        // by the dashboard. Keep alternative areas separate and missing data N/A.
+        const warehouses = [[50000], [25000, 75000], []].map((totalSpaceSqft, index) => ({
+            ...warehouse, id: index + 1, totalSpaceSqft, offeredSpaceSqft: '99999',
+            photos: index === 0 ? warehouse.photos : '',
+        }));
+        const images = type === 'v3' ? { 1: { photos: [original, other], cad: [] } } : selection;
+        const { zip, media } = await unzipImages(await service.createBuffer(
+            type, warehouses, images, details, false, { compressedPpt },
+        ));
+        const slides = await Promise.all(zip.file(/^ppt\/slides\/slide\d+\.xml$/).map(async file => {
+            const xml = await file.async('string');
+            return [...xml.matchAll(/<a:t>([\s\S]*?)<\/a:t>/g)].map(match => match[1]);
+        }));
+        const usesPropertyFields = type === 'v3' || type === 'tci';
+        const areaLabel = usesPropertyFields ? 'Area details' : 'Offered Area';
+        const areaValues = slides.filter(text => text.includes(areaLabel))
+            .map(text => text[text.indexOf(areaLabel) + 1]);
+        expect(areaValues).toEqual(usesPropertyFields ? [
+            'Offered area – 50000 sq. ft.',
+            'Offered area – 25000, 75000 sq. ft.',
+            'N/A',
+        ] : ['50000 sqft', '25000, 75000 sqft', 'N/A']);
+        if (type !== 'tci') {
+            expect(slides.find(text => text.includes('INDEX')))
+                .toEqual(expect.arrayContaining(['50000', '25000, 75000']));
+        }
+        expect(slides.flat().some(text => text.includes('99999'))).toBe(false);
+        expect(contains(media, compressedPpt ? compressedJpeg : jpeg)).toBe(true);
+    });
+});
+
 it('keeps simultaneous compressed and normal requests isolated', async () => {
     const [compressed, normal] = await Promise.all([
         service.createBuffer('v3', [warehouse], selection, details, false, { compressedPpt: true }),
