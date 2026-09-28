@@ -56,7 +56,7 @@ const contains = (media, body) => media.some(image => image.body.equals(body));
 it.each(['standard', 'v2', 'v3', 'godamwale', 'tci', 'detailed'])(
     '%s embeds native JPEG, falls back by original identity, and caches repeats', async type => {
         const buffer = await service.createBuffer(type, [warehouse], selection, details, false,
-            { compressedPpt: true, imageStats: stats });
+            { imageStats: stats });
         const { zip, media } = await unzipImages(buffer);
         expect(media.filter(image => /\.jpe?g$/.test(image.name)).some(image => image.body.equals(compressedJpeg))).toBe(true);
         expect(media.some(image => image.name.endsWith('.webp'))).toBe(false);
@@ -72,17 +72,18 @@ it.each(['standard', 'v2', 'v3', 'godamwale', 'tci', 'detailed'])(
 );
 
 it.each(['standard', 'v2', 'v3', 'godamwale', 'tci', 'detailed'])(
-    '%s keeps originals and never looks up variants when the option is omitted', async type => {
+    '%s embeds compressed JPEGs when no options are supplied', async type => {
         const { media } = await unzipImages(await service.createBuffer(type, [warehouse], selection, details));
-        expect(contains(media, jpeg)).toBe(true);
+        expect(contains(media, jpeg)).toBe(false);
+        expect(contains(media, compressedJpeg)).toBe(true);
         expect(contains(media, png)).toBe(true);
         expect(media.some(image => image.name.endsWith('.webp'))).toBe(false);
-        expect(findMany).not.toHaveBeenCalled();
+        expect(findMany).toHaveBeenCalledTimes(1);
     },
 );
 
 describe.each(['v2', 'v3', 'godamwale', 'tci'])('%s offered area', type => {
-    it.each([false, true])('uses dashboard areas with compression=%s despite stale legacy values', async compressedPpt => {
+    it.each([false, true])('uses JPEGs and dashboard areas despite legacy compressedPpt=%s', async compressedPpt => {
         // Both columns can be populated, but only totalSpaceSqft is maintained
         // by the dashboard. Keep alternative areas separate and missing data N/A.
         const warehouses = [[50000], [25000, 75000], []].map((totalSpaceSqft, index) => ({
@@ -111,18 +112,23 @@ describe.each(['v2', 'v3', 'godamwale', 'tci'])('%s offered area', type => {
                 .toEqual(expect.arrayContaining(['50000', '25000, 75000']));
         }
         expect(slides.flat().some(text => text.includes('99999'))).toBe(false);
-        expect(contains(media, compressedPpt ? compressedJpeg : jpeg)).toBe(true);
+        expect(contains(media, compressedJpeg)).toBe(true);
+        expect(contains(media, jpeg)).toBe(false);
     });
 });
 
-it('keeps simultaneous compressed and normal requests isolated', async () => {
+it('keeps JPEG lookups, image caches and fallback counts isolated across simultaneous exports', async () => {
+    findMany.mockResolvedValueOnce([{ imageUrl: original, jpegUrl: variant }]).mockResolvedValueOnce([]);
+    const compressedStats = {}, fallbackStats = {};
     const [compressed, normal] = await Promise.all([
-        service.createBuffer('v3', [warehouse], selection, details, false, { compressedPpt: true }),
-        service.createBuffer('v3', [warehouse], selection, details, false, { compressedPpt: false }),
+        service.createBuffer('v3', [warehouse], selection, details, false, { imageStats: compressedStats }),
+        service.createBuffer('v3', [warehouse], selection, details, false, { imageStats: fallbackStats }),
     ]);
     expect(contains((await unzipImages(compressed)).media, jpeg)).toBe(false);
     expect(contains((await unzipImages(normal)).media, jpeg)).toBe(true);
-    expect(findMany).toHaveBeenCalledTimes(1);
+    expect(findMany).toHaveBeenCalledTimes(2);
+    expect(compressedStats).toMatchObject({ jpegImages: 1, originalFallbacks: 1 });
+    expect(fallbackStats).toMatchObject({ jpegImages: 0, originalFallbacks: 2 });
 });
 
 it('uses the same fallback for a V3 layout drawing while keeping it on a separate slide', async () => {
@@ -133,7 +139,7 @@ it('uses the same fallback for a V3 layout drawing while keeping it on a separat
     });
     const structured = { 1: { photos: [original], cad: [other] } };
     const { zip, media } = await unzipImages(await service.createBuffer('v3', [warehouse], structured, details,
-        false, { compressedPpt: true, imageStats: stats }));
+        false, { imageStats: stats }));
     expect(contains(media, jpeg)).toBe(true);
     expect(contains(media, png)).toBe(true);
     const slides = await Promise.all(zip.file(/^ppt\/slides\/slide\d+\.xml$/).map(file => file.async('string')));
@@ -143,8 +149,7 @@ it('uses the same fallback for a V3 layout drawing while keeping it on a separat
 });
 
 it.each(['detailed', 'tci'])('%s resolves its implicit warehouse images too', async type => {
-    const { media } = await unzipImages(await service.createBuffer(type, [warehouse], {}, details, false,
-        { compressedPpt: true }));
+    const { media } = await unzipImages(await service.createBuffer(type, [warehouse], {}, details));
     expect(contains(media, compressedJpeg)).toBe(true);
     expect(contains(media, jpeg)).toBe(false);
 });

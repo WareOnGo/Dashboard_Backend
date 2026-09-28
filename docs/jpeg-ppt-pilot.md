@@ -1,6 +1,6 @@
 # JPEG variants and backfill
 
-Updated 25 September 2026. The existing `labeled_warehouse_images` table holds six
+Updated 29 September 2026. The existing `labeled_warehouse_images` table holds six
 JPEG fields: `jpegUrl` (the real R2/public URL), `jpegBytes`, `jpegAt`,
 `jpegVersion`, `jpegStatus` and `jpegError`. Original URLs/files, WebPs, labels,
 captions and `Warehouse.media` remain intact. No extra table or processing flags
@@ -27,8 +27,8 @@ because the existing single-point map request returned HTTP 422.
 
 The agreed backfill preset is **1280px maximum edge, quality 82 for photographs**.
 Documents/drawings keep a **1920px** maximum edge to retain more fine detail.
-The application now uses these JPEGs when **Generate compressed PPT (beta)**
-is checked. This replaces the earlier WebP PPT option.
+The application now uses these JPEGs automatically in every PPT template,
+with original images as fallbacks. The beta compression checkbox has been removed.
 See [compressed PPT export](webp-ppt-export.md) for fallback and verification details.
 
 ## Completed backfill

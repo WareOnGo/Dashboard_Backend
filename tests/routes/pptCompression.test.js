@@ -32,11 +32,11 @@ beforeEach(() => {
 });
 
 it.each(['generate-ppt', 'generate-ppt-v2', 'generate-ppt-v3', 'generate-detailed-ppt', 'generate-ppt-godamwale', 'generate-ppt-tci'])(
-    '%s accepts compression as an explicit boolean and audits observed image counts', async route => {
-        const response = await post(route, { compressedPpt: true,
+    '%s prefers JPEGs by default and audits observed image counts', async route => {
+        const response = await post(route, {
             selectedImages: { 1: { photos: ['original-a', 'original-b'], cad: ['original-c'] } } });
         expect(response.status).toBe(200);
-        expect(mockService.createBuffer.mock.calls[0][5].compressedPpt).toBe(true);
+        expect(mockService.createBuffer.mock.calls[0][5]).not.toHaveProperty('compressedPpt');
         expect(mockAudit.log.mock.calls[0][0].metadata).toMatchObject({
             compressedPpt: true, outcome: 'success', selectedImageCount: 3,
             imageStats: { jpegImages: 2, originalFallbacks: 1, failedImages: 0 },
@@ -44,22 +44,14 @@ it.each(['generate-ppt', 'generate-ppt-v2', 'generate-ppt-v3', 'generate-detaile
     },
 );
 
-it.each([undefined, false])('keeps normal exports when compressedPpt is %s', async value => {
+it.each([undefined, false, true, 'true', 'false', 1, null, {}])('ignores the retired compressedPpt=%p input', async value => {
     expect((await post('generate-ppt-v3', { compressedPpt: value })).status).toBe(200);
-    expect(mockService.createBuffer.mock.calls[0][5].compressedPpt).toBe(false);
-    expect(mockAudit.log.mock.calls[0][0].metadata.compressedPpt).toBe(false);
-});
-
-it.each(['true', 'false', 1, null, {}])('rejects invalid compressedPpt=%p before DB or export work', async value => {
-    const response = await post('generate-ppt-v3', { compressedPpt: value });
-    expect(response.status).toBe(400);
-    expect(response.body.error).toBe('compressedPpt must be a boolean.');
-    expect(mockService.findWarehousesByIds).not.toHaveBeenCalled();
-    expect(mockService.createBuffer).not.toHaveBeenCalled();
+    expect(mockService.createBuffer.mock.calls[0][5]).not.toHaveProperty('compressedPpt');
+    expect(mockAudit.log.mock.calls[0][0].metadata.compressedPpt).toBe(true);
 });
 
 it('ignores PPT compression for Excel, including its audit metadata', async () => {
     expect((await post('generate-xlsx-last-mile', { compressedPpt: true })).status).toBe(200);
-    expect(mockService.createBuffer.mock.calls[0][5].compressedPpt).toBe(false);
+    expect(mockService.createBuffer.mock.calls[0][5]).not.toHaveProperty('compressedPpt');
     expect(mockAudit.log.mock.calls[0][0].metadata).not.toHaveProperty('compressedPpt');
 });

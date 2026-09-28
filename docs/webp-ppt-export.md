@@ -1,17 +1,18 @@
-# Optional compressed PPT export (JPEG)
+# Compressed PPT export (JPEG)
 
-Updated 25 September 2026. This implementation replaces WebP PPT media with
+Updated 29 September 2026. This implementation replaces WebP PPT media with
 published JPEG variants for compatibility with more presentation viewers.
 The filename is retained for existing links.
 
-The **Generate compressed PPT (beta)** checkbox starts unchecked on each modal
-open. It applies to Standard/V2, V3, Detailed, Godamwale and TCI, including the
-legacy standard endpoint. Last Mile Excel is unchanged.
+Compressed JPEGs are automatic for Standard/V2, V3, Detailed, Godamwale and TCI,
+including the legacy standard endpoint. The beta checkbox has been removed.
+Last Mile Excel is unchanged.
 
-Requests retain the same boolean `compressedPpt`. Omitted/false uses originals
-without a variant lookup; non-boolean values on PPT routes return HTTP 400.
+The backend always looks up JPEG variants and ignores the retired `compressedPpt`
+input, including false values from cached clients. The frontend continues sending
+`compressedPpt: true` so it also enables JPEGs on an older backend during rollout.
 Selections always contain original URLs. V3 retains its `{ photos: [], cad: [] }`
-selection format. General galleries and unchecked previews still prefer WebP.
+selection format. Dashboard galleries and picker previews also prefer JPEGs.
 
 ## Image handling
 
@@ -34,10 +35,10 @@ selection format. General galleries and unchecked previews still prefer WebP.
   itself WebP, it is converted to lossless PNG for PPT compatibility. This rare
   fallback adds encoding time and can increase size. Ordinary JPEG variants
   need no encoding. Export never uploads or updates stored images.
-- The loader belongs to one presentation. Concurrent normal/compressed requests
+- The loader belongs to one presentation. Concurrent export requests
   cannot change each other's selections. Branding and maps keep their loaders.
 
-In compressed mode the picker previews JPEGs and marks missing/failed variants
+The picker previews JPEGs and marks missing/failed variants
 orange with **Will be uncompressed**. Warnings appear in the picker, not on slides.
 A small original published as its own JPEG counts as available. Both image APIs
 expose `jpegUrl` alongside `webpUrl`; `displayUrl` remains WebP-first. The website
@@ -45,15 +46,16 @@ list cache uses `v8-images` to avoid older responses without JPEG metadata.
 
 Export audit metadata records `compressedPpt` and `imageStats`: `jpegImages`,
 `originalFallbacks`, `failedImages`, and `registryLookupFailed`. Counts are per
-unique original; `jpegImages` includes reused original JPEGs.
+unique original; `jpegImages` includes reused original JPEGs. `compressedPpt`
+is always true for PPTs and reports the server policy, regardless of client flags.
 
 ## Deployment
 
 The six JPEG columns and backfill already exist in the shared database. Normal
 image-pipeline migration includes their additive schema. Both Prisma schemas
-must ship with the changes; normal installation generates the clients. Deploy
-the dashboard backend before the frontend so the unchanged request flag resolves
-JPEGs. The website backend keeps the shared image response contract consistent.
+must ship with the changes; normal installation generates the clients. The
+dashboard backend enables JPEGs for older clients as well as the new frontend.
+The website backend keeps the shared image response contract consistent.
 No environment flags are needed.
 
 JPEG processing remains a manual backfill. New uploads without JPEG metadata
@@ -90,4 +92,4 @@ Both decks rendered successfully in LibreOffice with 12 pages. The photo grid
 and technical-slide image were visually checked; the compressed grid retained
 its layout and looked comparable at slide size. Artifacts are in
 `/tmp/wareongo-jpeg-application-verification/`. Microsoft PowerPoint desktop/web
-has not been exercised locally; the checkbox remains opt-in beta.
+has not been exercised locally.

@@ -117,10 +117,10 @@ class PptController extends BaseController {
      */
     handleGenerate({ variant, label, allowEmptyIds = false, contentType = PPTX_CONTENT_TYPE, fileType = 'PPT' }) {
         return this.asyncHandler(async (req, res) => {
-            const { ids, selectedImages = {}, customDetails = {}, includeLocation = false, compressedPpt = false } = req.body || {};
+            const { ids, selectedImages = {}, customDetails = {}, includeLocation = false } = req.body || {};
             const warehouseIds = this.pptGenerationService.parseIds(ids);
             const startedAt = Date.now();
-            const useCompressedImages = variant !== 'last-mile' && compressedPpt === true;
+            const useCompressedImages = variant !== 'last-mile';
             const imageStats = {};
 
             // Did the caller hang up before we could answer? A deck the client
@@ -136,12 +136,6 @@ class PptController extends BaseController {
                 outcome: clientGone && outcome === 'success' ? 'abandoned' : outcome,
                 durationMs: Date.now() - startedAt, ...extra,
             });
-
-            if (variant !== 'last-mile' && typeof compressedPpt !== 'boolean') {
-                const errorMessage = 'compressedPpt must be a boolean.';
-                audit('failed', { httpStatus: 400, errorMessage });
-                return res.status(400).json({ error: errorMessage });
-            }
 
             if (warehouseIds.length === 0 && !allowEmptyIds) {
                 logWarn('pptController', variant, 'Invalid or no warehouse IDs provided', { bodyIds: ids });
@@ -169,7 +163,7 @@ class PptController extends BaseController {
 
                 const buffer = await this.pptGenerationService.createBuffer(
                     variant, warehouses, selectedImages, customDetails, includeLocation,
-                    { compressedPpt: useCompressedImages, imageStats }
+                    { imageStats }
                 );
 
                 logInfo('pptController', variant, `Successfully generated ${label} presentation`, {

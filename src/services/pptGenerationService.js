@@ -74,7 +74,9 @@ class PptGenerationService {
      */
     async createBuffer(variant, warehouses, selectedImages = {}, customDetails = {}, includeLocation = false, options = {}) {
         const imageOptions = [];
-        if (variant !== 'last-mile' && options.compressedPpt === true) {
+        // Every PPT uses published JPEGs, with originals handled by the loader
+        // when a variant is missing or unusable. Legacy opt-out flags are ignored.
+        if (variant !== 'last-mile') {
             const urls = warehouses.flatMap(warehouse => {
                 const selection = selectedImages[warehouse.id];
                 const { photos, cad } = pptServiceV3.splitSelection(selection);
