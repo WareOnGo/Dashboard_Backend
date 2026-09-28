@@ -138,11 +138,10 @@ app.use('/api/warehouses', require('./routes/warehouse'));
 app.use('/api/staging', require('./routes/staging'));
 
 /**
- * Warehouse image classification (forward-fill)
- * POST /sweep is cron-triggered via CRON_SECRET; GET /stats is reviewer-gated.
+ * Image metadata readers. Scheduled processing runs on warehouse-enricher.
+ * GET /stats remains reviewer-gated.
  */
 app.use('/api/image-labels', require('./routes/imageLabels'));
-app.use('/api/enrichment', require('./routes/enrichment'));
 
 /**
  * Map view (POI plotting)

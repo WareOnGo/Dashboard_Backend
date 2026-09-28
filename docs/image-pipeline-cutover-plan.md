@@ -1,3 +1,8 @@
+**Current ownership, 28 September:** The enrichment workers now run on EC2;
+retired backend sweep code and scheduling scripts have been removed. See the
+[verified handoff](enrichment-cron-handoff.md). Worker locations below describe
+the original staged design and are historical.
+
 **Deployment update, 24 September:** This is the original design plan. The
 implementation now runs automatically without read/write feature flags. Follow the
 [current deployment notes](image-pipeline-production-rollout.md) for release steps.

@@ -1,30 +1,11 @@
-const { assessWebsiteImage, MODEL, VERSION } = require('../utils/websiteImageAssessment.cjs');
+const { assessWebsiteImage } = require('../utils/websiteImageAssessment.cjs');
 const { invalidateImageCache } = require('../utils/imageCacheInvalidation');
 const { retryDatabase } = require('../utils/websiteImageDatabase.cjs');
-const JOB_NAME = 'sweep_warehouse_website_images';
 
+// Explicit local backfills only. Scheduled assessments run in warehouse-enricher.
 class WebsiteImageService {
-    constructor(repository, runLog, { assess = assessWebsiteImage } = {}) {
-        this.repository = repository; this.runLog = runLog; this.assess = assess;
-    }
-    async sweep({ dryRun = false, signal, limit = 12 } = {}) {
-        if (dryRun) return { status: 'DRY_RUN', model: MODEL, version: VERSION,
-            backlog: await this.repository.backlog('website'), limit };
-        if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY is not configured');
-        const run = await this.runLog.tryStart(JOB_NAME, 15 * 60000, { model: MODEL, version: VERSION });
-        if (!run) return { status: 'SKIPPED', reason: 'Another website assessment sweep is running' };
-        const started = Date.now();
-        try {
-            const summary = await this.processBatch({ limit, signal });
-            summary.backlog = await this.repository.backlog('website');
-            const status = summary.failed ? (summary.assessed ? 'PARTIAL' : 'FAILED') : summary.deferred ? 'PARTIAL' : 'SUCCESS';
-            const result = { status, model: MODEL, version: VERSION, durationMs: Date.now() - started, ...summary };
-            await this.runLog.finish(run.id, status, result.durationMs, summary);
-            return result;
-        } catch (error) {
-            await this.runLog.finish(run.id, 'FAILED', Date.now() - started, null, 'Website image assessment failed').catch(() => {});
-            throw error;
-        }
+    constructor(repository, { assess = assessWebsiteImage } = {}) {
+        this.repository = repository; this.assess = assess;
     }
     async processBatch({ limit = 12, concurrency = 4, allEntries = false, signal, onResult = async () => {} } = {}) {
         if (!Number.isInteger(limit) || limit < 1 || limit > 100000 || !Number.isInteger(concurrency)

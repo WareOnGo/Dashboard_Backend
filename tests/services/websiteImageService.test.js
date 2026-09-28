@@ -5,8 +5,7 @@ const result={decision:'ALLOW',qualityTier:'T2',assessment:{},usage:{inputTokens
 function fixture(rows=[{id:1,imageUrl:'fixture',websiteClaimToken:'token'}]){
     const queue=[...rows];const repository={claim:jest.fn(async()=>{const row=queue.shift();return row?[row]:[];}),
         complete:jest.fn(async()=>1),fail:jest.fn(async()=>1),backlog:jest.fn(async()=>({PENDING:1}))};
-    const log={tryStart:jest.fn(async()=>({id:1n})),finish:jest.fn(async()=>{})};
-    const assess=jest.fn(async()=>result);return{repository,log,assess,service:new Service(repository,log,{assess})};
+    const assess=jest.fn(async()=>result);return{repository,assess,service:new Service(repository,{assess})};
 }
 test('website assessment writes only the independent website stage',async()=>{
     const {repository,assess,service}=fixture();const out=await service.processBatch({limit:1});
@@ -33,12 +32,6 @@ test('cancellation after starting work counts an attempt and stops new claims',a
     assess.mockImplementation(async()=>{controller.abort();throw new Error('aborted');});
     expect(await service.processBatch({limit:2,concurrency:1,signal:controller.signal})).toMatchObject({processed:1,failed:1});
     expect(repository.claim).toHaveBeenCalledTimes(1);expect(repository.fail.mock.calls[0][3].deferred).toBe(false);
-});
-test('dry run and overlapping sweeps perform no paid work',async()=>{
-    const {log,assess,service}=fixture();await service.sweep({dryRun:true});expect(log.tryStart).not.toHaveBeenCalled();
-    const previous=process.env.OPENAI_API_KEY;process.env.OPENAI_API_KEY='test-only';
-    try{log.tryStart.mockResolvedValue(null);expect((await service.sweep()).status).toBe('SKIPPED');expect(assess).not.toHaveBeenCalled();}
-    finally{if(previous===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=previous;}
 });
 test('rolling workers respect the explicit memory/network concurrency bound',async()=>{
     const {assess,service}=fixture(Array.from({length:10},(_,id)=>({id,imageUrl:'fixture'})));let active=0,peak=0;

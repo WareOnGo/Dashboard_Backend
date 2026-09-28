@@ -532,53 +532,24 @@ the ones with an `npm` alias are wired in `package.json`.
 | `importOsmPois.js` (`npm run ingest:osm-pois`) | Imports OSM points of interest into `osm_poi` and highway centrelines into `osm_highway`. See below. |
 | `backfillWarehouseImageLabels.js` | Classifies warehouse images via OpenAI. Costs money; resumable. |
 | `classifyWarehouseImagesSample.js` | Read-only model-comparison harness, for deciding before spending. |
-| `scheduleImageLabelSweep.js` | Manages the existing cron job; newly created jobs target warehouse enrichment. |
-| `scheduleWarehouseEnrichment.js` | Retargets the existing image-label cron to the combined enrichment endpoint after a deployed dry-run check. |
 
 ### Scheduled warehouse enrichment
 
-`POST /api/enrichment/sweep` uses the existing `CRON_SECRET` authentication and
-shared Prisma client. It runs image labelling (up to 50 images, 30-second API
-budget), then proximity enrichment (up to five warehouses, one at a time,
-45-second API budget). Each stage reports its own outcome; empty or failed image
-work never suppresses proximity work. API requests are cancelled when their
-budget expires. An 80-second combined work deadline reserves time for database
-bookkeeping before App Runner's 120-second request limit. Failures/partial results return HTTP 503 and are recorded in
-`CronRunLog`; overlap returns 200 with `SKIPPED`.
+Scheduled processing runs in the separate
+[warehouse-enricher service](https://github.com/rs0125/procurement-enrichment).
+The existing 15-minute Supabase job calls its `/cron/enrichment` endpoint for
+scene labels, document subtypes, website approval and proximity. Nightly
+geocoding and WebP processing also run there.
 
-Proximity uses the ingested OSM POIs and existing Mapbox shortlist/routing rules.
-It covers published warehouses with coordinates, including later coordinate edits
-and nightly geocoding. Only missing or coordinate-stale categories are computed;
-completed `NONE_IN_RANGE` and `ROUTING_FAILED` answers are retained. POI re-imports
-do not automatically trigger a paid fleet-wide recompute. Incomplete source
-categories are skipped and reported.
+This backend retains warehouse/image registration, authenticated label and
+coverage readers, PPT generation and explicit maintenance/backfill tools. The
+retired `/api/enrichment/sweep` and `/api/image-labels/sweep` endpoints return 404;
+their App Runner worker implementations and old schedule-management scripts
+have been removed. Do not recreate those schedules against the dashboard.
 
-Highways receive **a nearest highway name only**. Current OSRM distances already
-stored are preserved. When coordinates move, outdated highway measurements are
-replaced with name-only results. This job does not run OSRM or measure highway
-drive distances.
-
-Temporary provider failures produce no proximity facts. Per-warehouse run logs
-store coordinate-specific retry cooldowns (15 minutes, doubling to six hours).
-The combined job and image job acquire atomic database claims in short
-transactions. Spatial reads have five-second statement limits; no database
-transaction spans routing requests. Writes recheck coordinates under a row lock
-and preserve any category another producer has already computed at that location.
-
-Deployment uses the existing job named `sweep-warehouse-image-labels`, retaining
-its ID, 15-minute schedule, authentication, and enabled state:
-
-1. Deploy this backend with `OPENAI_API_KEY`, `MAPBOX_ACCESS_TOKEN`, and `CRON_SECRET`.
-   No schema migration is required.
-2. Preview with `node -r dotenv/config scripts/scheduleWarehouseEnrichment.js`.
-3. Run the same command with `--apply`. It checks the deployed endpoint with
-   `{ "dryRun": true }`, including provider configuration, before changing the URL.
-4. Inspect `CronRunLog` for `sweep_warehouse_enrichment` and its image/proximity
-   stage summaries. Per-warehouse attempts use `warehouse_proximity:<id>`.
-
-The old `/api/image-labels/sweep` remains available for image-only operations.
-The combined endpoint accepts only an optional boolean `dryRun`; callers cannot
-raise its batch sizes. Dry runs read eligibility without paid API calls or writes.
+See [the verified cron handoff and retained responsibilities](docs/enrichment-cron-handoff.md)
+and the enricher's [architecture](https://github.com/rs0125/procurement-enrichment/blob/main/docs/ARCHITECTURE.md)
+for schedules, retry behaviour, memory bounds and operating instructions.
 
 ### POI ingest
 

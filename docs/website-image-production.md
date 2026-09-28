@@ -48,23 +48,20 @@ Deployment:
 3. Run backend QA and local PostgreSQL regressions. CI bootstraps its disposable
    database with `node tests/image-pipeline/setup.cjs`, then runs
    `node tests/image-pipeline/website-approval.cjs`.
-4. Push the reviewed backend commit to `main`; the existing workflow gates ECR
-   publication on QA. Verify App Runner, then call authenticated
-   `POST /api/enrichment/sweep` with `{"dryRun":true}`. Expect
-   `stages.websiteImages` with model/version and `configured.websiteImages: true`.
-   `node scripts/verifyWebsiteImageDeployment.cjs` performs this check using the
-   actual scheduled credential without printing it; `--run` performs real work.
-5. Verify a scheduled result in `cron_run_log` and new images moving from PENDING
-   to READY. The existing Supabase cron retains its 15-minute schedule, endpoint
-   and secret. No new environment flag is required.
+4. Scheduled assessments now run in the
+   [warehouse-enricher service](https://github.com/rs0125/procurement-enrichment),
+   through `POST /cron/enrichment`. Verify its authenticated dry run and inspect
+   the `sweep_warehouse_enrichment` parent plus `sweep_warehouse_website_images`
+   stage history in `CronRunLog`.
+5. Verify new images moving from PENDING to READY. The existing Supabase cron
+   retains its 15-minute schedule and now targets EC2. The retired dashboard
+   sweep endpoints and their verification script have been removed; see the
+   [current handoff](enrichment-cron-handoff.md).
 
-The combined sweep runs original marking first (30 seconds, up to 50 images),
-then independent proximity and website stages in parallel (45 seconds each),
-within the existing 80-second work budget. Website work uses four rolling workers
-and at most 12 images. Its run-log name is `sweep_warehouse_website_images`.
-`POST /api/image-labels/sweep` remains the separate original marking action.
-Both existing upload backends automatically get website PENDING defaults through
-their existing image registration inserts.
+The EC2 sweep runs scene marking, document subtype, website assessment and
+proximity sequentially through its bounded action executor. Original marking
+and website assessment remain separately callable actions. Both upload backends
+still receive website PENDING defaults through image registration.
 
 Claims use five-minute token-fenced leases, five started attempts and retry delays
 of 5/10/20/40 minutes. Cancellation before work starts refunds the attempt. Missing,
@@ -84,14 +81,15 @@ To avoid re-uploading every original over a slow local connection, the CLI
 submits the original R2 URL after downloading, validating and hashing its bytes.
 Provider image-fetch errors fall back to those exact original bytes. The stored
 `inputTransport` records the successful route; older results without that key
-used inline bytes. The deployed cron keeps its existing inline-byte default.
+used inline bytes. The EC2 assessment action also prefers original URLs with
+the validated-byte fallback.
 A paired check on 17 previously reviewed images (nine restricted, eight clean)
 produced identical approval decisions in both modes; median request times were
 5.06 seconds for URLs and 8.42 seconds for bytes on this machine. This small check
 does not establish general model accuracy. No resized/compressed variant is used.
 
-For rollback, deploy the previous backend image and retain the additive columns
-and completed results. Old writers remain compatible. Do not drop metadata or
-reset READY results to pause processing. Public selection, legacy response fields,
-static covers, sitemaps and cache invalidation still require the later website
-reader rollout described in the [plan](./website-image-approval-plan.md).
+For processing rollback or pause, use the enricher's cron/deployment runbooks.
+Retain additive columns and completed results; do not reset READY rows. Website
+reader rollout and build-time filtering remain independent of the scheduled
+processor. The earlier [approval plan](website-image-approval-plan.md) records
+the original design, not the current worker deployment.

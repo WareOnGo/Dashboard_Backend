@@ -1,4 +1,4 @@
-// One website-only processor for local backfills and the deployed scheduled stage.
+// Explicit website-only local backfill; scheduled processing runs in warehouse-enricher.
 // Row leases make restarts safe; no originals/variants are uploaded or modified.
 const fs = require('node:fs');
 const path = require('node:path');
@@ -27,7 +27,7 @@ async function run(prisma, { apply = false, concurrency = 12, limit = 100000, ou
     if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY is not configured');
     const repository = new ImagePipelineRepository(prisma);
     const registered = await repository.register();
-    const service = new WebsiteImageService(repository, null, {
+    const service = new WebsiteImageService(repository, {
         assess: (url, options) => assessWebsiteImage(url, { ...options, preferUrl: true }),
     });
     fs.mkdirSync(output, { recursive: true, mode: 0o700 });

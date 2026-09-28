@@ -13,7 +13,7 @@ const crypto = require('crypto');
  *  - Missing header and wrong secret both return a generic 401 (no oracle distinguishing them).
  *
  * Each endpoint gets its own env var so secrets can be rotated (or revoked)
- * independently — a leaked cron token must not also grant ingest.
+ * independently without granting access to unrelated endpoints.
  *
  * @param {string} envVar - Environment variable holding the expected secret
  * @param {string} featureLabel - Used in the 503 body when the secret is unset
@@ -64,11 +64,7 @@ const verifyWebhookSecret = (req, res, next) =>
         next();
     });
 
-/** Gate for the image-label sweep, triggered by an external cron. */
-const verifyCronSecret = verifySharedSecret('CRON_SECRET', 'Scheduled job endpoint');
-
 module.exports = {
     verifyWebhookSecret,
     verifySharedSecret,
-    verifyCronSecret,
 };

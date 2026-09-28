@@ -231,13 +231,12 @@ test('a stale object inventory cannot reset a newly published WebP', async () =>
     assert.equal((await rowFor(url('a'))).webpStatus, 'READY');
 });
 
-test('compatibility label writes fill pending rows without overwriting WebP or existing labels', async () => {
+test('stage publication fills pending labels without overwriting WebP or existing labels', async () => {
     await warehouse(1, [url('a')]); await repository.register();
     const [variant] = await repository.claim('webp'); await repository.complete('webp', variant, webp);
-    const model = new ImageLabelModel(prisma);
-    assert.equal((await model.findUnlabelled(10)).length, 1);
-    assert.equal(await model.createManyLabels([{ warehouseId: 1, imageUrl: url('a'), ...label }]), 1);
-    assert.equal(await model.createManyLabels([{ warehouseId: 1, imageUrl: url('a'), ...label, description: 'overwrite' }]), 0);
+    const [scene] = await repository.claim('label');
+    assert.equal(await repository.complete('label', scene, label), 1);
+    assert.equal(await repository.complete('label', scene, { ...label, description: 'overwrite' }), 0);
     assert.equal((await rowFor(url('a'))).webpUrl, webp.webpUrl);
 });
 

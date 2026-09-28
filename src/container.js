@@ -10,10 +10,8 @@ const AppSettingModel = require('./models/appSettingModel');
 const VerifiedNumberModel = require('./models/verifiedNumberModel');
 const VisitNoteModel = require('./models/visitNoteModel');
 const ImageLabelModel = require('./models/imageLabelModel');
-const { ImagePipelineRepository } = require('./models/imagePipelineRepository.cjs');
 const CronRunLogModel = require('./models/cronRunLogModel');
 const GeoModel = require('./models/geoModel');
-const WarehouseProximityModel = require('./models/warehouseProximityModel');
 
 // Import Services
 const WarehouseService = require('./services/warehouseService');
@@ -26,10 +24,7 @@ const MicroMarketService = require('./services/microMarketService');
 const SettingsService = require('./services/settingsService');
 const VisitNoteService = require('./services/visitNoteService');
 const ImageLabelService = require('./services/imageLabelService');
-const WebsiteImageService = require('./services/websiteImageService');
 const GeoService = require('./services/geoService');
-const WarehouseProximityService = require('./services/warehouseProximityService');
-const WarehouseEnrichmentService = require('./services/warehouseEnrichmentService');
 
 // Import Controllers
 const WarehouseController = require('./controllers/warehouseController');
@@ -265,7 +260,7 @@ class Container {
             return new StagingService(stagedWarehouseModel, warehouseService, settingsService);
         });
 
-        // Image classification (forward-fill sweep)
+        // Image metadata and enrichment history readers
         this.registerSingleton('imageLabelModel', () => {
             const prismaClient = database.getClient();
             return new ImageLabelModel(prismaClient);
@@ -281,19 +276,6 @@ class Container {
             const cronRunLogModel = container.resolve('cronRunLogModel');
             return new ImageLabelService(imageLabelModel, cronRunLogModel);
         });
-
-        this.registerSingleton('websiteImageService', container => new WebsiteImageService(
-            new ImagePipelineRepository(database.getClient()), container.resolve('cronRunLogModel'),
-        ));
-        this.registerSingleton('warehouseProximityModel', () => new WarehouseProximityModel(database.getClient()));
-        this.registerSingleton('warehouseProximityService', container => new WarehouseProximityService(
-            container.resolve('warehouseProximityModel'), container.resolve('cronRunLogModel'),
-        ));
-        this.registerSingleton('warehouseEnrichmentService', container => new WarehouseEnrichmentService(
-            container.resolve('imageLabelService'), container.resolve('warehouseProximityService'),
-            container.resolve('cronRunLogModel'),
-            container.resolve('websiteImageService'),
-        ));
 
         // Map view (POIs, warehouses as points)
         this.registerSingleton('geoModel', () => {
