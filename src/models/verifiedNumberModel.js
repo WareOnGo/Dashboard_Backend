@@ -17,6 +17,7 @@ const ADMIN_SELECT = Object.freeze({
     created_at: true,
     twenty_user_id: true,
     adminAccess: true,
+    analystAccess: true,
     callDashboardAccess: true,
     dashboardAccess: true,
     reviewerAccess: true,

@@ -120,12 +120,12 @@ describe('capability caching', () => {
 
 test.each([false, undefined])('inactive or unknown active flag %s grants no capabilities even to a DB admin', async is_active => {
     mockFindFirst.mockResolvedValue({ ...GRANTED, is_active, adminAccess: true, reviewerAccess: true, callDashboardAccess: true });
-    expect(Object.values(await access.resolveCapabilities('asha@wareongo.com'))).toEqual([false, false, false, false]);
+    expect(Object.values(await access.resolveCapabilities('asha@wareongo.com'))).toEqual([false, false, false, false, false]);
     expect(mockFindFirst.mock.calls[0][0].select.is_active).toBe(true);
 });
 test('an active DB admin holds all capabilities', async () => {
     mockFindFirst.mockResolvedValue({ ...GRANTED, adminAccess: true });
-    expect(Object.values(await access.resolveCapabilities('asha@wareongo.com'))).toEqual([true, true, true, true]);
+    expect(Object.values(await access.resolveCapabilities('asha@wareongo.com'))).toEqual([true, true, true, true, true]);
 });
 test('a concurrent cold burst shares one capability query', async () => {
     let release;
@@ -146,4 +146,20 @@ test('revocation while a query is pending prevents that stale result from granti
     release(GRANTED);
     expect((await pending).DASHBOARD).toBe(false);
     expect(mockFindFirst).toHaveBeenCalledTimes(2);
+});
+
+
+test('Analyst access is independent of dashboard, reviewer and admin privileges', async () => {
+    mockFindFirst.mockResolvedValue({ ...GRANTED, dashboardAccess: false, analystAccess: true });
+    expect(await access.resolveCapabilities('analyst@wareongo.com')).toEqual({
+        DASHBOARD: false, CALL_DASHBOARD: false, REVIEW: false, ANALYST: true, ADMIN: false,
+    });
+    mockFindFirst.mockResolvedValue({ ...GRANTED, dashboardAccess: false, analystAccess: false });
+    access.invalidateCapabilities('analyst@wareongo.com');
+    expect((await access.resolveCapabilities('analyst@wareongo.com')).ANALYST).toBe(false);
+});
+
+test.each([undefined, 'true', 1, false])('Analyst flag %s fails closed unless it is true', async analystAccess => {
+    mockFindFirst.mockResolvedValue({ ...GRANTED, analystAccess });
+    expect((await access.resolveCapabilities('employee@wareongo.com')).ANALYST).toBe(false);
 });

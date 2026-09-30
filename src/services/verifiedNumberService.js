@@ -21,6 +21,7 @@ const IDENTITY_KEYS = Object.freeze(['phone_number', 'empID']);
 /** Capability columns an admin can toggle. */
 const CAPABILITY_COLUMNS = Object.freeze([
     'adminAccess',
+    'analystAccess',
     'callDashboardAccess',
     'dashboardAccess',
     'reviewerAccess',

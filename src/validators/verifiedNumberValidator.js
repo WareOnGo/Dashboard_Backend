@@ -37,6 +37,7 @@ const phoneField = z
 
 const capabilityFields = {
     adminAccess: z.boolean().optional(),
+    analystAccess: z.boolean().optional(),
     callDashboardAccess: z.boolean().optional(),
     dashboardAccess: z.boolean().optional(),
     reviewerAccess: z.boolean().optional(),

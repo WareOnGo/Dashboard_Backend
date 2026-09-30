@@ -38,6 +38,7 @@ const CAPS = Object.freeze({
     DASHBOARD: 'DASHBOARD',
     CALL_DASHBOARD: 'CALL_DASHBOARD',
     REVIEW: 'REVIEW',
+    ANALYST: 'ANALYST',
     ADMIN: 'ADMIN',
 });
 
@@ -46,6 +47,7 @@ const CAP_COLUMN = Object.freeze({
     [CAPS.DASHBOARD]: 'dashboardAccess',
     [CAPS.CALL_DASHBOARD]: 'callDashboardAccess',
     [CAPS.REVIEW]: 'reviewerAccess',
+    [CAPS.ANALYST]: 'analystAccess',
     [CAPS.ADMIN]: 'adminAccess',
 });
 
@@ -70,7 +72,7 @@ function invalidateCapabilities(email) {
 /**
  * Resolve a user's capability set from their email.
  *
- * Returns a plain map { DASHBOARD, CALL_DASHBOARD, REVIEW, ADMIN } of booleans. Env-admins and
+ * Returns a plain map { DASHBOARD, CALL_DASHBOARD, REVIEW, ANALYST, ADMIN } of booleans. Env-admins and
  * adminAccess users get all capabilities. A missing row or DB error yields no capabilities
  * beyond any env-admin grant — i.e. least privilege / fail closed.
  *
@@ -99,6 +101,7 @@ async function resolveCapabilities(email) {
                         [CAPS.DASHBOARD]: !!row.dashboardAccess,
                         [CAPS.CALL_DASHBOARD]: !!row.callDashboardAccess,
                         [CAPS.REVIEW]: !!row.reviewerAccess,
+                        [CAPS.ANALYST]: row.analystAccess === true,
                         [CAPS.ADMIN]: false,
                     };
 

@@ -18,7 +18,7 @@ const JWTService = require('../../src/services/jwtService');
 const NON_ADMIN = { id: 7, email: 'nobody-special@wareongo.com', name: 'Sales', domain: 'wareongo.com' };
 const ADMIN = { id: 8, email: 'boss@wareongo.com', name: 'Boss', domain: 'wareongo.com' };
 
-const ALL_CAPS = { DASHBOARD: true, CALL_DASHBOARD: true, REVIEW: true, ADMIN: true };
+const ALL_CAPS = { DASHBOARD: true, CALL_DASHBOARD: true, REVIEW: true, ANALYST: true, ADMIN: true };
 
 // jest.mock factories are hoisted, so anything they close over must be `mock`-prefixed.
 let mockCapabilityLookups = 0;
@@ -135,6 +135,29 @@ describe('admin routes', () => {
             .send({ twenty_user_id: 'not-yours-to-set' });
 
         expect(res.status).toBeGreaterThanOrEqual(400);
+        expect(mockHandlers.adminUpdate).not.toHaveBeenCalled();
+    });
+});
+
+
+describe('Analyst permission administration', () => {
+    it('accepts an explicit boolean grant from an admin', async () => {
+        const res = await request(makeApp()).patch('/api/verified-numbers/admin/7')
+            .set('Authorization', `Bearer ${tokenFor(ADMIN)}`).send({ analystAccess: true });
+        expect(res.status).toBe(200);
+        expect(mockHandlers.adminUpdate.mock.calls[0][0].body).toEqual({ analystAccess: true });
+    });
+    it.each(['true', 1, null])('rejects non-boolean Analyst flag %s', async analystAccess => {
+        const res = await request(makeApp()).patch('/api/verified-numbers/admin/7')
+            .set('Authorization', `Bearer ${tokenFor(ADMIN)}`).send({ analystAccess });
+        expect(res.status).toBe(400);
+        expect(mockHandlers.adminUpdate).not.toHaveBeenCalled();
+    });
+    it('prevents an Analyst from using the employee admin API', async () => {
+        mockCapsByEmail[NON_ADMIN.email] = { DASHBOARD: false, CALL_DASHBOARD: false, REVIEW: false, ANALYST: true, ADMIN: false };
+        const res = await request(makeApp()).patch('/api/verified-numbers/admin/7')
+            .set('Authorization', `Bearer ${tokenFor(NON_ADMIN)}`).send({ adminAccess: true });
+        expect(res.status).toBe(403);
         expect(mockHandlers.adminUpdate).not.toHaveBeenCalled();
     });
 });

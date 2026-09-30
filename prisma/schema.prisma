@@ -58,6 +58,7 @@ model VerifiedNumber {
   empID               String?        @unique(map: "verified_number_empID_key")
   role                String         @default("EMPLOYEE")
   adminAccess         Boolean        @default(false)
+  analystAccess       Boolean        @default(false)
   callDashboardAccess Boolean        @default(false)
   dashboardAccess     Boolean        @default(false)
   reviewerAccess      Boolean        @default(false)

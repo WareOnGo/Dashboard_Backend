@@ -69,6 +69,7 @@ class VerifiedNumberController extends BaseController {
                     {
                         empID: row.empID,
                         adminAccess: row.adminAccess,
+                        analystAccess: row.analystAccess,
                         callDashboardAccess: row.callDashboardAccess,
                         dashboardAccess: row.dashboardAccess,
                         reviewerAccess: row.reviewerAccess,

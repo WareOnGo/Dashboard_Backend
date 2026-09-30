@@ -58,6 +58,7 @@ class AuthController extends BaseController {
                 domain: this.jwtService.extractDomain(oauthResult.user.email),
                 capabilities,
                 isAdmin: can(capabilities, CAPS.ADMIN),
+                isAnalyst: can(capabilities, CAPS.ANALYST),
                 isReviewer: can(capabilities, CAPS.REVIEW)
             };
 
@@ -265,6 +266,7 @@ class AuthController extends BaseController {
                     domain: decoded.domain,
                     capabilities,
                     isAdmin: can(capabilities, CAPS.ADMIN),
+                    isAnalyst: can(capabilities, CAPS.ANALYST),
                     isReviewer: can(capabilities, CAPS.REVIEW)
                 }
             };
@@ -348,6 +350,7 @@ class AuthController extends BaseController {
                     domain: user.domain,
                     capabilities,
                     isAdmin: can(capabilities, CAPS.ADMIN),
+                    isAnalyst: can(capabilities, CAPS.ANALYST),
                     isReviewer: can(capabilities, CAPS.REVIEW)
                 }
             };

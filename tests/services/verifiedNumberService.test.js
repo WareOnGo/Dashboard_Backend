@@ -32,6 +32,7 @@ const row = (overrides = {}) => ({
     created_at: new Date('2026-01-01T00:00:00Z'),
     twenty_user_id: null,
     adminAccess: false,
+    analystAccess: false,
     callDashboardAccess: false,
     dashboardAccess: false,
     reviewerAccess: false,
@@ -242,4 +243,14 @@ describe('update — general', () => {
         const { service } = make();
         await expectStatus(service.update(1, { phone_number: '000' }, ACTOR), 400);
     });
+});
+
+
+test('Analyst grants change only that capability and are included in the audit diff', async () => {
+    const { model, service } = make();
+    const result = await service.update(1, { analystAccess: true }, ACTOR);
+    expect(model.updateById).toHaveBeenCalledWith(1, { analystAccess: true });
+    expect(result.row.analystAccess).toBe(true);
+    expect(result.row.adminAccess).toBe(false);
+    expect(result.changes).toEqual(expect.arrayContaining([expect.objectContaining({ field: 'analystAccess' })]));
 });
