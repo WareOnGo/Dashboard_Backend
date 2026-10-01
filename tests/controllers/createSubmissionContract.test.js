@@ -25,10 +25,10 @@ const SUBMISSION = {
 const SCOUT = { id: 7, empid: 'EMP7', name: 'Scout Seven', email: 'scout7@wareongo.com' };
 
 /**
- * A Prisma double holding staged rows and warehouses in memory, honouring the `where`
- * guards promote()/releaseClaim() rely on so the claim semantics are actually exercised.
- * `linkFails` makes the step-3 link throw, the failure mode that used to strand a live
- * warehouse the staged row could not point at.
+ * A Prisma double holding staged rows and warehouses in memory, modelling guarded
+ * transitions and the atomic promotion result used by the API contract. Database
+ * concurrency/rollback semantics are exercised separately by integration/promote.test.js.
+ * `linkFails` simulates a failed atomic promotion without leaving a warehouse behind.
  */
 function makePrisma({ linkFails = false } = {}) {
     const staged = [];
@@ -38,6 +38,15 @@ function makePrisma({ linkFails = false } = {}) {
     return {
         staged,
         warehouses,
+        $queryRawUnsafe: async (_sql, id, warehouseJson, detailsJson, email, reviewedAt) => {
+            const row = staged.find(value => value.id === id && value.reviewStatus === 'PENDING');
+            if (!row) return [];
+            if (linkFails) throw new Error('fixture atomic promotion failed');
+            const created = { id: ++seq, ...JSON.parse(warehouseJson), WarehouseData: JSON.parse(detailsJson) };
+            warehouses.set(created.id, created);
+            Object.assign(row, { reviewStatus: 'APPROVED', warehouseId: created.id, reviewedBy: email, reviewedAt });
+            return [{ created }];
+        },
         stagedWarehouse: {
             create: async ({ data }) => {
                 // Mirrors the schema defaults Prisma would apply on insert.
@@ -45,14 +54,16 @@ function makePrisma({ linkFails = false } = {}) {
                     id: `staged-uuid-${staged.length + 1}`,
                     submittedAt: new Date(),
                     warehouseId: null,
+                    reviewedBy: null,
+                    reviewedAt: null,
                     ...data,
                 };
                 staged.push(row);
                 return row;
             },
             updateMany: async ({ where, data }) => {
-                // The link write carries only `warehouseId`; the claim and release both
-                // set `reviewStatus`. That is how the failure injection tells them apart.
+                // Other staging transitions set reviewStatus; preserve the legacy
+                // link-failure hook for any direct updateMany callers.
                 const isLink = data.reviewStatus === undefined;
                 if (isLink && linkFails) throw new Error('P1001: cannot reach database server');
 

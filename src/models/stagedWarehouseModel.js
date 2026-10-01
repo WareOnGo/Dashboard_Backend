@@ -2,6 +2,7 @@ const { registerWarehouseImages } = require('./imagePipelineRepository.cjs');
 // src/models/stagedWarehouseModel.js
 const BaseModel = require('./baseModel');
 const { photosToMedia } = require('../utils/mediaUtils');
+const { atomicPromotion } = require('./atomicPromotion');
 
 /** Build a 409 conflict error consistent with ErrorHandler.createConflictError. */
 function conflict(message) {
@@ -224,119 +225,19 @@ class StagedWarehouseModel extends BaseModel {
     }
 
     /**
-     * Release an approval claim back to PENDING after a failed promotion.
-     *
-     * Scoped to the claim this call actually made (`reviewStatus: 'APPROVED'` plus the
-     * claiming reviewer) so a concurrent state change — a reopen, a reject — is never
-     * stomped. `warehouseId` is cleared too: the link write can commit server-side and
-     * still surface as a connection error, so the row may hold an id whose warehouse this
-     * compensation is about to delete.
-     *
-     * Best-effort — a failed compensation must not mask the error that caused it — but it
-     * is logged, because this is precisely the case that leaves the database disagreeing
-     * with the receipt the submitter was handed. The likely cause (a dropped connection)
-     * is the same one that failed the promotion, so it is far from hypothetical: the row
-     * is then stuck APPROVED with no warehouse, which can only be reopened, not retried.
-     * @param {string} id - Staged row id
-     * @param {Object} reviewer - The reviewer whose claim is being released
-     * @returns {Promise<void>}
-     * @private
-     */
-    async releaseClaim(id, reviewer) {
-        await this.model.updateMany({
-            where: { id, reviewStatus: 'APPROVED', reviewedBy: reviewer.email },
-            data: { reviewStatus: 'PENDING', reviewedBy: null, reviewedAt: null, warehouseId: null },
-        }).catch((releaseError) => {
-            console.error(
-                `StagedWarehouseModel: failed to release the approval claim on ${id}; `
-                + 'it may be stuck APPROVED with no warehouse:',
-                releaseError.message,
-            );
-        });
-    }
-
-    /**
-     * Promote a staged row into the master Warehouse table.
-     *
-     * Uses a claim-first + compensation pattern (no interactive transaction —
-     * those are unreliable through the Supabase pooler, P2028). The optimistic
-     * claim is a single atomic statement, so only one approval can win and a
-     * duplicate Warehouse can never be created. If either write after the claim fails —
-     * the Warehouse insert, or the link back to the staged row — the promotion is undone
-     * and the claim reverted to PENDING, so the row returns to the queue and can be retried.
-     *
-     * @param {string} id - Staged row id
-     * @param {Object} payload - Promotion payload { ...warehouseFields, warehouseData, media? }
-     * @param {Object} reviewer - { email, name?, ip? }
-     * @returns {Object} The created master Warehouse (with WarehouseData)
-     * @throws {Error} ConflictError(409) if the row is not in a reviewable state
+     * Create the master, its details and the approval link in one SQL statement.
+     * Consumers only see committed, linked promotions. Row locking preserves
+     * single-winner approval without interactive pooler transactions.
      */
     async promote(id, payload, reviewer) {
         try {
-            // 1. Atomic optimistic claim — guards against double-approval.
-            const claim = await this.model.updateMany({
-                where: { id, reviewStatus: { in: REVIEWABLE } },
-                data: { reviewStatus: 'APPROVED', reviewedBy: reviewer.email, reviewedAt: new Date() },
-            });
-            if (claim.count === 0) {
-                throw conflict('Submission is not in a reviewable state (already approved or rejected).');
-            }
+            const { warehouseData = {}, media: incomingMedia, ...warehouse } = payload;
+            if (warehouse.photos && !incomingMedia) warehouse.media = photosToMedia(warehouse.photos);
+            else if (incomingMedia) warehouse.media = incomingMedia;
+            const created = await atomicPromotion(this.prisma, id, warehouse, warehouseData, reviewer);
+            if (!created) throw conflict('Submission is not in a reviewable state (already approved or rejected).');
 
-            // 2. Create the master Warehouse. On failure, release the claim so it can be retried.
-            const { warehouseData, media: incomingMedia, ...warehouse } = payload;
-            if (warehouse.photos && !incomingMedia) {
-                warehouse.media = photosToMedia(warehouse.photos);
-            } else if (incomingMedia) {
-                warehouse.media = incomingMedia;
-            }
-
-            let created;
-            try {
-                created = await this.prisma.warehouse.create({
-                    data: { ...warehouse, WarehouseData: { create: warehouseData } },
-                    include: { WarehouseData: true },
-                });
-            } catch (createError) {
-                await this.releaseClaim(id, reviewer);
-                throw createError;
-            }
-
-            // 3. Link the staged row to the promoted warehouse. Compensated like step 2:
-            // an unlinked promotion is worse than a failed one, because `warehouseId` is
-            // the only handle anything has on the new warehouse. Without it, reopen()
-            // skips the delete (its `row.warehouseId` guard), annotateWarehouseExistence
-            // skips the row, and the review panel shows "approved" with nothing to point
-            // at — a live warehouse nobody can pull back. Undo the promotion instead and
-            // let it return to the queue.
-            // Guarded like the release below: a plain update by id would stamp the new
-            // warehouseId onto a row a concurrent reopen has already returned to PENDING.
-            // That reopen skips its own warehouse delete (it reads `row.warehouseId`, still
-            // null inside this window), so the warehouse would stay live while the reviewer
-            // believes the approval was revoked — and the next approval would overwrite the
-            // link, orphaning it for good. No rows matched means the claim is no longer
-            // ours; undo the promotion rather than completing it.
-            try {
-                const linked = await this.model.updateMany({
-                    where: { id, reviewStatus: 'APPROVED', reviewedBy: reviewer.email },
-                    data: { warehouseId: created.id },
-                });
-                if (linked.count === 0) {
-                    throw conflict('Submission left the approval claim before it could be linked; promotion undone.');
-                }
-            } catch (linkError) {
-                await this.prisma.warehouse.delete({ where: { id: created.id } })
-                    .catch((deleteError) => {
-                        console.error(
-                            `StagedWarehouseModel: failed to remove warehouse ${created.id} after an `
-                            + 'unlinked promotion; it may be live with nothing pointing at it:',
-                            deleteError.message,
-                        );
-                    });
-                await this.releaseClaim(id, reviewer);
-                throw linkError;
-            }
-
-            // 4. Audit (awaited, immediately after the claim; non-fatal like AuditLogService).
+            // Audit and registration run after the atomic promotion commits.
             await this.prisma.auditLog.create({
                 data: {
                     action: 'APPROVE',
