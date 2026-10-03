@@ -5,13 +5,17 @@ const PATH = '/api/integrations/context-engine/geo/points';
 const ISSUER = 'wareongo:context-engine';
 const TYPE = 'context-geo-write+jwt';
 const SCOPE = 'geo:points:create';
+const ROLLBACK_PATH = `${PATH}/rollback`;
+const ROLLBACK_SCOPE = 'geo:points:rollback';
 const digest = value => createHash('sha256').update(value).digest('base64url');
 const identifier = z.string().regex(/^[A-Za-z0-9_-]{1,48}$/);
-const scopes = z.tuple([z.literal(SCOPE)]);
+const scope = z.enum([SCOPE, ROLLBACK_SCOPE]);
+const scopes = z.tuple([scope]);
+const registeredScopes = z.array(scope).min(1).max(2).refine(values => new Set(values).size === values.length);
 const registration = z.object({
     kid: identifier,
     publicKey: z.object({ kty: z.literal('OKP'), crv: z.literal('Ed25519'), x: z.string().regex(/^[A-Za-z0-9_-]{43}$/) }).strict(),
-    scopes, expiresAt: z.string().datetime(),
+    scopes: registeredScopes, expiresAt: z.string().datetime(),
 }).strict();
 const registry = z.array(registration).min(1).max(3).refine(keys => new Set(keys.map(key => key.kid)).size === keys.length);
 const claimsSchema = z.object({
@@ -44,7 +48,9 @@ function decode(value) {
 /** Verifies original request bytes; an MCP read assertion cannot authorize this endpoint. */
 function authenticate(req, env = process.env, now = Date.now()) {
     const config = configuration(env);
-    if (req.method !== 'POST' || req.originalUrl !== PATH || req.headers.origin !== undefined
+    const actionScope = req.originalUrl === PATH ? SCOPE : req.originalUrl === ROLLBACK_PATH ? ROLLBACK_SCOPE : undefined;
+    const endpoint = req.originalUrl === ROLLBACK_PATH ? `${config.endpoint}/rollback` : config.endpoint;
+    if (req.method !== 'POST' || !actionScope || req.headers.origin !== undefined
         || req.headers['content-type']?.split(';')[0].trim().toLowerCase() !== 'application/json'
         || req.headers['content-encoding'] !== undefined || !Buffer.isBuffer(req.body) || req.body.length > 32768) throw denied();
     const token = /^ContextEngine ([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/.exec(req.headers.authorization || '')?.[1];
@@ -59,10 +65,10 @@ function authenticate(req, env = process.env, now = Date.now()) {
             || !verify(null, Buffer.from(`${head}.${payload}`), createPublicKey({ key: key.publicKey, format: 'jwk' }), bytes)) throw denied();
         const claims = claimsSchema.parse(decode(payload));
         const seconds = Math.floor(now / 1000);
-        if (Number(claims.sub) > 2147483647 || claims.aud !== config.endpoint || claims.htu !== config.endpoint
+        if (Number(claims.sub) > 2147483647 || claims.aud !== endpoint || claims.htu !== endpoint || claims.scopes[0] !== actionScope || !key.scopes.includes(actionScope)
             || claims.exp <= seconds || claims.exp <= claims.iat || claims.exp - claims.iat > 60
             || claims.iat > seconds + 5 || claims.iat < seconds - 60 || claims.body_sha256 !== digest(req.body)) throw denied();
-        return { claims, kid: key.kid, keyFingerprint: digest(JSON.stringify(key)), endpoint: config.endpoint };
+        return { claims, kid: key.kid, keyFingerprint: digest(JSON.stringify(key)), endpoint };
     } catch { throw denied(); }
 }
 
@@ -70,8 +76,10 @@ function authenticate(req, env = process.env, now = Date.now()) {
 function revalidate(auth, env = process.env, now = Date.now()) {
     const config = configuration(env);
     const key = config.keys.find(item => item.kid === auth.kid);
-    if (!key || config.endpoint !== auth.endpoint || Date.parse(key.expiresAt) <= now
+    const actionScope = auth.claims.scopes[0];
+    const endpoint = actionScope === ROLLBACK_SCOPE ? `${config.endpoint}/rollback` : config.endpoint;
+    if (!key || !key.scopes.includes(actionScope) || endpoint !== auth.endpoint || Date.parse(key.expiresAt) <= now
         || auth.claims.exp * 1000 <= now || digest(JSON.stringify(key)) !== auth.keyFingerprint) throw denied();
 }
 
-module.exports = { PATH, ISSUER, TYPE, SCOPE, digest, configuration, authenticate, revalidate, ContextGeoError };
+module.exports = { PATH, ROLLBACK_PATH, ROLLBACK_SCOPE, ISSUER, TYPE, SCOPE, digest, configuration, authenticate, revalidate, ContextGeoError };

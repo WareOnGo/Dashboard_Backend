@@ -1,4 +1,4 @@
-const { randomBytes } = require('node:crypto');
+const { randomBytes, randomUUID } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { PrismaClient } = require('@prisma/client');
@@ -29,6 +29,7 @@ beforeAll(async () => {
 beforeEach(async () => {
     process.env.ADMIN_EMAILS = '';
     await prisma.$executeRaw`DELETE FROM "ContextGeoNonce"`;
+    await prisma.$executeRaw`DELETE FROM "ContextGeoRollback"`;
     await prisma.$executeRaw`DELETE FROM "ContextGeoWrite"`;
     await prisma.$executeRaw`DELETE FROM point_of_interest`;
     await prisma.$executeRaw`DELETE FROM "VerifiedNumber"`;
@@ -56,9 +57,9 @@ test('migration runner verifies real catalog definitions and rejects an incompat
     };
     expect((await migrate(local)).mode).toBe('inspect');
     expect((await migrate(local, true)).mode).toBe('applied');
-    await prisma.$executeRawUnsafe('ALTER TABLE "ContextGeoWrite" DROP CONSTRAINT "ContextGeoWrite_pkey"');
+    await prisma.$executeRawUnsafe('ALTER TABLE "ContextGeoRollback" DROP CONSTRAINT "ContextGeoRollback_pkey"');
     try { await expect(migrate(local)).rejects.toThrow('UNEXPECTED_CONTEXT_GEO_PRIMARY_KEY'); }
-    finally { await prisma.$executeRawUnsafe('ALTER TABLE "ContextGeoWrite" ADD PRIMARY KEY (issuer,"employeeId","operationId")'); }
+    finally { await prisma.$executeRawUnsafe('ALTER TABLE "ContextGeoRollback" ADD PRIMARY KEY (issuer,"employeeId","operationId")'); }
 });
 
 test('concurrent identical creates produce exactly one point and one receipt', async () => {
@@ -143,4 +144,54 @@ test.each([
     const point = { ...f.point, ...override };
     await expect(service.create(point, f.auth(point))).rejects.toMatchObject({ status: 400 });
     expect(await counts()).toEqual({ points: 0, receipts: 0, nonces: 0 });
+});
+
+function rollbackRequest(originalOperationId = f.point.operationId, operationId = randomUUID()) {
+    f.key.scopes = ['geo:points:create','geo:points:rollback'];
+    f.env.WAG_CONTEXT_GEO_PUBLIC_KEYS_JSON=JSON.stringify([f.key]);
+    const body={operationId,originalOperationId};
+    return {body, auth:()=>f.auth(body,{rollback:true})};
+}
+test('concurrent compensations delete once and return one immutable replay receipt', async () => {
+    const created=await service.create(f.point,f.auth()), rollback=rollbackRequest();
+    const result=await Promise.all([service.rollback(rollback.body,rollback.auth()),service.rollback(rollback.body,rollback.auth())]);
+    expect(result.map(r=>r.replayed).sort()).toEqual([false,true]);
+    expect(result[0].data).toEqual({originalOperationId:f.point.operationId,pointId:created.data.id,before:created.data,after:null});
+    expect(result[1].data).toEqual(result[0].data);
+    expect(await counts()).toEqual({points:0,receipts:1,nonces:3});
+    const old=await service.create(f.point,f.auth());expect(old.replayed).toBe(true);expect((await counts()).points).toBe(0);
+    const another=rollbackRequest();await expect(service.rollback(another.body,another.auth())).rejects.toMatchObject({code:'CONTEXT_GEO_ALREADY_ROLLED_BACK'});
+});
+test.each(['name','category','lat','lng','notes','city','createdBy','createdAt','updatedAt'])(
+    'rollback never destroys a point with changed %s', async field => {
+        const created=await service.create(f.point,f.auth()), rollback=rollbackRequest();
+        const value=field.endsWith('At')?new Date(Date.parse(created.data[field])+1000):typeof created.data[field]==='number'?created.data[field]+0.1:'changed';
+        await prisma.pointOfInterest.update({where:{id:created.data.id},data:{[field]:value}});
+        await expect(service.rollback(rollback.body,rollback.auth())).rejects.toMatchObject({code:'CONTEXT_GEO_POINT_CHANGED'});
+        expect((await counts()).points).toBe(1);
+    });
+test('rollback is actor-owned, rejects missing/deleted sources, and current permissions apply to receipt replay',async()=>{
+    const created=await service.create(f.point,f.auth()), rollback=rollbackRequest();
+    await prisma.$executeRaw`INSERT INTO "VerifiedNumber" (id,phone_number,email) VALUES (8,'919800000002','another@wareongo.com')`;
+    await expect(service.rollback(rollback.body,f.auth(rollback.body,{rollback:true,claims:{sub:'8',email:'another@wareongo.com'}}))).rejects.toMatchObject({code:'CONTEXT_GEO_ORIGINAL_NOT_FOUND'});
+    await service.rollback(rollback.body,rollback.auth());
+    await prisma.$executeRaw`UPDATE "VerifiedNumber" SET is_active=false WHERE id=7`;
+    await expect(service.rollback(rollback.body,rollback.auth())).rejects.toMatchObject({status:403});
+    expect(created.data.id).toBeDefined();expect((await counts()).points).toBe(0);
+});
+test('failed compensation receipt insert rolls deletion and nonce back atomically',async()=>{
+    await service.create(f.point,f.auth());const rollback=rollbackRequest();
+    await prisma.$executeRawUnsafe('ALTER TABLE "ContextGeoRollback" ADD CONSTRAINT synthetic_reject CHECK (false) NOT VALID');
+    const auth=rollback.auth();
+    try{await expect(service.rollback(rollback.body,auth)).rejects.toBeDefined();}
+    finally{await prisma.$executeRawUnsafe('ALTER TABLE "ContextGeoRollback" DROP CONSTRAINT synthetic_reject');}
+    expect(await counts()).toEqual({points:1,receipts:1,nonces:1});
+    expect((await service.rollback(rollback.body,auth)).replayed).toBe(false);
+});
+test('operation IDs cannot cross create/rollback protocols or target another original on retry',async()=>{
+    await service.create(f.point,f.auth());const rollback=rollbackRequest();await service.rollback(rollback.body,rollback.auth());
+    const collision={...f.point,operationId:rollback.body.operationId};
+    await expect(service.create(collision,f.auth(collision))).rejects.toMatchObject({code:'CONTEXT_GEO_IDEMPOTENCY_CONFLICT'});
+    const changed={...rollback.body,originalOperationId:randomUUID()};
+    await expect(service.rollback(changed,f.auth(changed,{rollback:true}))).rejects.toMatchObject({code:'CONTEXT_GEO_IDEMPOTENCY_CONFLICT'});
 });

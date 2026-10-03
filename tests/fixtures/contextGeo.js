@@ -11,14 +11,15 @@ function fixture() {
         WAG_CONTEXT_GEO_PUBLIC_KEYS_JSON: JSON.stringify([key]) };
     const point = { operationId: randomUUID(), name: 'Synthetic scouting site', category: 'POTENTIAL_WAREHOUSE',
         lat: 12.9, lng: 77.6, notes: 'Synthetic access notes', city: 'Synthetic city' };
-    function request(body = point, { claims: override = {}, header = {}, privateKey = pair.privateKey, serialized } = {}) {
+    function request(body = point, { claims: override = {}, header = {}, privateKey = pair.privateKey, serialized, rollback = false } = {}) {
         const raw = serialized ?? JSON.stringify(body);
-        const payload = { iss: ISSUER, aud: url, sub: '7', email: 'synthetic@wareongo.com', htm: 'POST', htu: url,
-            body_sha256: digest(raw), iat: Math.floor(now / 1000), exp: Math.floor(now / 1000) + 60, jti: randomUUID(), scopes: [SCOPE], ...override };
+        const target = rollback ? `${url}/rollback` : url;
+        const payload = { iss: ISSUER, aud: target, sub: '7', email: 'synthetic@wareongo.com', htm: 'POST', htu: target,
+            body_sha256: digest(raw), iat: Math.floor(now / 1000), exp: Math.floor(now / 1000) + 60, jti: randomUUID(), scopes: [rollback ? 'geo:points:rollback' : SCOPE], ...override };
         const head = Buffer.from(JSON.stringify({ alg: 'EdDSA', typ: TYPE, kid: key.kid, ...header })).toString('base64url');
         const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url');
         const token = `${head}.${encoded}.${sign(null, Buffer.from(`${head}.${encoded}`), privateKey).toString('base64url')}`;
-        return { method: 'POST', originalUrl: PATH, headers: { authorization: `ContextEngine ${token}`, 'content-type': 'application/json' }, body: Buffer.from(raw) };
+        return { method: 'POST', originalUrl: rollback ? `${PATH}/rollback` : PATH, headers: { authorization: `ContextEngine ${token}`, 'content-type': 'application/json' }, body: Buffer.from(raw) };
     }
     const auth = (body = point, options) => authenticate(request(body, options), env, now);
     return { pair, now, url, key, env, point, request, auth };

@@ -39,3 +39,12 @@ test('rejects oversized and malformed JSON without reflecting it, and hides data
     f.service.create.mockRejectedValue(new Error('postgres://secret plus private notes'));
     expect((await post(f).expect(503)).text).not.toContain('secret');
 });
+test('separate rollback route authenticates its own action and dispatches only rollback', async () => {
+    const f = setup(); f.key.scopes.push('geo:points:rollback'); f.env.WAG_CONTEXT_GEO_PUBLIC_KEYS_JSON=JSON.stringify([f.key]);
+    const body={operationId:f.point.operationId,originalOperationId:'22222222-2222-4222-8222-222222222222'};
+    f.service.rollback=jest.fn(async()=>({operationId:body.operationId,replayed:false,data:{pointId:'synthetic'}}));
+    const req=f.request(body,{rollback:true});
+    const response=await request(f.app).post(`${PATH}/rollback`).set(req.headers).send(req.body.toString()).expect(201);
+    expect(response.body.data.pointId).toBe('synthetic');expect(f.service.create).not.toHaveBeenCalled();expect(f.service.rollback).toHaveBeenCalledTimes(1);
+    await post(f,req).expect(401);expect(f.service.create).not.toHaveBeenCalled();
+});

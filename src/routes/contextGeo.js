@@ -10,13 +10,14 @@ function createRouter({ service, env = process.env, now = Date.now } = {}) {
         res.set('Cache-Control', 'no-store');
         try { configuration(env); next(); } catch (error) { next(error); }
     });
-    router.post('/', express.raw({ type: 'application/json', limit: '32kb', inflate: false }), async (req, res, next) => {
+    router.post(['/', '/rollback'], express.raw({ type: 'application/json', limit: '32kb', inflate: false }), async (req, res, next) => {
         try {
             const auth = authenticate(req, env, now());
             let body;
             try { body = JSON.parse(req.body.toString('utf8')); }
             catch { throw new ContextGeoError(400, 'CONTEXT_GEO_INVALID_POINT'); }
-            const result = await (service || new ContextGeoService(database.getClient(), { env, now })).create(body, auth);
+            const action = req.path === '/rollback' ? 'rollback' : 'create';
+            const result = await (service || new ContextGeoService(database.getClient(), { env, now }))[action](body, auth);
             res.status(result.replayed ? 200 : 201).json({ success: true, ...result });
         } catch (error) { next(error); }
     });

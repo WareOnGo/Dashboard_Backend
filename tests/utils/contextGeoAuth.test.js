@@ -62,3 +62,16 @@ test('key expiry, removal and configuration changes revoke an already verified r
     f.env.WAG_CONTEXT_GEO_ENABLED = 'false';
     expect(() => revalidate(auth, f.env, f.now)).toThrow('CONTEXT_GEO_DISABLED');
 });
+test('rollback authority is explicit, action-bound and revocable independently', () => {
+    const f = fixture(), body = { operationId: f.point.operationId, originalOperationId: '22222222-2222-4222-8222-222222222222' };
+    const req = f.request(body, { rollback: true });
+    expect(() => authenticate(req, f.env, f.now)).toThrow('CONTEXT_GEO_UNAUTHORIZED');
+    f.key.scopes.push('geo:points:rollback'); f.env.WAG_CONTEXT_GEO_PUBLIC_KEYS_JSON = JSON.stringify([f.key]);
+    const auth = authenticate(req, f.env, f.now);
+    expect(auth.claims.scopes).toEqual(['geo:points:rollback']);
+    expect(() => revalidate(auth, f.env, f.now)).not.toThrow();
+    req.originalUrl = '/api/integrations/context-engine/geo/points';
+    expect(() => authenticate(req, f.env, f.now)).toThrow('CONTEXT_GEO_UNAUTHORIZED');
+    f.key.scopes = ['geo:points:create']; f.env.WAG_CONTEXT_GEO_PUBLIC_KEYS_JSON = JSON.stringify([f.key]);
+    expect(() => revalidate(auth, f.env, f.now)).toThrow('CONTEXT_GEO_UNAUTHORIZED');
+});

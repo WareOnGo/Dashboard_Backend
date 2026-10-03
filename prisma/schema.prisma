@@ -860,7 +860,25 @@ model ContextGeoWrite {
   result      Json
   createdAt   DateTime @default(now()) @db.Timestamptz(3)
 
+  rollback ContextGeoRollback?
+
   @@id([issuer, employeeId, operationId])
+}
+
+/// Immutable, employee-owned compensation receipts. No point FK after deletion.
+model ContextGeoRollback {
+  issuer String
+  employeeId Int
+  operationId String @db.Uuid
+  originalOperationId String @db.Uuid
+  pointId String
+  result Json
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  original ContextGeoWrite @relation(fields: [issuer, employeeId, originalOperationId], references: [issuer, employeeId, operationId])
+
+  @@id([issuer, employeeId, operationId])
+  @@unique([issuer, employeeId, originalOperationId])
 }
 
 /// Short-lived request replay protection. Has no employee identity or request content.
