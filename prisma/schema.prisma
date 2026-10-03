@@ -850,6 +850,27 @@ model PointOfInterest {
   @@map("point_of_interest")
 }
 
+/// Server-only immutable creation receipts; no foreign key so deletion cannot resurrect an operation.
+model ContextGeoWrite {
+  issuer      String
+  employeeId  Int
+  operationId String   @db.Uuid
+  bodyHash    String
+  pointId     String
+  result      Json
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  @@id([issuer, employeeId, operationId])
+}
+
+/// Short-lived request replay protection. Has no employee identity or request content.
+model ContextGeoNonce {
+  hash      String   @id
+  expiresAt DateTime @db.Timestamptz(3)
+
+  @@index([expiresAt])
+}
+
 /// Original image URL, scene labels/caption, and the matching compressed image.
 /// Compression metadata is backfilled independently of the existing label sweep.
 ///

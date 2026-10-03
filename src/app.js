@@ -76,6 +76,10 @@ const corsOptions = {
 };
 app.use(cors(corsOptions));
 
+// The integration verifies exact request bytes and has its own small body limit.
+// Keep it ahead of browser parsing/sanitization; it does not accept browser JWTs.
+app.use('/api/integrations/context-engine/geo/points', require('./routes/contextGeo')());
+
 /**
  * Body parsing middleware configuration
  * Handles JSON and URL-encoded request bodies with size limits

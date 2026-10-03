@@ -180,6 +180,7 @@ class GeoService extends BaseService {
 
     /** @private */
     validatePoiPayload(body, { partial = false } = {}) {
+        if (!body || typeof body !== 'object' || Array.isArray(body)) throw this.validationError('point must be an object');
         const out = {};
         const need = (k) => {
             if (body[k] === undefined || body[k] === null || body[k] === '') {
@@ -188,7 +189,12 @@ class GeoService extends BaseService {
         };
 
         if (!partial) { need('name'); need('category'); }
-        if (body.name !== undefined) out.name = String(body.name).trim();
+        if (body.name !== undefined) {
+            if (typeof body.name !== 'string' || !body.name.trim() || body.name.trim().length > 200) {
+                throw this.validationError('name must contain 1 to 200 characters');
+            }
+            out.name = body.name.trim();
+        }
         if (body.category !== undefined) {
             const cat = String(body.category).trim();
             // The UI offers these as a dropdown; enforcing the same list here is
@@ -199,13 +205,24 @@ class GeoService extends BaseService {
             }
             out.category = cat;
         }
-        if (body.notes !== undefined) out.notes = body.notes === null ? null : String(body.notes);
-        if (body.city !== undefined) out.city = body.city === null ? null : String(body.city);
+        for (const [key, limit] of [['notes', 5000], ['city', 200]]) {
+            if (body[key] === undefined) continue;
+            if (body[key] !== null && (typeof body[key] !== 'string' || body[key].length > limit)) {
+                throw this.validationError(`${key} must be text up to ${limit} characters`);
+            }
+            out[key] = key === 'city' && typeof body[key] === 'string' ? body[key].trim() : body[key];
+        }
 
         for (const [key, min, max] of [['lat', -90, 90], ['lng', -180, 180]]) {
             if (body[key] === undefined) {
                 if (!partial) throw this.validationError(`${key} is required`);
                 continue;
+            }
+            // Browser forms may send decimal strings; null/booleans/blank values are
+            // never real coordinates. The integration additionally requires numbers.
+            if (typeof body[key] !== 'number' && !(typeof body[key] === 'string'
+                && /^-?(?:\d+(?:\.\d*)?|\.\d+)$/.test(body[key].trim()))) {
+                throw this.validationError(`${key} must be a number between ${min} and ${max}`);
             }
             const n = Number(body[key]);
             if (!Number.isFinite(n) || n < min || n > max) {
