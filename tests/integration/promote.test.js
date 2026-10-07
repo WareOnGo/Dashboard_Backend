@@ -20,7 +20,7 @@ beforeAll(async () => {
         `CREATE TYPE "StagingStatus" AS ENUM ('PENDING','APPROVED','REJECTED')`,
         `CREATE TABLE "Warehouse" (id serial PRIMARY KEY,"warehouseType" text NOT NULL,city text,media jsonb,"createdAt" timestamp DEFAULT now(),"status_updated_at" timestamp,"internalOnly" text DEFAULT 'private')`,
         `CREATE TABLE "WarehouseData" (id serial PRIMARY KEY,"warehouseId" int UNIQUE REFERENCES "Warehouse"(id) ON DELETE CASCADE,latitude float8 CHECK(abs(latitude)<=90),longitude float8,geog text DEFAULT 'internal point',embedding text DEFAULT 'internal vector')`,
-        `CREATE TABLE "StagedWarehouse" (id text PRIMARY KEY,"reviewStatus" "StagingStatus" NOT NULL DEFAULT 'PENDING',"warehouseId" int,"reviewedBy" text,"reviewedAt" timestamp(3),"rejectionReason" text)`,
+        `CREATE TABLE "StagedWarehouse" (id text PRIMARY KEY,availability text,"availabilityLastReviewedOn" date,"reviewStatus" "StagingStatus" NOT NULL DEFAULT 'PENDING',"warehouseId" int,"reviewedBy" text,"reviewedAt" timestamp(3),"rejectionReason" text)`,
         `CREATE TABLE audit_logs (id text PRIMARY KEY,action text NOT NULL,entity text NOT NULL,"entityId" text,context text,metadata jsonb,"userEmail" text NOT NULL,"userName" text,"ipAddress" text,"createdAt" timestamp(3) NOT NULL DEFAULT CURRENT_TIMESTAMP)`,
         `CREATE TABLE captured_events ("warehouseId" int)`,
         `CREATE FUNCTION capture_fixture() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN INSERT INTO captured_events VALUES(NEW.id); RETURN NEW; END $$`,

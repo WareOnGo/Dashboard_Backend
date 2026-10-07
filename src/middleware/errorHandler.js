@@ -63,6 +63,10 @@ class ErrorHandler {
         // Handled by name rather than by honouring any statusCode: several
         // services set one, and quietly changing what they all return is a
         // bigger behaviour change than this fix warrants.
+        if (error.name === 'AvailabilityConflictError') {
+            return ErrorHandler.handleStatusError(error, req, res, 409, 'AVAILABILITY_CONFLICT');
+        }
+
         if (error.name === 'NotFoundError') {
             return ErrorHandler.handleStatusError(error, req, res, 404, 'NOT_FOUND');
         }

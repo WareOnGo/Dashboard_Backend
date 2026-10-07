@@ -1,6 +1,7 @@
 // src/validators/warehouseValidator.js
 const { z } = require('zod');
 const BaseValidator = require('./baseValidator');
+const { reviewDateSchema, expectedAvailabilitySchema } = require('../utils/availabilityReview');
 const { FILE_UPLOAD } = require('../utils/constants');
 
 /**
@@ -75,6 +76,7 @@ class WarehouseValidator extends BaseValidator {
         clearHeightFt: z.string().optional().nullable(),
         otherSpecifications: z.string().optional().nullable(),
         availability: z.string().optional().nullable(),
+        availabilityLastReviewedOn: reviewDateSchema.optional().nullable(),
         visibility: z.boolean().optional().nullable(),
         isBroker: z.string().optional().nullable(),
         photos: z.string().optional().nullable(),
@@ -167,7 +169,10 @@ class WarehouseValidator extends BaseValidator {
     /**
      * Schema for updating a warehouse (all fields are optional)
      */
-    static updateWarehouseSchema = this.createWarehouseSchema.partial();
+    static updateWarehouseSchema = this.createWarehouseSchema.partial().extend({
+        // Request-only snapshot; never persisted or copied into staging columns.
+        expectedAvailability: expectedAvailabilitySchema.optional(),
+    });
 
     /**
      * Schema for warehouse ID parameter

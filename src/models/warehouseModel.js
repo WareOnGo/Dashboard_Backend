@@ -2,6 +2,7 @@ const { registerWarehouseImages } = require('./imagePipelineRepository.cjs');
 // src/models/warehouseModel.js
 const { Prisma } = require('@prisma/client');
 const BaseModel = require('./baseModel');
+const { availabilityConflict } = require('../utils/availabilityReview');
 const { photosToMedia } = require('../utils/mediaUtils');
 const { phoneSearchCondition } = require('../utils/warehouseSearch');
 
@@ -203,7 +204,7 @@ class WarehouseModel extends BaseModel {
      * @param {Object} updateData - Data to update including optional nested WarehouseData
      * @returns {Object} Updated warehouse with WarehouseData
      */
-    async update(id, updateData) {
+    async update(id, updateData, availabilityGuard) {
         try {
             const { warehouseData, media: incomingMedia, ...warehouse } = updateData;
 
@@ -215,7 +216,7 @@ class WarehouseModel extends BaseModel {
             }
 
             const updatePayload = {
-                where: { id: parseInt(id) },
+                where: { id: parseInt(id), ...availabilityGuard },
                 data: {
                     ...warehouse,
                     // Only update warehouseData if it was provided
@@ -234,6 +235,7 @@ class WarehouseModel extends BaseModel {
             }
             return updated;
         } catch (error) {
+            if (availabilityGuard && error.code === 'P2025') throw availabilityConflict();
             this.handleDatabaseError(error);
         }
     }

@@ -38,7 +38,7 @@ class StagingValidator {
      * are stored for review rather than bounced at the door. The submission is re-validated
      * strictly with createWarehouseSchema at approval before it can reach the master table.
      */
-    static ingestSchema = WarehouseValidator.updateWarehouseSchema;
+    static ingestSchema = WarehouseValidator.createWarehouseSchema.partial();
 }
 
 module.exports = StagingValidator;

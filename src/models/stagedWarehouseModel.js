@@ -1,6 +1,7 @@
 const { registerWarehouseImages } = require('./imagePipelineRepository.cjs');
 // src/models/stagedWarehouseModel.js
 const BaseModel = require('./baseModel');
+const { availabilityConflict } = require('../utils/availabilityReview');
 const { photosToMedia } = require('../utils/mediaUtils');
 const { atomicPromotion } = require('./atomicPromotion');
 
@@ -144,13 +145,14 @@ class StagedWarehouseModel extends BaseModel {
      * @param {Object} data - Whitelisted column edits (already mapped by the service)
      * @returns {Object} Updated staged row
      */
-    async updateStaged(id, data) {
+    async updateStaged(id, data, availabilityGuard) {
         try {
             return await this.model.update({
-                where: { id },
+                where: { id, ...(availabilityGuard && { reviewStatus: 'PENDING', ...availabilityGuard }) },
                 data,
             });
         } catch (error) {
+            if (availabilityGuard && error.code === 'P2025') throw availabilityConflict();
             this.handleDatabaseError(error);
         }
     }
@@ -229,13 +231,14 @@ class StagedWarehouseModel extends BaseModel {
      * Consumers only see committed, linked promotions. Row locking preserves
      * single-winner approval without interactive pooler transactions.
      */
-    async promote(id, payload, reviewer) {
+    async promote(id, payload, reviewer, availabilityGuard) {
         try {
             const { warehouseData = {}, media: incomingMedia, ...warehouse } = payload;
             if (warehouse.photos && !incomingMedia) warehouse.media = photosToMedia(warehouse.photos);
             else if (incomingMedia) warehouse.media = incomingMedia;
-            const created = await atomicPromotion(this.prisma, id, warehouse, warehouseData, reviewer);
-            if (!created) throw conflict('Submission is not in a reviewable state (already approved or rejected).');
+            const created = await atomicPromotion(this.prisma, id, warehouse, warehouseData, reviewer, availabilityGuard);
+            if (!created) throw availabilityGuard ? availabilityConflict()
+                : conflict('Submission is not in a reviewable state (already approved or rejected).');
 
             // Audit and registration run after the atomic promotion commits.
             await this.prisma.auditLog.create({

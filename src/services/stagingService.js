@@ -4,6 +4,7 @@ const WarehouseValidator = require('../validators/warehouseValidator');
 const { geocodeUrl } = require('../utils/googleMaps');
 const { deriveZone } = require('../utils/deriveZone');
 const { computeChanges } = require('../utils/auditDiff');
+const { prepareAvailabilityUpdate, validateReviewAvailability } = require('../utils/availabilityReview');
 
 /**
  * The nested WarehouseData fields, flattened onto the StagedWarehouse mirror.
@@ -179,6 +180,7 @@ class StagingService extends BaseService {
      * @private
      */
     toStagedRow(submission, { source, submittedBy }) {
+        validateReviewAvailability(submission);
         const { warehouseData = {}, ...flatWarehouse } = submission;
 
         // Autofill zone from state only when the client didn't send one. The Scout
@@ -314,7 +316,9 @@ class StagingService extends BaseService {
                 throw conflict('Only pending submissions can be edited. Move it back to pending first.');
             }
 
-            const mapped = this.flattenForMirror(edits);
+            const { expectedAvailability, ...fields } = edits;
+            const mapped = this.flattenForMirror(fields);
+            const availabilityGuard = prepareAvailabilityUpdate(row, mapped, expectedAvailability);
             // Re-geocode only when the Google Maps URL itself changes. Done before
             // computeDiff so the refreshed coordinates show up in the returned changes.
             await this.autofillCoordinatesOnUrlChange(row, mapped);
@@ -323,7 +327,7 @@ class StagingService extends BaseService {
                 return { submission: row, changes: [] };
             }
 
-            const updated = await this.stagedWarehouseModel.updateStaged(id, mapped);
+            const updated = await this.stagedWarehouseModel.updateStaged(id, mapped, availabilityGuard);
             return { submission: updated, changes };
         });
     }
@@ -365,7 +369,10 @@ class StagingService extends BaseService {
             // sets it. It flows through from the staged row (false at ingest).
             // uploadedBy is preserved from the original submission.
 
-            return this.stagedWarehouseModel.promote(id, processed, reviewer);
+            return this.stagedWarehouseModel.promote(id, processed, reviewer, {
+                availability: row.availability ?? null,
+                availabilityLastReviewedOn: row.availabilityLastReviewedOn ?? null,
+            });
         });
     }
 

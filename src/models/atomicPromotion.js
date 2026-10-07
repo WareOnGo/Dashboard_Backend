@@ -13,14 +13,20 @@ const readFields = model => Prisma.dmmf.datamodel.models.find(entry => entry.nam
     .filter(field => ['scalar', 'enum'].includes(field.kind) && !['geog', 'embedding'].includes(field.name)).map(field => field.name);
 const quoted = key => '"' + key.replaceAll('"', '""') + '"';
 
-async function atomicPromotion(prisma, id, warehouse, warehouseData, reviewer) {
+async function atomicPromotion(prisma, id, warehouse, warehouseData, reviewer, availabilityGuard) {
     const data = { ...warehouse, status_updated_at: new Date() };
     const columns = fields('Warehouse', data, ['id']);
     const extra = fields('WarehouseData', warehouseData, ['id', 'warehouseId', 'geog', 'embedding']);
     // Lock the pending submission, insert both records and update staging ONCE.
     // A failed link or queue trigger rolls back every insert in this statement.
+    // Approval is prepared before this statement. Recheck the availability pair
+    // while claiming the row so a concurrent review cannot publish older evidence.
     const rows = await prisma.$queryRawUnsafe(`WITH claim AS MATERIALIZED (
-        SELECT id FROM "StagedWarehouse" WHERE id=$1 AND "reviewStatus"='PENDING' FOR UPDATE
+        SELECT id FROM "StagedWarehouse" WHERE id=$1 AND "reviewStatus"='PENDING'
+          AND (NOT $8::boolean OR (
+            "availability" IS NOT DISTINCT FROM $9::text
+            AND "availabilityLastReviewedOn" IS NOT DISTINCT FROM $10::date
+          )) FOR UPDATE
       ), master AS (
         INSERT INTO "Warehouse" (${columns.map(quoted).join(',')})
         SELECT ${columns.map(key => 'p.' + quoted(key)).join(',')}
@@ -38,7 +44,8 @@ async function atomicPromotion(prisma, id, warehouse, warehouseData, reviewer) {
           ||jsonb_build_object('WarehouseData',
             (SELECT jsonb_object_agg(key,value) FROM jsonb_each(to_jsonb(d)) WHERE key=ANY($7::text[]))) AS created
         FROM master m JOIN details d ON d."warehouseId"=m.id WHERE EXISTS(SELECT 1 FROM linked)`,
-    id, JSON.stringify(data), JSON.stringify(warehouseData), reviewer.email, new Date(), readFields('Warehouse'), readFields('WarehouseData'));
+    id, JSON.stringify(data), JSON.stringify(warehouseData), reviewer.email, new Date(), readFields('Warehouse'), readFields('WarehouseData'),
+    Boolean(availabilityGuard), availabilityGuard?.availability ?? null, availabilityGuard?.availabilityLastReviewedOn ?? null);
     if (!rows.length) return null;
     const created = rows[0].created;
     for (const field of Prisma.dmmf.datamodel.models.find(entry => entry.name === 'Warehouse').fields) {

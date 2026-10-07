@@ -2,6 +2,7 @@
 const BaseService = require('./baseService');
 const WarehouseValidator = require('../validators/warehouseValidator');
 const { computeChanges } = require('../utils/auditDiff');
+const { prepareAvailabilityUpdate, validateReviewAvailability } = require('../utils/availabilityReview');
 const { phoneSearchDigits, warehouseSearchId } = require('../utils/warehouseSearch');
 
 /** Server-side pagination defaults for the warehouse list. */
@@ -229,7 +230,7 @@ class WarehouseService extends BaseService {
             this.validateData({ id: id.toString() }, (data) => WarehouseValidator.validateId(data));
             
             // Validate update data
-            const validatedData = this.validateData(updateData, (data) => WarehouseValidator.validateUpdate(data));
+            const { expectedAvailability, ...validatedData } = this.validateData(updateData, (data) => WarehouseValidator.validateUpdate(data));
             
             // Fetch the pre-update row rather than just checking existence: it is
             // the "before" side of the audit diff, and it costs the same round trip.
@@ -243,6 +244,7 @@ class WarehouseService extends BaseService {
             
             // Apply business rules for updates
             const processedData = this.applyUpdateBusinessRules(validatedData);
+            const availabilityGuard = prepareAvailabilityUpdate(existing, processedData, expectedAvailability);
             // Re-tag only when this edit carries coordinates; a partial update that
             // doesn't touch location keeps whatever tag the row already has.
             await this.applyMicroMarketTags(processedData);
@@ -259,7 +261,7 @@ class WarehouseService extends BaseService {
             );
 
             // Update warehouse through model
-            const updatedWarehouse = await this.warehouseModel.update(id, processedData);
+            const updatedWarehouse = await this.warehouseModel.update(id, processedData, availabilityGuard);
             
             // Apply post-update business logic
             return { warehouse: this.transformWarehouse(updatedWarehouse), changes };
@@ -456,6 +458,7 @@ class WarehouseService extends BaseService {
      * @private
      */
     applyCreateBusinessRules(data) {
+        validateReviewAvailability(data);
         // Apply business transformations
         const processedData = { ...data };
         

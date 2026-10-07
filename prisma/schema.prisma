@@ -90,6 +90,7 @@ model Warehouse {
   compliances                 String
   otherSpecifications         String?
   ratePerSqft                 String
+  availabilityLastReviewedOn  DateTime?            @db.Date
   availability                String?
   uploadedBy                  String
   isBroker                    String?
@@ -408,6 +409,7 @@ model StagedWarehouse {
   compliances                 String?
   otherSpecifications         String?
   ratePerSqft                 String?
+  availabilityLastReviewedOn  DateTime?            @db.Date
   availability                String?
   uploadedBy                  String?
   isBroker                    String?
