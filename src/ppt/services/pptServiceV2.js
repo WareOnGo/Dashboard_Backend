@@ -8,6 +8,8 @@ const { generateContactSlideV2 } = require('../slides/v2/contactSlideV2');
 const createPptBufferV2 = async (warehouses, selectedImages = {}, customDetails = {}, { imageLoader } = {}) => {
     const pptx = new PptxGenJS();
     pptx.warehouseImageLoader = imageLoader;
+    // Keep handover comparisons on one date even if generation crosses midnight.
+    pptx.handoverReferenceDate = new Date();
     pptx.layout = 'LAYOUT_16x9';
 
     // Display flags. Each defaults to true so existing callers that omit them

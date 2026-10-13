@@ -30,7 +30,7 @@ function generateIndexSlideGodamwale(pptx, warehouses) {
             { text: location, options: bodyCellBase },
             { text: w.ratePerSqft != null ? `${w.ratePerSqft}/-` : 'On request', options: bodyCellBase },
             { text: String(area), options: bodyCellBase },
-            { text: formatHandover(w), options: bodyCellBase },
+            { text: formatHandover(w, pptx.handoverReferenceDate), options: bodyCellBase },
         ];
     });
 

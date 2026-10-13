@@ -4,6 +4,13 @@ const { generateIndexSlideV2 } = require('../../src/ppt/slides/v2/indexSlideV2')
 const { generateIndexSlideGodamwale } = require('../../src/ppt/slides/godamwale/indexSlideGodamwale');
 const { generateDetailedSlideV2 } = require('../../src/ppt/slides/v2/detailedSlideV2');
 const { generateDetailedSlideGodamwale } = require('../../src/ppt/slides/godamwale/detailedSlideGodamwale');
+const { generateDetailedSlideV3 } = require('../../src/ppt/slides/v3/detailedSlideV3');
+const { generateDetailedSlideTci } = require('../../src/ppt/slides/tci/detailedSlideTci');
+const { createPptBufferV2 } = require('../../src/ppt/services/pptServiceV2');
+const { createPptBufferV3 } = require('../../src/ppt/services/pptServiceV3');
+const { createPptBufferGodamwale } = require('../../src/ppt/services/pptServiceGodamwale');
+const { createPptBufferTci } = require('../../src/ppt/services/pptServiceTci');
+const JSZip = require('jszip');
 
 // Fixed reference "today" so date-window assertions never drift with the clock.
 const NOW = new Date('2026-08-13T00:00:00Z');
@@ -129,25 +136,35 @@ describe('formatHandover - FIXED and legacy rows', () => {
         expect(formatHandover({ handoverType: 'FIXED', handoverDate: new Date(iso) }, NOW)).toBe(expected);
     });
 
-    test('FIXED with no date on record reads as immediate, as before', () => {
-        // 24 rows are in this state; behaviour is deliberately unchanged by
-        // this fix and tracked as a backfill gap on the data side.
-        expect(formatHandover({ handoverType: 'FIXED', handoverDate: null }, NOW)).toBe('Immediate');
+    test.each([null, undefined, '', ' ', 'not a date', new Date(NaN)])(
+        'a missing or invalid date (%s) leaves handover on request', (handoverDate) => {
+            for (const handoverType of ['FIXED', null, undefined]) {
+                expect(formatHandover({ handoverType, handoverDate, availability: 'Yes' }, NOW))
+                    .toBe('On request');
+            }
+        },
+    );
+
+    test('inactive lead-time fields do not fill in a missing FIXED date', () => {
+        expect(formatHandover({
+            handoverType: 'FIXED', handoverDate: null,
+            handoverLeadValue: 2, handoverLeadUnit: 'MONTHS',
+        }, NOW)).toBe('On request');
     });
 
     test('a pre-migration row with a null handoverType takes the date path', () => {
         expect(formatHandover({
             handoverType: null, handoverDate: new Date('2026-09-15T00:00:00Z'),
         }, NOW)).toBe('15 Sep 2026');
-        expect(formatHandover({ handoverType: null, handoverDate: null }, NOW)).toBe('Immediate');
+        expect(formatHandover({ handoverType: null, handoverDate: null }, NOW)).toBe('On request');
     });
 
     test('an ISO string survives a serialization hop', () => {
         expect(formatHandover({ handoverType: 'FIXED', handoverDate: '2026-09-15' }, NOW)).toBe('15 Sep 2026');
     });
 
-    test('unparseable legacy free text falls back to immediate', () => {
-        expect(formatHandover({ handoverType: null, handoverDate: 'ready now' }, NOW)).toBe('Immediate');
+    test('unparseable legacy free text leaves handover on request', () => {
+        expect(formatHandover({ handoverType: null, handoverDate: 'ready now' }, NOW)).toBe('On request');
     });
 
     test('a date is read on its stored UTC calendar day regardless of local offset', () => {
@@ -166,20 +183,21 @@ describe('formatHandover - FIXED and legacy rows', () => {
 });
 
 describe('formatHandover - argument tolerance', () => {
-    test('null and undefined read as immediate', () => {
-        expect(formatHandover(null, NOW)).toBe('Immediate');
-        expect(formatHandover(undefined, NOW)).toBe('Immediate');
-    });
+    test.each([null, undefined, {}, '', 'not a date', new Date(NaN)])(
+        'an absent or unusable handover argument (%s) reads as on request', (warehouse) => {
+            expect(formatHandover(warehouse, NOW)).toBe('On request');
+        },
+    );
 
     test('the pre-migration date-only call shape still works', () => {
         // Guards a missed call site: passing a bare Date must not silently
-        // resolve to 'Immediate' via an undefined handoverType.
+        // resolve to 'On request' via an undefined handoverType.
         expect(formatHandover(new Date('2026-09-15T00:00:00Z'), NOW)).toBe('15 Sep 2026');
         expect(formatHandover('2026-09-15', NOW)).toBe('15 Sep 2026');
     });
 
     test('defaults to the real clock when no reference date is given', () => {
-        expect(formatHandover({ handoverType: 'FIXED', handoverDate: null })).toBe('Immediate');
+        expect(formatHandover({ handoverType: 'FIXED', handoverDate: null })).toBe('On request');
         expect(formatHandover({
             handoverType: 'VARIABLE', handoverLeadValue: 2, handoverLeadUnit: 'MONTHS',
         })).toBe('2 Months Post LOI');
@@ -216,6 +234,7 @@ const VARIABLE_WAREHOUSE = {
     totalSpaceSqft: [10000],
     warehouseType: 'RCC',
     ratePerSqft: '25',
+    availability: 'Yes',
     handoverType: 'VARIABLE',
     handoverLeadValue: 2,
     handoverLeadUnit: 'MONTHS',
@@ -224,20 +243,9 @@ const VARIABLE_WAREHOUSE = {
     validPhotos: [],
 };
 
-/**
- * Relative to today, not a calendar date.
- *
- * The render tests below go through the real slide code, which reads the real
- * clock — unlike the unit tests above, they have no way to inject NOW. This
- * fixture previously hardcoded 15 Sep 2026 and started failing on 1 Sep 2026,
- * when that date drifted inside the two-week window where a site correctly reads
- * as "Immediate". The product was right and the test rotted.
- *
- * Six months out keeps it clear of that window for good, and the expected label is
- * derived from the same formatter rather than written out, so the two cannot
- * disagree.
- */
-const FIXED_HANDOVER_DATE = new Date(Date.now() + 180 * 24 * 60 * 60 * 1000);
+// Render/export tests freeze the clock at NOW, so dates and boundary cases do
+// not expire and expected strings stay independent of the formatter under test.
+const FIXED_HANDOVER_DATE = new Date('2026-09-15T00:00:00Z');
 
 const FIXED_WAREHOUSE = {
     ...VARIABLE_WAREHOUSE,
@@ -248,21 +256,25 @@ const FIXED_WAREHOUSE = {
     handoverDate: FIXED_HANDOVER_DATE,
 };
 
-const FIXED_HANDOVER_LABEL = formatHandover(FIXED_WAREHOUSE);
+const FIXED_HANDOVER_LABEL = '15 Sep 2026';
 
 describe('handover text reaches every deck that renders it', () => {
     let pptx;
 
     beforeEach(() => {
+        jest.useFakeTimers({ now: NOW, doNotFake: ['nextTick', 'setImmediate'] });
         pptx = new PptxGenJS();
         pptx.layout = 'LAYOUT_WIDE';
     });
+    afterEach(() => jest.useRealTimers());
 
     describe.each([
         ['v2 index', (p, w) => generateIndexSlideV2(p, [w])],
         ['godamwale index', (p, w) => generateIndexSlideGodamwale(p, [w])],
         ['v2 detailed', (p, w) => generateDetailedSlideV2(p, w, [], 1)],
         ['godamwale detailed', (p, w) => generateDetailedSlideGodamwale(p, w, [], 1)],
+        ['v3 detailed', (p, w) => generateDetailedSlideV3(p, w, [], 1)],
+        ['tci detailed', (p, w) => generateDetailedSlideTci(p, w, [], 1)],
     ])('%s slide', (_name, render) => {
         test('shows the lead time for a VARIABLE site, not "Immediate"', async () => {
             await render(pptx, VARIABLE_WAREHOUSE);
@@ -275,11 +287,116 @@ describe('handover text reaches every deck that renders it', () => {
         test('still shows the date for a FIXED site', async () => {
             await render(pptx, FIXED_WAREHOUSE);
 
-            // Guard the guard: a label of "Immediate" would mean the fixture has
-            // drifted into the two-week window again and the assertion below has
-            // stopped testing anything.
-            expect(FIXED_HANDOVER_LABEL).not.toBe('Immediate');
             expect(collectText(pptx.slides[0])).toContain(FIXED_HANDOVER_LABEL);
         });
+
+        test('does not claim immediate handover when only availability is known', async () => {
+            await render(pptx, { ...FIXED_WAREHOUSE, handoverDate: null });
+
+            const text = collectText(pptx.slides[0]);
+            expect(text).toContain('On request');
+            expect(text).not.toContain('Immediate');
+        });
+    });
+});
+
+// Check the actual exported table cells: a generic search for "On request" can
+// accidentally match the rent, and formatter-only tests missed the v3/TCI bug.
+const xmlTableRows = (xml) => [...xml.matchAll(/<a:tr\b[^>]*>([\s\S]*?)<\/a:tr>/g)]
+    .map((row) => [...row[1].matchAll(/<a:tc\b[^>]*>([\s\S]*?)<\/a:tc>/g)]
+        .map((cell) => [...cell[1].matchAll(/<a:t>([\s\S]*?)<\/a:t>/g)]
+            .map((text) => text[1]).join('')));
+
+async function exportedTables(buffer) {
+    const zip = await JSZip.loadAsync(buffer);
+    return Promise.all(zip.file(/^ppt\/slides\/slide\d+\.xml$/)
+        .sort((a, b) => a.name.localeCompare(b.name, 'en', { numeric: true }))
+        .map(async (file) => xmlTableRows(await file.async('string'))));
+}
+
+describe.each([
+    ['v2', createPptBufferV2],
+    ['v3', createPptBufferV3],
+    ['godamwale', createPptBufferGodamwale],
+    ['tci', createPptBufferTci],
+])('%s exported handover tables', (variant, createBuffer) => {
+    beforeEach(() => jest.useFakeTimers({ now: NOW, doNotFake: ['nextTick', 'setImmediate'] }));
+    afterEach(() => jest.useRealTimers());
+
+    test.each([
+        ['missing data and conflicting availability flags', [
+            [VARIABLE_WAREHOUSE, '2 Months Post LOI'],
+            [{ ...VARIABLE_WAREHOUSE, availability: 'No' }, '2 Months Post LOI'],
+            [{ ...VARIABLE_WAREHOUSE, availability: null }, '2 Months Post LOI'],
+            [FIXED_WAREHOUSE, FIXED_HANDOVER_LABEL],
+            [{ ...FIXED_WAREHOUSE, handoverDate: null }, 'On request'],
+            [{ ...FIXED_WAREHOUSE, handoverType: null, handoverDate: null }, 'On request'],
+            [{ ...VARIABLE_WAREHOUSE, handoverLeadValue: null }, 'On request'],
+        ]],
+        ['dates, immediate boundaries and incomplete lead times', [
+            [{ ...FIXED_WAREHOUSE, handoverDate: '2026-01-01' }, 'Immediate'],
+            [{ ...FIXED_WAREHOUSE, handoverDate: '2026-08-27' }, 'Immediate'],
+            [{ ...FIXED_WAREHOUSE, handoverDate: '2026-08-28' }, '28 Aug 2026'],
+            [{ ...VARIABLE_WAREHOUSE, handoverLeadValue: 0 }, 'Immediate'],
+            [{ ...VARIABLE_WAREHOUSE, handoverLeadValue: 1, handoverLeadUnit: 'DAYS' }, '1 Day Post LOI'],
+            [{ ...FIXED_WAREHOUSE, handoverType: null }, FIXED_HANDOVER_LABEL],
+            [{ ...FIXED_WAREHOUSE, handoverDate: 'not a date' }, 'On request'],
+            [{ ...VARIABLE_WAREHOUSE, handoverLeadUnit: null, handoverDate: FIXED_HANDOVER_DATE }, 'On request'],
+        ]],
+    ])('exports consistent handover for %s', async (_label, cases) => {
+        const warehouses = cases.map(([warehouse], index) => ({ ...warehouse, id: index + 1 }));
+        const expected = cases.map(([, label]) => label);
+        const buffer = await createBuffer(warehouses, {}, { mapsLocation: false, pocSlide: false });
+        const slides = await exportedTables(buffer);
+        const handoverValues = slides.flat()
+            .filter((row) => row[0] === 'Handover timeline' || row[0] === 'Handover')
+            .map((row) => row[1]);
+        expect(handoverValues).toEqual(expected);
+
+        if (variant !== 'tci') {
+            const indexRows = slides.find((rows) => rows[0]?.includes('Availability'));
+            expect(indexRows).toBeDefined();
+            const availabilityColumn = indexRows[0].indexOf('Availability');
+            expect(indexRows.slice(1).map((row) => row[availabilityColumn])).toEqual(handoverValues);
+        }
+    });
+
+    test('keeps one handover reference date when generation crosses UTC midnight', async () => {
+        jest.setSystemTime(new Date('2026-08-13T23:59:59Z'));
+        const originalAddSlide = PptxGenJS.prototype.addSlide;
+        const addSlide = jest.spyOn(PptxGenJS.prototype, 'addSlide').mockImplementation(function (...args) {
+            // After the index (or TCI's first detail), the date crosses into the
+            // next UTC day. A 15-day wait would now fall in the 14-day window.
+            if (this.slides.length === 2) jest.setSystemTime(new Date('2026-08-14T00:00:01Z'));
+            return originalAddSlide.apply(this, args);
+        });
+        const warehouses = [1, 2].map((id) => ({
+            ...FIXED_WAREHOUSE, id, handoverDate: new Date('2026-08-28T00:00:00Z'),
+        }));
+        let buffer;
+        try {
+            buffer = await createBuffer(warehouses, {}, { mapsLocation: false, pocSlide: false });
+        } finally {
+            addSlide.mockRestore();
+        }
+        const slides = await exportedTables(buffer);
+        expect(slides.flat()
+            .filter((row) => row[0] === 'Handover timeline' || row[0] === 'Handover')
+            .map((row) => row[1])).toEqual(['28 Aug 2026', '28 Aug 2026']);
+        if (variant !== 'tci') {
+            const indexRows = slides.find((rows) => rows[0]?.includes('Availability'));
+            const availabilityColumn = indexRows[0].indexOf('Availability');
+            expect(indexRows.slice(1).map((row) => row[availabilityColumn]))
+                .toEqual(['28 Aug 2026', '28 Aug 2026']);
+        }
+
+        // A fresh export on the new day must recalculate rather than reusing the
+        // previous deck's result or leaving cached handover values on the rows.
+        const nextSlides = await exportedTables(await createBuffer(
+            warehouses, {}, { mapsLocation: false, pocSlide: false },
+        ));
+        expect(nextSlides.flat()
+            .filter((row) => row[0] === 'Handover timeline' || row[0] === 'Handover')
+            .map((row) => row[1])).toEqual(['Immediate', 'Immediate']);
     });
 });

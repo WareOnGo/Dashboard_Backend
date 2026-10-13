@@ -12,10 +12,9 @@
  * `handoverDate`; they take the FIXED path, which is also the legacy
  * behaviour.
  *
- * A site reads as immediately available when there is no date on record, or
- * when the recorded date has already passed or falls inside the next two
- * weeks — that much lead time reads as "now" to a tenant, and the buffer
- * stops a deck going stale between generation and the client opening it.
+ * A site reads as immediately available when the recorded date has already
+ * passed or falls inside the next two weeks. Missing or unusable handover
+ * data reads as "On request"; availability alone does not establish timing.
  *
  * Comparison is done on calendar days in UTC. Prisma returns `@db.Date`
  * columns as a Date pinned to UTC midnight, so reading UTC components keeps
@@ -28,15 +27,12 @@ const IMMEDIATE_WINDOW_DAYS = 14;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 const IMMEDIATE = 'Immediate';
-// Used when a site is flagged VARIABLE but its lead time is missing or
-// unrecognised. Deliberately not 'Immediate': the row asserts the site is
-// *not* ready now, so claiming otherwise would misinform the client. Matches
-// the 'On request' idiom already used for absent commercials.
-const UNKNOWN_LEAD = 'On request';
+// Missing or unusable dates and lead times leave the handover unconfirmed.
+const UNKNOWN_HANDOVER = 'On request';
 
 // Singular/plural noun for each HandoverLeadUnit enum value. An unrecognised
 // unit — a sixth enum value added to the DB before this map is updated —
-// resolves to null and falls back to UNKNOWN_LEAD rather than rendering
+// resolves to null and falls back to UNKNOWN_HANDOVER rather than rendering
 // something like "2 undefined".
 //
 // Capitalised because these appear alongside " Post LOI" below, and a mixed-case
@@ -57,7 +53,7 @@ const POST_LOI = 'Post LOI';
 // Accepts a Date (the Prisma shape) or an ISO string (fixtures / JSON payloads
 // that have been through a serialization hop). Anything unparseable — including
 // the free-text values the legacy `availability` column carried — yields null
-// and therefore falls back to "Immediate".
+// and therefore falls back to "On request".
 const parseHandoverDate = (value) => {
     if (value == null) return null;
     const date = value instanceof Date ? value : new Date(value);
@@ -76,15 +72,15 @@ const utcDayIndex = (date) => Math.floor(
 // leaves to the reader.
 function formatLeadTime(value, unit) {
     const nouns = LEAD_UNIT_NOUNS[unit];
-    if (!nouns) return UNKNOWN_LEAD;
+    if (!nouns) return UNKNOWN_HANDOVER;
 
     // Guard before coercing: Number(null) and Number('') are both 0, which
     // would fall through to the zero-lead branch below and report a site with
     // no recorded lead time as immediately available.
-    if (value == null || value === '') return UNKNOWN_LEAD;
+    if (value == null || value === '') return UNKNOWN_HANDOVER;
 
     const n = Number(value);
-    if (!Number.isFinite(n) || n < 0) return UNKNOWN_LEAD;
+    if (!Number.isFinite(n) || n < 0) return UNKNOWN_HANDOVER;
     // A zero-length lead time is availability now, by any reading.
     if (n === 0) return IMMEDIATE;
 
@@ -93,7 +89,7 @@ function formatLeadTime(value, unit) {
 
 function formatFixedHandover(handoverDate, now) {
     const date = parseHandoverDate(handoverDate);
-    if (!date) return IMMEDIATE;
+    if (!date) return UNKNOWN_HANDOVER;
 
     if (utcDayIndex(date) - utcDayIndex(now) <= IMMEDIATE_WINDOW_DAYS) return IMMEDIATE;
 
@@ -104,15 +100,13 @@ function formatFixedHandover(handoverDate, now) {
  * @param {object|Date|string|null|undefined} warehouse - A warehouse row, read
  *   for `handoverType`, `handoverDate`, `handoverLeadValue`, `handoverLeadUnit`.
  *   A bare Date/string is accepted as the pre-migration date-only form.
- * @param {Date} [now] - Reference "today"; injectable for tests
+ * @param {Date} [now] - Reference "today", captured once per export by deck builders
  * @returns {string} 'Immediate', a lead time like '2 Months Post LOI', a formatted
  *   date like '15 Sep 2026', or 'On request'
  */
 function formatHandover(warehouse, now = new Date()) {
-    // Tolerate the old date-only call shape so a missed call site degrades to
-    // the previous behaviour instead of silently reading handoverType off a
-    // Date and reporting 'Immediate'.
-    if (warehouse == null) return IMMEDIATE;
+    // Accept the old date-only call shape as well as warehouse rows.
+    if (warehouse == null) return UNKNOWN_HANDOVER;
     if (warehouse instanceof Date || typeof warehouse === 'string') {
         return formatFixedHandover(warehouse, now);
     }

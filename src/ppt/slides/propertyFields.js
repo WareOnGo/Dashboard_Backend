@@ -17,6 +17,8 @@
  * @property {string} [url]  - present when the value should be a hyperlink
  */
 
+const { formatHandover } = require('../utils/handover');
+
 // Treat empty strings and the literal placeholders "NA" / "N/A" as null — they
 // show up across the data set as stand-ins for "no value" and shouldn't override
 // a row's default text.
@@ -36,9 +38,10 @@ const asValue = (v) => {
  * @param {Object} [flags]
  * @param {boolean} [flags.commercials]  - false withholds the rent
  * @param {boolean} [flags.mapsLocation] - false withholds the coordinates
+ * @param {Date} [now] - Reference date captured when the export starts
  * @returns {PropertyRow[]}
  */
-function propertyFields(warehouse, flags = {}) {
+function propertyFields(warehouse, flags = {}, now = new Date()) {
     const showCommercials = flags.commercials !== false;
     const showMapsLocation = flags.mapsLocation !== false;
 
@@ -81,14 +84,6 @@ function propertyFields(warehouse, flags = {}) {
     const isUnverifiedCLU = !landTypeStr || /^others?$/i.test(landTypeStr);
     const cluValue = isUnverifiedCLU ? 'Unverified CLU' : `${landTypeStr} CLU`;
 
-    // The `availability` column is a yes/no flag in the DB — translate to a
-    // human-readable handover timeline. Anything else (e.g. a future date) is
-    // passed through unchanged.
-    const availabilityRaw = asValue(warehouse.availability);
-    const handoverValue = availabilityRaw && /^yes$/i.test(availabilityRaw)
-        ? 'Immediate'
-        : (availabilityRaw || 'Available');
-
     // Some rows already carry the unit ("10 ft", "10ft", "10 FT.") — strip any
     // trailing ft/feet token before re-appending so we don't end up with "10 ft ft".
     const eaves = (() => {
@@ -125,10 +120,8 @@ function propertyFields(warehouse, flags = {}) {
         { kind: 'field', label: 'Toilets', value: 'Available' },
         { kind: 'field', label: 'Building Stability Certificate', value: 'Available' },
         { kind: 'field', label: 'Fire safety details', value: fireSafetyValue || 'N/A' },
-        // `availability` is the closest existing column to the requested
-        // handover-timeline field; use it directly until a dedicated column
-        // is added.
-        { kind: 'field', label: 'Handover timeline', value: handoverValue },
+        // Use the same handover date/lead time and fallback as the index.
+        { kind: 'field', label: 'Handover timeline', value: formatHandover(warehouse, now) },
     ];
 }
 

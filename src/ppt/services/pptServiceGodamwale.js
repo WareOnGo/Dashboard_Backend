@@ -7,6 +7,8 @@ const { generateDetailedSlideGodamwale } = require('../slides/godamwale/detailed
 const createPptBufferGodamwale = async (warehouses, selectedImages = {}, customDetails = {}, { imageLoader } = {}) => {
     const pptx = new PptxGenJS();
     pptx.warehouseImageLoader = imageLoader;
+    // Keep handover comparisons on one date even if generation crosses midnight.
+    pptx.handoverReferenceDate = new Date();
     pptx.layout = 'LAYOUT_16x9';
 
     await generateTitleSlideGodamwale(pptx, warehouses, customDetails);

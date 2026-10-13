@@ -41,7 +41,7 @@ function generateIndexSlideV2(pptx, warehouses, flags = {}) {
                 options: bodyCellBase,
             },
             { text: String(area), options: bodyCellBase },
-            { text: formatHandover(w), options: bodyCellBase },
+            { text: formatHandover(w, pptx.handoverReferenceDate), options: bodyCellBase },
         ];
     });
 

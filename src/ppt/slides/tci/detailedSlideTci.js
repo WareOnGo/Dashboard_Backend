@@ -140,7 +140,7 @@ async function generateDetailedSlideTci(pptx, warehouse, selectedPhotoUrls, opti
 
     // Field derivation lives in ../propertyFields so the v3 deck renders exactly
     // the same columns; this function only styles them.
-    const rows = propertyFields(warehouse, flags);
+    const rows = propertyFields(warehouse, flags, pptx.handoverReferenceDate);
 
     // Header rows reproduce the source's dark navy "Project name" band plus
     // the white "Building Structural Details" sub-header.

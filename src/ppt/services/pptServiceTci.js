@@ -48,6 +48,8 @@ const PLACEHOLDER_WAREHOUSES = [
 const createPptBufferTci = async (warehouses, selectedImages = {}, customDetails = {}, { imageLoader } = {}) => {
     const pptx = new PptxGenJS();
     pptx.warehouseImageLoader = imageLoader;
+    // Keep handover comparisons on one date even if generation crosses midnight.
+    pptx.handoverReferenceDate = new Date();
     pptx.layout = 'LAYOUT_4x3'; // 10" x 7.5" — matches the source TCI template aspect
 
     const list = (warehouses && warehouses.length) ? warehouses : PLACEHOLDER_WAREHOUSES;

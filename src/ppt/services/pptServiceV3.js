@@ -74,6 +74,8 @@ function splitSelection(entry) {
 const createPptBufferV3 = async (warehouses, selectedImages = {}, customDetails = {}, { imageLoader } = {}) => {
     const pptx = new PptxGenJS();
     pptx.warehouseImageLoader = imageLoader;
+    // Keep handover comparisons on one date even if generation crosses midnight.
+    pptx.handoverReferenceDate = new Date();
     pptx.layout = 'LAYOUT_16x9';
 
     // Same display flags as v2, with the same defaults, so a caller can switch

@@ -152,7 +152,7 @@ async function generateDetailedSlideV3(
     // The project-name band is dropped here but kept in the TCI deck, which is
     // why propertyFields still returns it: the slide title already identifies the
     // property, and the address is on the index slide against the same option.
-    const rows = propertyFields(warehouse, flags).filter((row) => row.kind !== 'header');
+    const rows = propertyFields(warehouse, flags, pptx.handoverReferenceDate).filter((row) => row.kind !== 'header');
 
     const subHeaderOpts = {
         bold: true, color: COLORS.navy, fill: { color: COLORS.bg },
