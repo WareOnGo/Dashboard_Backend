@@ -92,8 +92,8 @@ describe('formatHandover - VARIABLE lead times', () => {
         ['a negative lead value', { handoverLeadValue: -2, handoverLeadUnit: 'MONTHS' }],
         ['a non-numeric lead value', { handoverLeadValue: 'soon', handoverLeadUnit: 'MONTHS' }],
         ['an enum value this build does not know', { handoverLeadValue: 2, handoverLeadUnit: 'QUARTERS' }],
-    ])('falls back to "On request" given %s', (_label, fields) => {
-        expect(formatHandover({ handoverType: 'VARIABLE', ...fields }, NOW)).toBe('On request');
+    ])('falls back to "On request" given %s, even if availability is Yes', (_label, fields) => {
+        expect(formatHandover({ handoverType: 'VARIABLE', availability: 'Yes', ...fields }, NOW)).toBe('On request');
     });
 
     test('never reports Immediate for an incomplete VARIABLE row', () => {
@@ -136,20 +136,54 @@ describe('formatHandover - FIXED and legacy rows', () => {
         expect(formatHandover({ handoverType: 'FIXED', handoverDate: new Date(iso) }, NOW)).toBe(expected);
     });
 
-    test.each([null, undefined, '', ' ', 'not a date', new Date(NaN)])(
-        'a missing or invalid date (%s) leaves handover on request', (handoverDate) => {
+    test.each([null, undefined, '', ' '])(
+        'a missing date (%s) uses affirmative availability', (handoverDate) => {
             for (const handoverType of ['FIXED', null, undefined]) {
                 expect(formatHandover({ handoverType, handoverDate, availability: 'Yes' }, NOW))
-                    .toBe('On request');
+                    .toBe('Immediate');
             }
         },
     );
 
+    test.each(['Yes', ' yes ', 'YES', 'Immediate', ' IMMEDIATE ', 'Available'])(
+        'recognizes affirmative availability %s when no date is recorded', (availability) => {
+            expect(formatHandover({ handoverType: null, handoverDate: null, availability }, NOW))
+                .toBe('Immediate');
+            expect(formatHandover({ handoverType: 'FIXED', handoverDate: null, availability }, NOW))
+                .toBe('Immediate');
+        },
+    );
+
+    test.each(['No', null, undefined, '', ' ', 'not available', 'Available on August', 'Immediate after LOI', true])(
+        'does not infer immediate handover from availability %s', (availability) => {
+            expect(formatHandover({ handoverType: 'FIXED', handoverDate: null, availability }, NOW))
+                .toBe('On request');
+        },
+    );
+
+    test.each(['not a date', new Date(NaN)])(
+        'an invalid date (%s) stays on request even with affirmative availability', (handoverDate) => {
+            expect(formatHandover({ handoverType: 'FIXED', handoverDate, availability: 'Yes' }, NOW))
+                .toBe('On request');
+        },
+    );
+
+    test.each(['Yes', 'Immediate', 'Available'])(
+        'an explicit date or lead time takes precedence over availability %s', (availability) => {
+            expect(formatHandover({ handoverType: 'FIXED', handoverDate: '2026-09-15', availability }, NOW))
+                .toBe('15 Sep 2026');
+            expect(formatHandover({ handoverType: 'VARIABLE', handoverLeadValue: 2, handoverLeadUnit: 'MONTHS', availability }, NOW))
+                .toBe('2 Months Post LOI');
+        },
+    );
+
     test('inactive lead-time fields do not fill in a missing FIXED date', () => {
-        expect(formatHandover({
+        const warehouse = {
             handoverType: 'FIXED', handoverDate: null,
             handoverLeadValue: 2, handoverLeadUnit: 'MONTHS',
-        }, NOW)).toBe('On request');
+        };
+        expect(formatHandover(warehouse, NOW)).toBe('On request');
+        expect(formatHandover({ ...warehouse, availability: 'Yes' }, NOW)).toBe('Immediate');
     });
 
     test('a pre-migration row with a null handoverType takes the date path', () => {
@@ -290,12 +324,11 @@ describe('handover text reaches every deck that renders it', () => {
             expect(collectText(pptx.slides[0])).toContain(FIXED_HANDOVER_LABEL);
         });
 
-        test('does not claim immediate handover when only availability is known', async () => {
+        test('uses Immediate when availability is Yes and no handover date is recorded', async () => {
             await render(pptx, { ...FIXED_WAREHOUSE, handoverDate: null });
 
             const text = collectText(pptx.slides[0]);
-            expect(text).toContain('On request');
-            expect(text).not.toContain('Immediate');
+            expect(text).toContain('Immediate');
         });
     });
 });
@@ -329,9 +362,22 @@ describe.each([
             [{ ...VARIABLE_WAREHOUSE, availability: 'No' }, '2 Months Post LOI'],
             [{ ...VARIABLE_WAREHOUSE, availability: null }, '2 Months Post LOI'],
             [FIXED_WAREHOUSE, FIXED_HANDOVER_LABEL],
-            [{ ...FIXED_WAREHOUSE, handoverDate: null }, 'On request'],
-            [{ ...FIXED_WAREHOUSE, handoverType: null, handoverDate: null }, 'On request'],
+            [{ ...FIXED_WAREHOUSE, handoverDate: null }, 'Immediate'],
+            [{ ...FIXED_WAREHOUSE, handoverType: null, handoverDate: null }, 'Immediate'],
             [{ ...VARIABLE_WAREHOUSE, handoverLeadValue: null }, 'On request'],
+        ]],
+        ['availability fallbacks from the October 15 export audit', [
+            // 2984/2986: legacy Yes with all timing fields null.
+            [{ ...FIXED_WAREHOUSE, handoverType: null, handoverDate: null }, 'Immediate'],
+            // 2990: FIXED with no date and a default lead unit left on the row.
+            [{ ...FIXED_WAREHOUSE, handoverDate: null, handoverLeadUnit: 'MONTHS' }, 'Immediate'],
+            // 2983/3008 and 2204: affirmative legacy availability strings.
+            [{ ...FIXED_WAREHOUSE, handoverType: null, handoverDate: null, availability: 'Immediate' }, 'Immediate'],
+            [{ ...FIXED_WAREHOUSE, handoverType: null, handoverDate: null, availability: 'Available' }, 'Immediate'],
+            [{ ...FIXED_WAREHOUSE, handoverDate: null, availability: ' yes ' }, 'Immediate'],
+            [{ ...FIXED_WAREHOUSE, handoverDate: null, availability: 'No' }, 'On request'],
+            [{ ...FIXED_WAREHOUSE, handoverDate: null, availability: null }, 'On request'],
+            [{ ...FIXED_WAREHOUSE, handoverDate: null, availability: 'Under construction/ Available on August' }, 'On request'],
         ]],
         ['dates, immediate boundaries and incomplete lead times', [
             [{ ...FIXED_WAREHOUSE, handoverDate: '2026-01-01' }, 'Immediate'],

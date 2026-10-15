@@ -13,8 +13,10 @@
  * behaviour.
  *
  * A site reads as immediately available when the recorded date has already
- * passed or falls inside the next two weeks. Missing or unusable handover
- * data reads as "On request"; availability alone does not establish timing.
+ * passed or falls inside the next two weeks. When no FIXED/legacy date is
+ * recorded, affirmative availability (Yes, Immediate, or Available) means
+ * "Immediate". Explicit dates and lead times take precedence over availability;
+ * invalid dates and incomplete VARIABLE lead times remain "On request".
  *
  * Comparison is done on calendar days in UTC. Prisma returns `@db.Date`
  * columns as a Date pinned to UTC midnight, so reading UTC components keeps
@@ -27,7 +29,7 @@ const IMMEDIATE_WINDOW_DAYS = 14;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 const IMMEDIATE = 'Immediate';
-// Missing or unusable dates and lead times leave the handover unconfirmed.
+// No affirmative availability, or unusable explicit timing, leaves handover unconfirmed.
 const UNKNOWN_HANDOVER = 'On request';
 
 // Singular/plural noun for each HandoverLeadUnit enum value. An unrecognised
@@ -98,7 +100,8 @@ function formatFixedHandover(handoverDate, now) {
 
 /**
  * @param {object|Date|string|null|undefined} warehouse - A warehouse row, read
- *   for `handoverType`, `handoverDate`, `handoverLeadValue`, `handoverLeadUnit`.
+ *   for `handoverType`, `handoverDate`, `handoverLeadValue`, `handoverLeadUnit`,
+ *   and `availability` when no fixed date is recorded.
  *   A bare Date/string is accepted as the pre-migration date-only form.
  * @param {Date} [now] - Reference "today", captured once per export by deck builders
  * @returns {string} 'Immediate', a lead time like '2 Months Post LOI', a formatted
@@ -113,6 +116,14 @@ function formatHandover(warehouse, now = new Date()) {
 
     if (warehouse.handoverType === 'VARIABLE') {
         return formatLeadTime(warehouse.handoverLeadValue, warehouse.handoverLeadUnit);
+    }
+
+    const { handoverDate, availability } = warehouse;
+    if (handoverDate == null || (typeof handoverDate === 'string' && handoverDate.trim() === '')) {
+        // Older rows often record availability without a separate handover date.
+        // Match whole affirmative values so "Available on August" cannot imply now.
+        const value = typeof availability === 'string' ? availability.trim().toLowerCase() : '';
+        return ['yes', 'immediate', 'available'].includes(value) ? IMMEDIATE : UNKNOWN_HANDOVER;
     }
 
     return formatFixedHandover(warehouse.handoverDate, now);
