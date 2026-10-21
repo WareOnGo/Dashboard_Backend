@@ -3,6 +3,10 @@ const { z } = require('zod');
 const BaseValidator = require('./baseValidator');
 const { reviewDateSchema, expectedAvailabilitySchema } = require('../utils/availabilityReview');
 const { FILE_UPLOAD } = require('../utils/constants');
+const { parseIdList, MAX_ID_LIST } = require('../utils/warehouseSearchRanking');
+
+/** Room for a 500-ID paste ("12345, " each); far below Node's 16 KB header limit. */
+const MAX_SEARCH_LENGTH = 4000;
 
 /**
  * Use-cases a warehouse suits, stored in Warehouse.suitableFor.
@@ -182,6 +186,21 @@ class WarehouseValidator extends BaseValidator {
     });
 
     /**
+     * The search box. Matched and ranked by utils/warehouseSearchRanking:
+     * warehouse ID, phone numbers, owner and company names, micromarket, address
+     * and pincode, city and state. A comma- or line-separated list of IDs is
+     * resolved as a list, in pasted order, of at most MAX_ID_LIST distinct IDs.
+     * Shared with the review queue's list query.
+     */
+    static searchSchema = z.string()
+        .max(MAX_SEARCH_LENGTH, `Search is limited to ${MAX_SEARCH_LENGTH} characters`)
+        .refine(
+            (term) => (parseIdList(term)?.entries.length ?? 0) <= MAX_ID_LIST,
+            { message: `Paste at most ${MAX_ID_LIST} warehouse IDs at a time` },
+        )
+        .optional();
+
+    /**
      * Schema for warehouse query parameters
      */
     static warehouseQuerySchema = z.object({
@@ -195,9 +214,7 @@ class WarehouseValidator extends BaseValidator {
         // other filters via AND. Used by the PPT/itinerary tools to resolve a handful
         // of warehouses without pulling the full table (pair with all=true).
         ids: z.string().regex(/^\s*\d+\s*(,\s*\d+\s*)*$/, "ids must be comma-separated integers").optional(),
-        // Free-text search across address/city/contactPerson/type/owner-type,
-        // normalized primary/alternate phone numbers, and valid numeric IDs.
-        search: z.string().optional(),
+        search: this.searchSchema,
         city: z.string().optional(),
         state: z.string().optional(),
         zone: z.string().optional(),

@@ -13,6 +13,8 @@ class StagingValidator {
         reviewStatus: z.enum(['PENDING', 'APPROVED', 'REJECTED']).optional(),
         page: z.coerce.number().int().min(1).optional(),
         limit: z.coerce.number().int().min(1).max(100).optional(),
+        // Same matcher and ranking as the dashboard search bar.
+        search: WarehouseValidator.searchSchema,
     });
 
     /** Staged row id (uuid) route param. */

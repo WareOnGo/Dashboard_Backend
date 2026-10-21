@@ -285,7 +285,7 @@ class Container {
 
         this.registerSingleton('geoService', (container) => {
             const geoModel = container.resolve('geoModel');
-            return new GeoService(geoModel, container.resolve('microMarketService'));
+            return new GeoService(geoModel, container.resolve('warehouseService'));
         });
 
         // Register Controllers (transient - new instance per request if needed)

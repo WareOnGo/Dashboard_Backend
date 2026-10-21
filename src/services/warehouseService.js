@@ -3,7 +3,7 @@ const BaseService = require('./baseService');
 const WarehouseValidator = require('../validators/warehouseValidator');
 const { computeChanges } = require('../utils/auditDiff');
 const { prepareAvailabilityUpdate, validateReviewAvailability } = require('../utils/availabilityReview');
-const { phoneSearchDigits, warehouseSearchId } = require('../utils/warehouseSearch');
+const { rankWarehouses, parseIdList } = require('../utils/warehouseSearchRanking');
 
 /** Server-side pagination defaults for the warehouse list. */
 const DEFAULT_PAGE_SIZE = 20;
@@ -78,14 +78,19 @@ class WarehouseService extends BaseService {
                 ? Math.min(filters.limit, MAX_PAGE_SIZE)
                 : DEFAULT_PAGE_SIZE;
 
-            const where = await this.resolveWhere(filters);
+            // With a search, `where` is narrowed to the matched ids and
+            // `search.ids` carries their relevance (or pasted) order.
+            const { where, search } = await this.resolveSearch(filters);
+            if (search && !filters.sortBy) return this.pageInOrder(search, { page, limit, fetchAll });
+
+            // An explicit sortBy orders even a search by that column (21 Oct 2026
+            // decision). Page rows + total count fetched together; count uses the
+            // same where clause so the pager total always matches the filtered set.
+            // With all=true we skip paging and return the whole filtered set
+            // (full-data consumers).
             const orderBy = filters.sortBy
                 ? { [filters.sortBy]: filters.sortOrder || 'desc' }
                 : { createdAt: 'desc' };
-
-            // Page rows + total count fetched together; count uses the same where clause
-            // so the pager total always matches the filtered set. With all=true we skip
-            // paging and return the whole filtered set (full-data consumers).
             const findArgs = { where, orderBy };
             if (!fetchAll) {
                 findArgs.skip = (page - 1) * limit;
@@ -93,16 +98,44 @@ class WarehouseService extends BaseService {
             }
             const [rows, total] = await Promise.all([
                 this.warehouseModel.findAll(findArgs),
-                this.warehouseModel.count(where),
+                search ? search.ids.length : this.warehouseModel.count(where),
             ]);
-
-            return {
-                data: this.transformWarehouseList(rows),
-                pagination: fetchAll
-                    ? { page: 1, limit: total, total, totalPages: 1 }
-                    : { page, limit, total, totalPages: Math.ceil(total / limit) },
-            };
+            return this.listEnvelope(rows, { page, limit, total, fetchAll, search });
         });
+    }
+
+    /**
+     * One page of a search result in its ranked (or pasted) order. The id list
+     * is the whole result set, so it also gives the total.
+     * @param {{ids: number[]}} search - from resolveSearch
+     * @param {Object} paging - { page, limit, fetchAll }
+     * @returns {Promise<Object>} the list envelope
+     * @private
+     */
+    async pageInOrder(search, { page, limit, fetchAll }) {
+        const pageIds = fetchAll ? search.ids : search.ids.slice((page - 1) * limit, page * limit);
+        const found = pageIds.length
+            ? await this.warehouseModel.findAll({ where: { id: { in: pageIds } } })
+            : [];
+        const byId = new Map(found.map((row) => [row.id, row]));
+        const rows = pageIds.map((id) => byId.get(id)).filter(Boolean);
+        return this.listEnvelope(rows, { page, limit, total: search.ids.length, fetchAll, search });
+    }
+
+    /**
+     * The list response: rows, pager and, for a pasted ID list, which IDs it
+     * could not show.
+     * @private
+     */
+    listEnvelope(rows, { page, limit, total, fetchAll, search }) {
+        const envelope = {
+            data: this.transformWarehouseList(rows),
+            pagination: fetchAll
+                ? { page: 1, limit: total, total, totalPages: 1 }
+                : { page, limit, total, totalPages: Math.ceil(total / limit) },
+        };
+        if (search?.summary) envelope.search = search.summary;
+        return envelope;
     }
 
     /**
@@ -119,7 +152,7 @@ class WarehouseService extends BaseService {
                 ? this.validateData(options, (data) => WarehouseValidator.validateQuery(data))
                 : {};
 
-            const where = await this.resolveWhere(filters);
+            const { where } = await this.resolveSearch(filters);
             const rows = await this.warehouseModel.findCoordinates(where);
 
             return rows
@@ -143,7 +176,7 @@ class WarehouseService extends BaseService {
      * @private
      */
     async resolveWhere(filters) {
-        const where = await this.buildWhere(filters);
+        const where = this.buildWhere(filters);
 
         const ranges = {
             areaMin: filters.minArea,
@@ -157,6 +190,64 @@ class WarehouseService extends BaseService {
         }
 
         return where;
+    }
+
+    /**
+     * Resolve filters plus the search box into the rows to show. Shared by the
+     * list, the coordinates endpoint and GeoService's viewport reads, so every
+     * view of a search shows the same warehouses.
+     *
+     * Search is matched and ranked in memory over the rows the other filters
+     * allow (utils/warehouseSearchRanking). A pasted list of IDs ("412, 87,
+     * 1503") keeps pasted order instead, and reports the IDs that do not exist
+     * apart from those the active filters exclude.
+     *
+     * @param {Object} filters - Validated query params
+     * @returns {Promise<{where: Object, search: ({ids: number[], summary?: Object}|null)}>}
+     *   `where` selects exactly the rows to show; with a search it is narrowed to
+     *   `search.ids`, which also holds their order. `search` is null without a term.
+     */
+    async resolveSearch(filters) {
+        const where = await this.resolveWhere(filters);
+        const term = filters.search?.trim();
+        if (!term) return { where, search: null };
+
+        const idList = parseIdList(term);
+        const search = idList
+            ? await this.resolveIdList(idList, where)
+            : { ids: rankWarehouses(term, await this.warehouseModel.findSearchCandidates(where)).map((match) => match.row.id) };
+        return { where: { id: { in: search.ids } }, search };
+    }
+
+    /**
+     * Resolve a pasted ID list against the active filters, keeping pasted order.
+     * @param {{ids: number[], entries: Array<{text: string, id: (number|null)}>}} idList - from parseIdList
+     * @param {Object} where - every filter except search
+     * @returns {Promise<{ids: number[], summary: Object}>}
+     * @private
+     */
+    async resolveIdList({ ids, entries }, where) {
+        const found = ids.length
+            ? new Set(await this.warehouseModel.findIds({ AND: [where, { id: { in: ids } }] }))
+            : new Set();
+
+        // Tell "no such warehouse" apart from "excluded by the filters you set".
+        const unmatched = ids.filter((id) => !found.has(id));
+        const existing = unmatched.length
+            ? new Set(await this.warehouseModel.findIds({ id: { in: unmatched } }))
+            : new Set();
+
+        return {
+            ids: ids.filter((id) => found.has(id)),
+            summary: {
+                mode: 'ids',
+                requested: entries.length,
+                missingIds: entries
+                    .filter(({ id }) => id === null || (!found.has(id) && !existing.has(id)))
+                    .map(({ text }) => text),
+                excludedIds: unmatched.filter((id) => existing.has(id)).map(String),
+            },
+        };
     }
 
     /**
@@ -362,48 +453,20 @@ class WarehouseService extends BaseService {
     /**
      * Build a Prisma `where` clause from validated query filters.
      *
-     * Combines string/boolean and nested WarehouseData filters with free-text
-     * search. Formatted phone matches are resolved to IDs; numeric area and budget
-     * ranges are intersected afterwards by resolveWhere.
+     * Combines string/boolean and nested WarehouseData filters. Free-text search
+     * is not part of this clause: resolveSearch matches and ranks it over the
+     * rows this clause selects. Numeric area and budget ranges are intersected
+     * afterwards by resolveWhere.
      *
      * @param {Object} filters - Validated query params
-     * @returns {Promise<Object>} Prisma where clause ({} = match all)
+     * @returns {Object} Prisma where clause ({} = match all)
      * @private
      */
-    async buildWhere(filters) {
+    buildWhere(filters) {
         const where = {};
         // Relation filters and multi-clause conditions go in an AND array so they
-        // compose cleanly with the top-level keys and the search OR.
+        // compose cleanly with the top-level keys.
         const and = [];
-
-        // Free-text search also matches normalized contact numbers and valid IDs.
-        if (filters.search && filters.search.trim()) {
-            const term = filters.search.trim();
-            const or = [
-                { address: { contains: term, mode: 'insensitive' } },
-                { city: { contains: term, mode: 'insensitive' } },
-                { contactPerson: { contains: term, mode: 'insensitive' } },
-                { warehouseType: { contains: term, mode: 'insensitive' } },
-                { warehouseOwnerType: { contains: term, mode: 'insensitive' } },
-            ];
-            const id = warehouseSearchId(term);
-            if (id !== null) or.push({ id });
-            const phoneDigits = phoneSearchDigits(term);
-            if (phoneDigits) {
-                const ids = await this.warehouseModel.findIdsByContactNumber(phoneDigits);
-                or.push({ id: { in: ids } });
-            }
-
-            // Micro-market is a text[], and Prisma can only match scalar lists by
-            // exact equality — so resolve the term to real tag names first (spelling-
-            // tolerant, see MicroMarketService.namesMatching) and match those.
-            const microMarkets = this.microMarketService
-                ? await this.microMarketService.namesMatching(term)
-                : [];
-            if (microMarkets.length > 0) or.push({ micromarket: { hasSome: microMarkets } });
-
-            where.OR = or;
-        }
 
         // Explicit id list ("3,17,42"). Goes in the AND array so it intersects
         // cleanly with the numeric-range id pre-query instead of clobbering it.

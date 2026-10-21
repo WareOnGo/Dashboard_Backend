@@ -6,15 +6,16 @@ const bbox = '77,12,78,13';
 const box = { west: 77, south: 12, east: 78, north: 13 };
 const row = id => ({ id, city: 'Bengaluru', availability: 'Yes', warehouseType: 'PEB', lat: 12.9, lng: 77.6 });
 
-test('viewport filters are validated and preserve dashboard search, owner, compliance and ranges', async () => {
+test('viewport filters are validated and the search resolves through the list matcher', async () => {
     const model = { warehousesInBbox: jest.fn().mockResolvedValue([row(1)]) };
-    const markets = { namesMatching: jest.fn().mockResolvedValue(['Nelamangala']) };
-    const service = new GeoService(model, markets);
+    const warehouses = { resolveSearch: jest.fn().mockResolvedValue({ where: { id: { in: [4, 1] } }, search: { ids: [4, 1] } }) };
+    const service = new GeoService(model, warehouses);
     const fc = await service.warehouses({ bbox, limit: '25', search: 'nelamangla', state: 'Karnataka', contactPerson: 'Sharma', fireNoc: 'available', minArea: '5000', maxRate: '22.5' });
-    expect(model.warehousesInBbox).toHaveBeenCalledWith(box, 26, {
+    const filters = {
         search: 'nelamangla', state: 'Karnataka', contactPerson: 'Sharma', fireNoc: 'available', minArea: 5000, maxRate: 22.5,
-    }, ['Nelamangala']);
-    expect(markets.namesMatching).toHaveBeenCalledWith('nelamangla');
+    };
+    expect(warehouses.resolveSearch).toHaveBeenCalledWith(filters);
+    expect(model.warehousesInBbox).toHaveBeenCalledWith(box, 26, filters, [4, 1]);
     expect(fc.features[0].geometry.coordinates).toEqual([77.6, 12.9]);
     expect(fc.features[0].properties).toEqual({ id: 1, city: 'Bengaluru', availability: 'Yes', warehouseType: 'PEB' });
 });
@@ -41,7 +42,7 @@ test('one indexed spatial query applies all filters before its cap with paramete
     const prisma = { $queryRaw: jest.fn().mockResolvedValue([]) };
     const model = new GeoModel(prisma);
     const filters = { search: "x' OR 1=1 --", city: 'Bengaluru', state: 'Karnataka', zone: 'South', warehouseType: 'PEB', warehouseOwnerType: 'Owner', availability: 'Yes', isBroker: 'No', uploadedBy: 'employee', contactPerson: 'Sharma', listing_type: 'Rent', status: 'Ready', ids: '1,2', fireNoc: 'not_available', visibility: 'hidden', landType: 'Industrial', minArea: 5000, maxArea: 25000, minRate: 10, maxRate: 25 };
-    await model.warehousesInBbox(box, 2001, filters, ['Nelamangala']);
+    await model.warehousesInBbox(box, 2001, filters, [1, 2]);
     expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
     const query = Prisma.sql(...prisma.$queryRaw.mock.calls[0]);
     expect(query.text).toContain('d.geog &&');
@@ -51,36 +52,38 @@ test('one indexed spatial query applies all filters before its cap with paramete
     expect(query.text).toContain('d."fireNocAvailable" IS FALSE');
     expect(query.text).toContain('unnest(w."totalSpaceSqft")');
     expect(query.text).toContain('regexp_replace');
-    expect(query.text).toContain('w.micromarket && ARRAY[');
+    expect(query.text).toContain('w.id = ANY(');
+    expect(query.text.indexOf('w.id = ANY(')).toBeLessThan(query.text.indexOf('LIMIT'));
     expect(query.text.indexOf('w."city" ILIKE')).toBeLessThan(query.text.indexOf('LIMIT'));
+    // The search text never reaches SQL; only the ids it resolved to do.
     expect(query.text).not.toContain(filters.search);
-    expect(query.values).toContain(`%${filters.search}%`);
+    expect(query.values.flat()).not.toContain(`%${filters.search}%`);
+    expect(query.values).toContainEqual([1, 2]);
     expect(query.values).toContain('%Sharma%');
-    expect(query.values).toContain('Nelamangala');
     expect(query.values.at(-1)).toBe(2001);
 });
 
-test.each(['9876543210', '+91 (98765) 43210', '00919876543210', '09876543210'])(
-    'viewport mobile search %s normalizes both phone fields before the cap', async search => {
-        const prisma = { $queryRaw: jest.fn().mockResolvedValue([]) };
-        await new GeoModel(prisma).warehousesInBbox(box, 26, { search, city: 'Indore' });
-        const query = Prisma.sql(...prisma.$queryRaw.mock.calls[0]);
-        expect(query.text).toContain('w."contactNumber"');
-        expect(query.text).toContain('w."alt_phone_number"');
-        expect(query.text.indexOf('w."contactNumber"')).toBeLessThan(query.text.indexOf('LIMIT'));
-        expect(query.text).not.toContain('w.id = $');
-        expect(query.text).not.toContain('9876543210');
-        expect(query.values.filter(value => value === '%9876543210%').length).toBeGreaterThanOrEqual(2);
-        expect(query.values).toContain('%Indore%');
-        expect(query.values.at(-1)).toBe(26);
-    },
-);
+test('a search that matches nothing returns no pins rather than every pin', async () => {
+    const prisma = { $queryRaw: jest.fn().mockResolvedValue([]) };
+    await new GeoModel(prisma).warehousesInBbox(box, 26, { search: 'zzz', city: 'Indore' }, []);
+    const query = Prisma.sql(...prisma.$queryRaw.mock.calls[0]);
+    expect(query.text).toContain('FALSE');
+    expect(query.text).not.toContain('ANY(');
+});
+
+test('an unsearched viewport read never runs the list matcher', async () => {
+    const model = { warehousesInBbox: jest.fn().mockResolvedValue([]) };
+    const warehouses = { resolveSearch: jest.fn() };
+    await new GeoService(model, warehouses).warehouses({ bbox, search: '   ', minArea: '5000' });
+    expect(warehouses.resolveSearch).not.toHaveBeenCalled();
+    expect(model.warehousesInBbox).toHaveBeenCalledWith(box, 2001, { search: '   ', minArea: 5000 }, null);
+});
 
 test('the ordinary GIS call still uses the same bounded query without dashboard filters', async () => {
     const model = { warehousesInBbox: jest.fn().mockResolvedValue([row(7)]) };
     const service = new GeoService(model);
     const fc = await service.warehouses({ bbox });
-    expect(model.warehousesInBbox).toHaveBeenCalledWith(box, 2001, {}, []);
+    expect(model.warehousesInBbox).toHaveBeenCalledWith(box, 2001, {}, null);
     expect(fc.features).toHaveLength(1);
     expect(fc.truncated).toBe(false);
 });
@@ -89,7 +92,7 @@ test('a bounded warehouse read can advance beyond a capped page by ID', async ()
     const model = { warehousesInBbox: jest.fn().mockResolvedValue([row(2002)]) };
     const service = new GeoService(model);
     await service.warehouses({ bbox, afterId: '2001', limit: '2000' });
-    expect(model.warehousesInBbox).toHaveBeenCalledWith(box, 2001, { afterId: 2001 }, []);
+    expect(model.warehousesInBbox).toHaveBeenCalledWith(box, 2001, { afterId: 2001 }, null);
     const prisma = { $queryRaw: jest.fn().mockResolvedValue([]) };
     await new GeoModel(prisma).warehousesInBbox(box, 2001, { afterId: 2001 });
     const query = Prisma.sql(...prisma.$queryRaw.mock.calls[0]);

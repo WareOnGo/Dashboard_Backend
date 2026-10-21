@@ -39,10 +39,15 @@ const POI_CATEGORIES = [
  * be handed to any other GIS tool unchanged.
  */
 class GeoService extends BaseService {
-    constructor(geoModel, microMarketService = null) {
+    /**
+     * @param {GeoModel} geoModel
+     * @param {WarehouseService} warehouseService - resolves the search box, so
+     *   map pins are exactly the list's results
+     */
+    constructor(geoModel, warehouseService) {
         super();
         this.geoModel = geoModel;
-        this.microMarketService = microMarketService;
+        this.warehouseService = warehouseService;
     }
 
     /**
@@ -150,11 +155,13 @@ class GeoService extends BaseService {
                 }
                 filters.afterId = Number(afterId);
             }
-            const term = filters.search?.trim();
-            const microMarkets = term && this.microMarketService
-                ? await this.microMarketService.namesMatching(term)
-                : [];
-            const rows = await this.geoModel.warehousesInBbox(box, cap + 1, filters, microMarkets);
+            // A search resolves through the list's matcher, which applies every
+            // filter, so pins are exactly the list's results. The map SQL then
+            // re-applies the filters, which is redundant but cheap.
+            const search = filters.search?.trim()
+                ? (await this.warehouseService.resolveSearch(filters)).search
+                : null;
+            const rows = await this.geoModel.warehousesInBbox(box, cap + 1, filters, search?.ids ?? null);
             const fc = this.toFeatureCollection(rows.slice(0, cap), (r) => ({
                 id: r.id, city: r.city, availability: r.availability, warehouseType: r.warehouseType,
             }), cap);

@@ -378,16 +378,32 @@ Supported list filters: `search`, `ids`, `city`, `state`, `zone`, `warehouseType
 `fireNoc`, `minArea`/`maxArea`, `minRate`/`maxRate`, plus `page`, `limit` (max 100),
 `sortBy`, `sortOrder`, `all`.
 
-`search` includes primary and alternate mobile numbers. It ignores phone formatting
-in stored values and accepts complete Indian numbers with `+91`, `91`, `0091`, or
-a leading `0`, as well as the local ten-digit number. Phone fragments need at least
-four digits. Matching IDs join the text-search OR before pagination and counting;
-coordinate and viewport map reads use the same matching rules.
+`search` is matched and ranked in memory over the rows the other filters allow
+(`src/utils/warehouseSearchRanking.js`). Results come back in relevance order: the
+share of query words matched first, then match tier, then newest `createdAt`. Tiers,
+best first:
+
+1. warehouse ID, then phone number (primary or alternate; any stored formatting;
+   `+91`, `91`, `0091` or a leading `0`; fragments of four or more digits), then
+   owner names (`contactPerson`, `ownerAltPoc`, `ownerCompanyName`) matched at the
+   start of a word, then owner-name spelling variants
+2. micromarket tag, exact before a longer tag containing it
+3. address word or pincode, then part of a word or a leading part of a pincode
+4. micromarket or address typos (at most two edits and at least 75% similar)
+5. city (Bangalore/Bengaluru and Gurgaon/Gurugram are one city), then state
+
+Warehouse type and owner type are filters only. An explicit `sortBy` replaces
+relevance order over the same matched set. A comma-, semicolon-, tab- or
+line-separated list of IDs (each up to five digits, at most 500) returns those
+warehouses in pasted order, still narrowed by the other filters; the response then
+carries `search: { mode: 'ids', requested, missingIds, excludedIds }`.
 
 The numeric filters **area** (`totalSpaceSqft` is `Int[]`) and **budget** (`ratePerSqft`
 is a `String`) also need a raw id pre-query
-(`findIdsByNumericRange`) whose result is intersected via `where.id.in`. `resolveWhere()` is
-shared by the list and the coordinates endpoint so the map and the list can never disagree.
+(`findIdsByNumericRange`) whose result is intersected via `where.id.in`. `resolveSearch()` is
+shared by the list, the coordinates endpoint and the geo viewport, so the map and the
+list can never disagree. The review queue (`GET /api/staging?search=`) uses the same
+matcher over the whole tab.
 
 ### Staging — `/api/staging`
 

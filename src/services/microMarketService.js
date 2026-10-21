@@ -1,7 +1,6 @@
 // src/services/microMarketService.js
 const BaseService = require('./baseService');
-const { resolveTags, labelsFor } = require('../utils/microMarketGeometry');
-const { fuzzyMatches, DEFAULT_THRESHOLD } = require('../utils/fuzzyMatch');
+const { resolveTags } = require('../utils/microMarketGeometry');
 const { computeChanges } = require('../utils/auditDiff');
 
 const clientError = (message, statusCode) => {
@@ -76,41 +75,6 @@ class MicroMarketService extends BaseService {
             return resolveTags(await this.getPolygons(), lat, lon);
         } catch (err) {
             console.error('MicroMarketService: micro-market tagging failed', err.message);
-            return [];
-        }
-    }
-
-    /**
-     * Micro-market tags whose name approximately matches a free-text term.
-     *
-     * Exists because `Warehouse.micromarket` is a Postgres `text[]`, and Prisma's
-     * scalar-list filters (`has`/`hasSome`) only do exact equality — there is no
-     * `contains`/`mode: 'insensitive'` for array columns. So instead of matching
-     * loosely against the stored array, we resolve the search term to concrete tag
-     * names first (the vocabulary is closed and already cached in memory for
-     * tagging) and then match those exactly.
-     *
-     * Never throws: search must degrade to "no micro-market hits" rather than 500.
-     *
-     * @param {string} term - free-text search term
-     * @param {number} [threshold=DEFAULT_THRESHOLD] - similarity floor, 0..1
-     * @returns {Promise<string[]>} matching tags, de-duplicated and sorted
-     */
-    async namesMatching(term, threshold = DEFAULT_THRESHOLD) {
-        const needle = String(term ?? '').trim();
-        if (!needle) return [];
-        try {
-            const markets = await this.getPolygons();
-            // Matched per alternate name, not against the whole slashed name, so
-            // searching "Kalyan" resolves the "Bhiwandi/Kalyan" polygon — and
-            // resolves to the tag actually stored on the warehouse, since the
-            // column is filtered by exact equality.
-            const hits = markets
-                .flatMap(labelsFor)
-                .filter((label) => fuzzyMatches(needle, label, threshold));
-            return [...new Set(hits)].sort();
-        } catch (err) {
-            console.error('MicroMarketService: micro-market name lookup failed', err.message);
             return [];
         }
     }

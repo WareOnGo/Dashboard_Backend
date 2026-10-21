@@ -5,6 +5,7 @@ const { geocodeUrl } = require('../utils/googleMaps');
 const { deriveZone } = require('../utils/deriveZone');
 const { computeChanges } = require('../utils/auditDiff');
 const { prepareAvailabilityUpdate, validateReviewAvailability } = require('../utils/availabilityReview');
+const { rankWarehouses, parseIdList } = require('../utils/warehouseSearchRanking');
 
 /**
  * The nested WarehouseData fields, flattened onto the StagedWarehouse mirror.
@@ -274,17 +275,40 @@ class StagingService extends BaseService {
     }
 
     /**
-     * List staged submissions (review queue), newest first.
-     * @param {Object} options - { reviewStatus?, page?, limit? }
+     * List staged submissions (review queue), newest first, or by relevance when
+     * searching.
+     *
+     * A search runs over the whole tab, not just its newest page, with the
+     * dashboard's matcher (utils/warehouseSearchRanking). A pasted ID list
+     * matches the warehouse each submission belongs to, in pasted order.
+     * @param {Object} options - { reviewStatus?, page?, limit?, search? }
      * @returns {Array} Staged rows
      */
-    async listSubmissions({ reviewStatus, page, limit } = {}) {
+    async listSubmissions({ reviewStatus, page, limit, search } = {}) {
         return this.executeOperation(async () => {
             // Always cap the result set so an ever-growing queue (APPROVED/ALL tabs never
             // shrink) can't return an unbounded, heavy payload. Validator caps limit at 100.
             const take = limit || DEFAULT_LIST_LIMIT;
-            const skip = page ? (page - 1) * take : undefined;
-            return this.stagedWarehouseModel.findAll({ reviewStatus, skip, take });
+            const skip = page ? (page - 1) * take : 0;
+            const term = search?.trim();
+            if (!term) return this.stagedWarehouseModel.findAll({ reviewStatus, skip, take });
+
+            const candidates = await this.stagedWarehouseModel.findSearchCandidates({ reviewStatus });
+            const idList = parseIdList(term);
+            let ranked;
+            if (idList) {
+                const position = new Map(idList.ids.map((id, index) => [id, index]));
+                // Stable sort: submissions for the same warehouse stay newest first.
+                ranked = candidates.filter((row) => position.has(row.warehouseId))
+                    .sort((a, b) => position.get(a.warehouseId) - position.get(b.warehouseId));
+            } else {
+                ranked = rankWarehouses(term, candidates, { recency: (row) => row.submittedAt }).map((match) => match.row);
+            }
+
+            const pageIds = ranked.slice(skip, skip + take).map((row) => row.id);
+            const rows = await this.stagedWarehouseModel.findByIds(pageIds);
+            const byId = new Map(rows.map((row) => [row.id, row]));
+            return pageIds.map((id) => byId.get(id)).filter(Boolean);
         });
     }
 

@@ -1,6 +1,7 @@
 const { registerWarehouseImages } = require('./imagePipelineRepository.cjs');
 // src/models/stagedWarehouseModel.js
 const BaseModel = require('./baseModel');
+const { SEARCH_FIELDS } = require('../utils/warehouseSearchRanking');
 const { availabilityConflict } = require('../utils/availabilityReview');
 const { photosToMedia } = require('../utils/mediaUtils');
 const { atomicPromotion } = require('./atomicPromotion');
@@ -59,6 +60,46 @@ class StagedWarehouseModel extends BaseModel {
                 omit: { rawPayload: true, flags: true, reviewMeta: true },
                 skip,
                 take,
+            });
+            return this.annotateWarehouseExistence(rows);
+        } catch (error) {
+            this.handleDatabaseError(error);
+        }
+    }
+
+    /**
+     * The searchable fields of every staged row in a tab, newest first, for the
+     * review queue search. Slim on purpose: the whole tab is ranked in memory.
+     * @param {Object} [options] - { reviewStatus? }
+     * @returns {Promise<Array<Object>>}
+     */
+    async findSearchCandidates({ reviewStatus } = {}) {
+        try {
+            return await this.model.findMany({
+                where: reviewStatus ? { reviewStatus } : undefined,
+                orderBy: { submittedAt: 'desc' },
+                // Staged rows have no micromarket tags; warehouseId lets a
+                // warehouse ID find the submissions for it.
+                select: Object.fromEntries(
+                    ['id', 'submittedAt', 'warehouseId', ...SEARCH_FIELDS].map((field) => [field, true]),
+                ),
+            });
+        } catch (error) {
+            this.handleDatabaseError(error);
+        }
+    }
+
+    /**
+     * Staged rows by uuid, shaped like findAll's rows (order not guaranteed).
+     * @param {string[]} ids
+     * @returns {Promise<Array<Object>>}
+     */
+    async findByIds(ids) {
+        if (!ids.length) return [];
+        try {
+            const rows = await this.model.findMany({
+                where: { id: { in: ids } },
+                omit: { rawPayload: true, flags: true, reviewMeta: true },
             });
             return this.annotateWarehouseExistence(rows);
         } catch (error) {
