@@ -35,7 +35,7 @@ stored proximity records; generation makes no geospatial API calls.
 | Distance from Airport | `WarehouseProximity.roadKm`, category `aerodrome`, status `OK` |
 | Distance From Highway | Successful `WarehouseProximity.roadKm`, category `national_highway`; fallback to `distance_from_highway`. `ON_HIGHWAY` displays `Direct access`, matching PPT exports. |
 | Developer Name; Comments | Always `NA` by request; consultants fill these in after downloading |
-| Time frame for availability | Existing `formatHandover` for recorded handover fields; otherwise `availability` |
+| Time frame for availability | Shared PPT handover rule: active fixed date or complete variable lead time; missing/invalid timing is `Unconfirmed`, regardless of `availability` |
 | Total Built up Area | `totalSpaceSqft` (dashboard Offered Area), explicitly requested for this Last Mile row. Multiple values are shown separately with `/`, not summed. |
 | Total Land Area | `land_parcel_size`, retaining its recorded units |
 | Connected & Sanctioned Electricity Load | `WarehouseData.powerKva` (the DB does not distinguish connected vs sanctioned) |
@@ -51,8 +51,15 @@ stored proximity records; generation makes no geospatial API calls.
 | Quoted Rent | `ratePerSqft` |
 | Google Coordinated | `googleLocation`, or valid `WarehouseData.latitude/longitude` |
 
-Unknown/blank/NA values remain `NA`; no facilities or immediate handover are
-assumed when the underlying fields are absent. Units are appended only to bare
+Missing or invalid handover timing displays `Unconfirmed`, including legacy rows
+with affirmative availability but no date. Fixed dates in the past or within the
+next 14 days display `Immediate`; later dates display the recorded date. Variable
+timing displays the complete lead time followed by `Post LOI` (an explicit legacy
+zero with a valid unit displays `Immediate`). Inactive timing fields do not fill
+in a missing active value. One reference day is used throughout each workbook.
+
+Other unknown/blank/NA values remain `NA`; no facilities are assumed when the
+underlying fields are absent. Units are appended only to bare
 numbers in unit-specific fields. Stored airport/railway distances mean **nearest
 landmark by road**, not distance to a client-designated station or airport.
 

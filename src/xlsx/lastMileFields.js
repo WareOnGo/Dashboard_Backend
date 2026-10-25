@@ -39,10 +39,9 @@ function mapsLocation(warehouse) {
 // Row positions and wording follow the supplied Indore workbook, including its
 // spacer at row 10 and "Google Coordinated" label. No sample property data is used.
 // Ambiguous fields stay NA until their source is confirmed (see README.md).
-function lastMileFields(warehouse) {
+function lastMileFields(warehouse, now) {
     const wd = warehouse.WarehouseData || {};
-    const handover = warehouse.handoverType || warehouse.handoverDate
-        ? formatHandover(warehouse) : text(warehouse.availability);
+    const handover = formatHandover(warehouse, now);
     // Last Mile uses the dashboard's Offered Area for this template row by request.
     // Multiple entries can be partition options, so retain them rather than summing.
     const areas = Array.isArray(warehouse.totalSpaceSqft)

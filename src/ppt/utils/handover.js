@@ -1,22 +1,21 @@
 /**
- * Formats a warehouse's handover timing into the text shown in a deck's
- * "Handover" row and the index table's "Availability" column.
+ * Formats a warehouse's handover timing for PPT index/detail tables and the
+ * Last Mile Excel workbook. Both exports follow the same handover SOP.
  *
  * Handover is recorded two different ways, discriminated by `handoverType`:
  *
  *   FIXED     - a known calendar date in `handoverDate`
  *   VARIABLE  - a lead time in `handoverLeadValue` + `handoverLeadUnit`
- *               (e.g. 2 + MONTHS), with `handoverDate` deliberately null
+ *               (e.g. 2 + MONTHS); an inactive fixed date may remain stored
  *
  * Rows predating that migration have `handoverType` null and carry only
  * `handoverDate`; they take the FIXED path, which is also the legacy
  * behaviour.
  *
  * A site reads as immediately available when the recorded date has already
- * passed or falls inside the next two weeks. When no FIXED/legacy date is
- * recorded, affirmative availability (Yes, Immediate, or Available) means
- * "Immediate". Explicit dates and lead times take precedence over availability;
- * invalid dates and incomplete VARIABLE lead times remain "On request".
+ * passed or falls inside the next two weeks. Missing or invalid timing in the
+ * selected mode is "Unconfirmed", regardless of the availability field. Inactive
+ * values retained from another mode cannot confirm the selected mode's timing.
  *
  * Comparison is done on calendar days in UTC. Prisma returns `@db.Date`
  * columns as a Date pinned to UTC midnight, so reading UTC components keeps
@@ -24,16 +23,17 @@
  * container runs in.
  */
 
+const { parseHandoverDate, parseHandoverLeadValue } = require('../../utils/handoverTiming');
+
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const IMMEDIATE_WINDOW_DAYS = 14;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 const IMMEDIATE = 'Immediate';
-// No affirmative availability, or unusable explicit timing, leaves handover unconfirmed.
-const UNKNOWN_HANDOVER = 'On request';
+const UNKNOWN_HANDOVER = 'Unconfirmed';
 
 // Singular/plural noun for each HandoverLeadUnit enum value. An unrecognised
-// unit — a sixth enum value added to the DB before this map is updated —
+// unit — an enum value added to the DB before this map is updated —
 // resolves to null and falls back to UNKNOWN_HANDOVER rather than rendering
 // something like "2 undefined".
 //
@@ -49,18 +49,8 @@ const LEAD_UNIT_NOUNS = {
 // deck was generated, and a bare "1 Month" invites a client to read it as the
 // latter. Only the LEAD-TIME path carries this: a FIXED handover is an absolute
 // calendar date that an LOI does not move, and neither 'Immediate' nor
-// 'On request' is a duration to count from anything.
+// 'Unconfirmed' is a duration to count from anything.
 const POST_LOI = 'Post LOI';
-
-// Accepts a Date (the Prisma shape) or an ISO string (fixtures / JSON payloads
-// that have been through a serialization hop). Anything unparseable — including
-// the free-text values the legacy `availability` column carried — yields null
-// and therefore falls back to "On request".
-const parseHandoverDate = (value) => {
-    if (value == null) return null;
-    const date = value instanceof Date ? value : new Date(value);
-    return Number.isNaN(date.getTime()) ? null : date;
-};
 
 // Whole days since the epoch for a Date's UTC calendar day, so two dates can be
 // differenced without any wall-clock time component leaking in.
@@ -69,21 +59,16 @@ const utcDayIndex = (date) => Math.floor(
 );
 
 // '2 Months Post LOI', '1 Month Post LOI', '15 Days Post LOI'. Sits under an
-// "Availability"/"Handover" label, so it reads as the answer to "when" the same
+// "Handover" label, so it reads as the answer to "when" the same
 // way 'Immediate' does — with the reference point stated, which a bare duration
 // leaves to the reader.
 function formatLeadTime(value, unit) {
+    if (typeof unit !== 'string' || !Object.hasOwn(LEAD_UNIT_NOUNS, unit)) return UNKNOWN_HANDOVER;
     const nouns = LEAD_UNIT_NOUNS[unit];
-    if (!nouns) return UNKNOWN_HANDOVER;
 
-    // Guard before coercing: Number(null) and Number('') are both 0, which
-    // would fall through to the zero-lead branch below and report a site with
-    // no recorded lead time as immediately available.
-    if (value == null || value === '') return UNKNOWN_HANDOVER;
-
-    const n = Number(value);
-    if (!Number.isFinite(n) || n < 0) return UNKNOWN_HANDOVER;
-    // A zero-length lead time is availability now, by any reading.
+    const n = parseHandoverLeadValue(value);
+    if (n == null) return UNKNOWN_HANDOVER;
+    // Preserve explicitly recorded zero leads; new dashboard entries use 1–120.
     if (n === 0) return IMMEDIATE;
 
     return `${n} ${n === 1 ? nouns[0] : nouns[1]} ${POST_LOI}`;
@@ -100,12 +85,11 @@ function formatFixedHandover(handoverDate, now) {
 
 /**
  * @param {object|Date|string|null|undefined} warehouse - A warehouse row, read
- *   for `handoverType`, `handoverDate`, `handoverLeadValue`, `handoverLeadUnit`,
- *   and `availability` when no fixed date is recorded.
+ *   for `handoverType`, `handoverDate`, `handoverLeadValue`, `handoverLeadUnit`.
  *   A bare Date/string is accepted as the pre-migration date-only form.
  * @param {Date} [now] - Reference "today", captured once per export by deck builders
  * @returns {string} 'Immediate', a lead time like '2 Months Post LOI', a formatted
- *   date like '15 Sep 2026', or 'On request'
+ *   date like '15 Sep 2026', or 'Unconfirmed'
  */
 function formatHandover(warehouse, now = new Date()) {
     // Accept the old date-only call shape as well as warehouse rows.
@@ -118,13 +102,9 @@ function formatHandover(warehouse, now = new Date()) {
         return formatLeadTime(warehouse.handoverLeadValue, warehouse.handoverLeadUnit);
     }
 
-    const { handoverDate, availability } = warehouse;
-    if (handoverDate == null || (typeof handoverDate === 'string' && handoverDate.trim() === '')) {
-        // Older rows often record availability without a separate handover date.
-        // Match whole affirmative values so "Available on August" cannot imply now.
-        const value = typeof availability === 'string' ? availability.trim().toLowerCase() : '';
-        return ['yes', 'immediate', 'available'].includes(value) ? IMMEDIATE : UNKNOWN_HANDOVER;
-    }
+    // Legacy rows without a mode used a fixed date. An unknown explicit mode
+    // cannot safely select either side of a row that may retain both values.
+    if (warehouse.handoverType != null && warehouse.handoverType !== 'FIXED') return UNKNOWN_HANDOVER;
 
     return formatFixedHandover(warehouse.handoverDate, now);
 }

@@ -1075,8 +1075,8 @@ enum StagingStatus {
 }
 
 /// How a warehouse's handover timing is expressed. FIXED means a precise calendar
-/// date (handoverDate); VARIABLE means a lead time relative to today
-/// (handoverLeadValue + handoverLeadUnit, e.g. "~2 months").
+/// date (handoverDate); VARIABLE means a lead time after the letter of intent
+/// (handoverLeadValue + handoverLeadUnit, e.g. "2 Months Post LOI").
 ///
 /// handoverType selects which side is READ — it does not clear the other. Both are
 /// kept so that toggling the mode back restores whatever was there before, the same

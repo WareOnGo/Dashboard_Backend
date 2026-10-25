@@ -1,4 +1,5 @@
 // ppt-slides/indexSlide.js
+const { formatHandover } = require('../utils/handover');
 
 /**
  * Generates an index slide with a summary table of all warehouse options
@@ -38,7 +39,7 @@ function generateIndexSlide(pptx, warehouses) {
     }
 
     // Create table data
-    const tableData = createTableData(warehouses);
+    const tableData = createTableData(warehouses, pptx.handoverReferenceDate);
 
     // Table configuration
     const tableOptions = {
@@ -48,7 +49,7 @@ function generateIndexSlide(pptx, warehouses) {
         border: { type: 'solid', pt: 1, color: 'CCCCCC' },
         fontSize: 11,
         fontFace: 'Arial',
-        colW: [0.7, 1.3, 2.8, 2.8, 2.8, 1.3], // Better balanced column widths: S.No, Warehouse#, Location, Rental, Area, Availability
+        colW: [0.7, 1.3, 2.8, 2.8, 2.8, 1.3], // S.No, Warehouse#, Location, Rental, Area, Handover
         rowH: 0.5,
         valign: 'middle',
         margin: 0.1
@@ -62,7 +63,7 @@ function generateIndexSlide(pptx, warehouses) {
  * @param {Array} warehouses - Array of warehouse objects
  * @returns {Array} Table data with headers and rows
  */
-function createTableData(warehouses) {
+function createTableData(warehouses, now) {
     // Header row with SNAP SHOTS styling
     const headerRow = [
         { text: 'S.No', options: { fill: '1f4e79', color: 'FFFFFF', bold: true, align: 'center' } },
@@ -70,7 +71,7 @@ function createTableData(warehouses) {
         { text: 'Location', options: { fill: '1f4e79', color: 'FFFFFF', bold: true, align: 'center' } },
         { text: 'Quoted Monthly Rental (INR/Sq.ft)', options: { fill: '1f4e79', color: 'FFFFFF', bold: true, align: 'center' } },
         { text: 'Offered Area (Sq.ft)', options: { fill: '1f4e79', color: 'FFFFFF', bold: true, align: 'center' } },
-        { text: 'Availability', options: { fill: '1f4e79', color: 'FFFFFF', bold: true, align: 'center' } }
+        { text: 'Handover', options: { fill: '1f4e79', color: 'FFFFFF', bold: true, align: 'center' } }
     ];
 
     // Data rows with alternating colors
@@ -84,7 +85,7 @@ function createTableData(warehouses) {
             { text: formatLocation(warehouse), options: { fill: rowColor } },
             { text: formatRentalRate(warehouse.ratePerSqft), options: { fill: rowColor, align: 'center' } },
             { text: formatArea(warehouse.totalSpaceSqft), options: { fill: rowColor, align: 'center' } },
-            { text: formatAvailability(warehouse.availability), options: { fill: rowColor, align: 'center' } }
+            { text: formatHandover(warehouse, now), options: { fill: rowColor, align: 'center' } }
         ];
     });
 
@@ -156,19 +157,6 @@ function formatNumberWithCommas(num) {
     }
     
     return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-}
-
-/**
- * Formats availability field
- * @param {string} availability - Availability value from warehouse
- * @returns {string} Formatted availability string
- */
-function formatAvailability(availability) {
-    if (!availability || availability === '') {
-        return 'N/A';
-    }
-    
-    return availability.toString().trim();
 }
 
 module.exports = { generateIndexSlide };

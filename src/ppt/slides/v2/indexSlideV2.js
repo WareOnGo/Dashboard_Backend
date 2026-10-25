@@ -22,7 +22,7 @@ function generateIndexSlideV2(pptx, warehouses, flags = {}) {
         bold: true, color: COLORS.bg, fill: { color: COLORS.navy },
         fontFace: FONT, fontSize: 8, align: 'center', valign: 'middle',
     };
-    const headers = ['S.No', 'WH ID', 'Location', 'Quoted Monthly Rental (INR/Sq.ft)', 'Offered Area (Sq.ft)', 'Availability']
+    const headers = ['S.No', 'WH ID', 'Location', 'Quoted Monthly Rental (INR/Sq.ft)', 'Offered Area (Sq.ft)', 'Handover']
         .map((text) => ({ text, options: headerCellOpts }));
 
     const bodyCellBase = { fontFace: FONT, fontSize: 8, color: COLORS.navy, valign: 'middle', align: 'center' };

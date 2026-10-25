@@ -1,5 +1,6 @@
 // ppt-slides/mainSlide.js
 const { fetchWarehouseImage } = require('../utils/image');
+const { formatHandover } = require('../utils/handover');
 
 async function generateMainSlide(pptx, warehouse, selectedPhotoUrls, optionIndex, includeLocation = false) {
     const mainSlide = pptx.addSlide();
@@ -46,13 +47,13 @@ async function generateMainSlide(pptx, warehouse, selectedPhotoUrls, optionIndex
         // When location is included in Property Info, remove Security Deposit from Commercials
         commercialsData = [
             [{ text: 'Rent per sq.ft (INR)', options: { bold: true } }, warehouse.ratePerSqft || 'N/A'], 
-            [{ text: 'Availability', options: { bold: true } }, warehouse.availability || 'N/A']
+            [{ text: 'Handover', options: { bold: true } }, formatHandover(warehouse, pptx.handoverReferenceDate)]
         ];
     } else {
         commercialsData = [
             [{ text: 'Rent per sq.ft (INR)', options: { bold: true } }, warehouse.ratePerSqft || 'N/A'], 
             [{ text: 'Security Deposit', options: { bold: true } }, 'Available on Request'], 
-            [{ text: 'Availability', options: { bold: true } }, warehouse.availability || 'N/A']
+            [{ text: 'Handover', options: { bold: true } }, formatHandover(warehouse, pptx.handoverReferenceDate)]
         ];
     }
     

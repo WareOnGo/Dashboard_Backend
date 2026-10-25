@@ -65,6 +65,9 @@ async function createLastMileBuffer(warehouses, selectedImages = {}, customDetai
     if (!Array.isArray(warehouses) || warehouses.length === 0) {
         throw new Error('At least one warehouse is required for Last Mile Excel generation.');
     }
+    // Photo loading can cross midnight between worksheets; compare every option
+    // against the day this export started, as in the PPT builders.
+    const handoverReferenceDate = new Date();
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'WareOnGo';
     workbook.title = `Last Mile - ${customDetails.clientRequirement?.trim() || 'Warehouse Options'}`;
@@ -78,7 +81,7 @@ async function createLastMileBuffer(warehouses, selectedImages = {}, customDetai
         });
         sheet.getColumn(1).width = 29;
         batch.forEach((_, i) => { sheet.getColumn(i + 2).width = 35; });
-        const fields = batch.map(lastMileFields);
+        const fields = batch.map(warehouse => lastMileFields(warehouse, handoverReferenceDate));
         fields[0].forEach((field, rowIndex) => {
             const row = sheet.getRow(rowIndex + 1);
             row.getCell(1).value = field.label;
