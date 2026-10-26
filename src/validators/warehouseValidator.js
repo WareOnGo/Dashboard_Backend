@@ -168,7 +168,11 @@ class WarehouseValidator extends BaseValidator {
             .transform(parseHandoverLeadValue).optional().nullable(),
         handoverLeadUnit: z.enum(['DAYS', 'WEEKS', 'MONTHS']).optional().nullable(),
 
-        lockInDate: z.coerce.date().optional().nullable(),
+        // Use the same strict calendar parsing as handover: coercion otherwise
+        // turns February 30 into March, and false/0 into an epoch date.
+        lockInDate: z.union([z.date(), z.string()])
+            .refine(value => parseHandoverDate(value) !== null, 'Enter a valid lock-in date')
+            .transform(parseHandoverDate).optional().nullable(),
 
         cam: z.string().optional().nullable(),
         chargeableArea: z.coerce.number().int().optional().nullable(),
