@@ -86,7 +86,12 @@ function makeWarehouse(index, { imageBase }) {
     ratePerSqft: String(pick(index, 2, 18, 95)),
     availability: cycle(['Y', 'N'], index),
     status: index % 4 === 0 ? 'Under Construction' : 'Ready',
-    handoverDate: index % 4 === 0 ? new Date('2026-11-01T00:00:00.000Z') : null,
+    // Exercise the SOP's date, long lead-time, immediate and unconfirmed cells
+    // in every template's actual render, including the narrow Standard sidebar.
+    handoverType: index % 3 === 1 ? 'VARIABLE' : 'FIXED',
+    handoverDate: cycle([new Date('2027-03-15T00:00:00Z'), null, null, new Date('2020-01-01T00:00:00Z'), null, null], index),
+    handoverLeadValue: index % 3 === 1 ? 120 : null,
+    handoverLeadUnit: index % 3 === 1 ? 'MONTHS' : null,
     lockInDate: null,
     uploadedBy: 'harness@wareongo.com',
     isBroker: index % 3 === 0 ? 'Yes' : 'No',

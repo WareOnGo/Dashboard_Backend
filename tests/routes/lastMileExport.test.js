@@ -12,7 +12,7 @@ const mockController = new PptController(new PptGenerationService(mockModel), mo
 jest.mock('../../src/container', () => ({ resolve: () => mockController }));
 jest.mock('../../src/utils/access', () => ({
     ...jest.requireActual('../../src/utils/access'),
-    resolveCapabilities: jest.fn(async () => ({ DASHBOARD: true })),
+    resolveCapabilities: jest.fn(async () => ({ DASHBOARD: true, WAREHOUSE_VIEW_OWN: true, WAREHOUSE_VIEW_ALL: true })),
 }));
 const app = express();
 app.use(express.json());

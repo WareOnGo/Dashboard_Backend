@@ -42,7 +42,7 @@ test('filter metadata contains only distinct location pairs and types with no pa
         locations: [{ state: 'Karnataka', city: 'Bengaluru' }, { state: null, city: 'Legacy city' }],
         warehouseTypes: ['PEB'],
     });
-    expect(groupBy.mock.calls).toEqual([[{ by: ['state', 'city'] }], [{ by: ['warehouseType'] }]]);
+    expect(groupBy.mock.calls).toEqual([[{ by: ['state', 'city'], where: {} }], [{ by: ['warehouseType'], where: {} }]]);
 });
 
 test('metadata errors propagate so the client can offer retry', async () => {

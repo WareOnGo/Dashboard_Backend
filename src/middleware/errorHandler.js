@@ -38,6 +38,12 @@ class ErrorHandler {
             timestamp: new Date().toISOString()
         });
 
+        if (error.name === 'LocationValidationError') {
+            return res.status(error.statusCode).json(ErrorHandler.createErrorResponse(
+                error.message, 'LOCATION_VALIDATION_FAILED', req.path, { issues: error.issues },
+            ));
+        }
+
         // Handle Prisma errors
         if (error instanceof Prisma.PrismaClientKnownRequestError) {
             return ErrorHandler.handlePrismaError(error, req, res);
@@ -80,6 +86,9 @@ class ErrorHandler {
         }
 
         // Handle generic errors
+        if (error.name === 'VoiceNoteError') {
+            return ErrorHandler.handleStatusError(error, req, res, error.statusCode || 400, 'VOICE_NOTE_ERROR');
+        }
         return ErrorHandler.handleGenericError(error, req, res);
     }
 

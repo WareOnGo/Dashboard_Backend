@@ -10,6 +10,8 @@ const { createPptBufferV2 } = require('../../src/ppt/services/pptServiceV2');
 const { createPptBufferV3 } = require('../../src/ppt/services/pptServiceV3');
 const { createPptBufferGodamwale } = require('../../src/ppt/services/pptServiceGodamwale');
 const { createPptBufferTci } = require('../../src/ppt/services/pptServiceTci');
+const { createPptBuffer } = require('../../src/ppt/services/pptService');
+const { createDetailedPptBuffer } = require('../../src/ppt/services/detailedPptService');
 const JSZip = require('jszip');
 
 // Fixed reference "today" so date-window assertions never drift with the clock.
@@ -47,7 +49,7 @@ describe('formatHandover - VARIABLE lead times', () => {
      * received the deck; the site is actually available a month after the letter of
      * intent. So every lead time carries it — and NOTHING ELSE does, which is the
      * half worth asserting. A fixed handover is an absolute calendar date that no
-     * LOI moves, and neither 'Immediate' nor 'On request' is a duration counted
+     * LOI moves, and neither 'Immediate' nor 'Unconfirmed' is a duration counted
      * from anything, so appending it there would be wrong rather than merely noisy.
      */
     test('every variable lead time states its reference point', () => {
@@ -91,9 +93,16 @@ describe('formatHandover - VARIABLE lead times', () => {
         ['both missing', { handoverLeadValue: null, handoverLeadUnit: null }],
         ['a negative lead value', { handoverLeadValue: -2, handoverLeadUnit: 'MONTHS' }],
         ['a non-numeric lead value', { handoverLeadValue: 'soon', handoverLeadUnit: 'MONTHS' }],
+        ['whitespace instead of a value', { handoverLeadValue: '   ', handoverLeadUnit: 'MONTHS' }],
+        ['a boolean instead of a value', { handoverLeadValue: false, handoverLeadUnit: 'MONTHS' }],
+        ['an array instead of a value', { handoverLeadValue: [], handoverLeadUnit: 'MONTHS' }],
+        ['a fractional value', { handoverLeadValue: 1.5, handoverLeadUnit: 'MONTHS' }],
+        ['a value outside the dashboard range', { handoverLeadValue: 121, handoverLeadUnit: 'MONTHS' }],
+        ['a prototype property as a unit', { handoverLeadValue: 2, handoverLeadUnit: 'constructor' }],
+        ['zero without a unit', { handoverLeadValue: 0, handoverLeadUnit: null }],
         ['an enum value this build does not know', { handoverLeadValue: 2, handoverLeadUnit: 'QUARTERS' }],
-    ])('falls back to "On request" given %s, even if availability is Yes', (_label, fields) => {
-        expect(formatHandover({ handoverType: 'VARIABLE', availability: 'Yes', ...fields }, NOW)).toBe('On request');
+    ])('falls back to "Unconfirmed" given %s, even if availability is Yes', (_label, fields) => {
+        expect(formatHandover({ handoverType: 'VARIABLE', availability: 'Yes', ...fields }, NOW)).toBe('Unconfirmed');
     });
 
     test('never reports Immediate for an incomplete VARIABLE row', () => {
@@ -130,6 +139,8 @@ describe('formatHandover - FIXED and legacy rows', () => {
     });
 
     test.each([
+        ['today', '2026-08-13T00:00:00Z', 'Immediate'],
+        ['tomorrow', '2026-08-14T00:00:00Z', 'Immediate'],
         ['the last day inside the two-week window', '2026-08-27T00:00:00Z', 'Immediate'],
         ['the first day outside it', '2026-08-28T00:00:00Z', '28 Aug 2026'],
     ])('%s -> %s', (_label, iso, expected) => {
@@ -137,34 +148,34 @@ describe('formatHandover - FIXED and legacy rows', () => {
     });
 
     test.each([null, undefined, '', ' '])(
-        'a missing date (%s) uses affirmative availability', (handoverDate) => {
+        'a missing date (%s) is unconfirmed even with affirmative availability', (handoverDate) => {
             for (const handoverType of ['FIXED', null, undefined]) {
                 expect(formatHandover({ handoverType, handoverDate, availability: 'Yes' }, NOW))
-                    .toBe('Immediate');
+                    .toBe('Unconfirmed');
             }
         },
     );
 
     test.each(['Yes', ' yes ', 'YES', 'Immediate', ' IMMEDIATE ', 'Available'])(
-        'recognizes affirmative availability %s when no date is recorded', (availability) => {
+        'availability %s cannot confirm handover without a recorded date', (availability) => {
             expect(formatHandover({ handoverType: null, handoverDate: null, availability }, NOW))
-                .toBe('Immediate');
+                .toBe('Unconfirmed');
             expect(formatHandover({ handoverType: 'FIXED', handoverDate: null, availability }, NOW))
-                .toBe('Immediate');
+                .toBe('Unconfirmed');
         },
     );
 
     test.each(['No', null, undefined, '', ' ', 'not available', 'Available on August', 'Immediate after LOI', true])(
         'does not infer immediate handover from availability %s', (availability) => {
             expect(formatHandover({ handoverType: 'FIXED', handoverDate: null, availability }, NOW))
-                .toBe('On request');
+                .toBe('Unconfirmed');
         },
     );
 
-    test.each(['not a date', new Date(NaN)])(
-        'an invalid date (%s) stays on request even with affirmative availability', (handoverDate) => {
+    test.each(['not a date', new Date(NaN), false, true, 0, [], '2026-02-30', '2025-02-29', '2026-04-31', '2026-13-01', '2026-00-01', '2026-01-00', '0000-01-01', '2026-08-13T24:00:00Z', '2026-02-30T00:00:00.000Z'])(
+        'an invalid date (%s) stays unconfirmed even with affirmative availability', (handoverDate) => {
             expect(formatHandover({ handoverType: 'FIXED', handoverDate, availability: 'Yes' }, NOW))
-                .toBe('On request');
+                .toBe('Unconfirmed');
         },
     );
 
@@ -182,23 +193,33 @@ describe('formatHandover - FIXED and legacy rows', () => {
             handoverType: 'FIXED', handoverDate: null,
             handoverLeadValue: 2, handoverLeadUnit: 'MONTHS',
         };
-        expect(formatHandover(warehouse, NOW)).toBe('On request');
-        expect(formatHandover({ ...warehouse, availability: 'Yes' }, NOW)).toBe('Immediate');
+        expect(formatHandover(warehouse, NOW)).toBe('Unconfirmed');
+        expect(formatHandover({ ...warehouse, availability: 'Yes' }, NOW)).toBe('Unconfirmed');
     });
 
     test('a pre-migration row with a null handoverType takes the date path', () => {
         expect(formatHandover({
             handoverType: null, handoverDate: new Date('2026-09-15T00:00:00Z'),
         }, NOW)).toBe('15 Sep 2026');
-        expect(formatHandover({ handoverType: null, handoverDate: null }, NOW)).toBe('On request');
+        expect(formatHandover({ handoverType: null, handoverDate: null }, NOW)).toBe('Unconfirmed');
     });
 
     test('an ISO string survives a serialization hop', () => {
         expect(formatHandover({ handoverType: 'FIXED', handoverDate: '2026-09-15' }, NOW)).toBe('15 Sep 2026');
     });
 
-    test('unparseable legacy free text leaves handover on request', () => {
-        expect(formatHandover({ handoverType: null, handoverDate: 'ready now' }, NOW)).toBe('On request');
+    test('accepts real leap days and serialized Prisma dates', () => {
+        expect(formatHandover({ handoverType: 'FIXED', handoverDate: '2028-02-29' }, NOW)).toBe('29 Feb 2028');
+        expect(formatHandover({ handoverType: 'FIXED', handoverDate: '2026-09-15T00:00:00.000Z' }, NOW)).toBe('15 Sep 2026');
+    });
+
+    test('does not infer a mode from stale lead fields or an unknown mode', () => {
+        expect(formatHandover({ handoverType: null, handoverLeadValue: 2, handoverLeadUnit: 'MONTHS' }, NOW)).toBe('Unconfirmed');
+        expect(formatHandover({ handoverType: 'IMMEDIATE', handoverDate: '2026-09-15' }, NOW)).toBe('Unconfirmed');
+    });
+
+    test('unparseable legacy free text leaves handover unconfirmed', () => {
+        expect(formatHandover({ handoverType: null, handoverDate: 'ready now' }, NOW)).toBe('Unconfirmed');
     });
 
     test('a date is read on its stored UTC calendar day regardless of local offset', () => {
@@ -216,22 +237,51 @@ describe('formatHandover - FIXED and legacy rows', () => {
     });
 });
 
+describe('handover in alternate export paths', () => {
+    beforeEach(() => jest.useFakeTimers({ now: NOW, doNotFake: ['nextTick', 'setImmediate'] }));
+    afterEach(() => jest.useRealTimers());
+
+    test('standard with location enabled uses the same handover in index and details', async () => {
+        const slides = await exportedTables(await createPptBuffer(
+            [{ ...FIXED_WAREHOUSE, handoverDate: null }], {}, {}, true,
+        ));
+        const indexRows = slides.find(rows => rows[0]?.includes('Handover'));
+        expect(indexRows[1][indexRows[0].indexOf('Handover')]).toBe('Unconfirmed');
+        expect(slides.flat().find(row => row[0] === 'Handover')[1]).toBe('Unconfirmed');
+    });
+
+    test('TCI placeholders without explicit timing are unconfirmed', async () => {
+        const slides = await exportedTables(await createPptBufferTci([]));
+        expect(slides.flat().filter(row => row[0] === 'Handover timeline').map(row => row[1]))
+            .toEqual(['Unconfirmed', 'Unconfirmed', 'Unconfirmed']);
+    });
+
+    test('Unconfirmed is specific to handover; missing rent retains its own wording', async () => {
+        const slides = await exportedTables(await createPptBufferV3(
+            [{ ...FIXED_WAREHOUSE, handoverDate: null, ratePerSqft: null }], {},
+            { mapsLocation: false, pocSlide: false },
+        ));
+        expect(slides.flat().find(row => row[0] === 'Handover timeline')[1]).toBe('Unconfirmed');
+        expect(slides.flat().find(row => row[0] === 'Rental per sq. ft.')[1]).toBe('On request');
+    });
+});
+
 describe('formatHandover - argument tolerance', () => {
     test.each([null, undefined, {}, '', 'not a date', new Date(NaN)])(
-        'an absent or unusable handover argument (%s) reads as on request', (warehouse) => {
-            expect(formatHandover(warehouse, NOW)).toBe('On request');
+        'an absent or unusable handover argument (%s) reads as unconfirmed', (warehouse) => {
+            expect(formatHandover(warehouse, NOW)).toBe('Unconfirmed');
         },
     );
 
     test('the pre-migration date-only call shape still works', () => {
         // Guards a missed call site: passing a bare Date must not silently
-        // resolve to 'On request' via an undefined handoverType.
+        // resolve to 'Unconfirmed' via an undefined handoverType.
         expect(formatHandover(new Date('2026-09-15T00:00:00Z'), NOW)).toBe('15 Sep 2026');
         expect(formatHandover('2026-09-15', NOW)).toBe('15 Sep 2026');
     });
 
     test('defaults to the real clock when no reference date is given', () => {
-        expect(formatHandover({ handoverType: 'FIXED', handoverDate: null })).toBe('On request');
+        expect(formatHandover({ handoverType: 'FIXED', handoverDate: null })).toBe('Unconfirmed');
         expect(formatHandover({
             handoverType: 'VARIABLE', handoverLeadValue: 2, handoverLeadUnit: 'MONTHS',
         })).toBe('2 Months Post LOI');
@@ -324,17 +374,17 @@ describe('handover text reaches every deck that renders it', () => {
             expect(collectText(pptx.slides[0])).toContain(FIXED_HANDOVER_LABEL);
         });
 
-        test('uses Immediate when availability is Yes and no handover date is recorded', async () => {
+        test('shows Unconfirmed when availability is Yes and no handover date is recorded', async () => {
             await render(pptx, { ...FIXED_WAREHOUSE, handoverDate: null });
 
             const text = collectText(pptx.slides[0]);
-            expect(text).toContain('Immediate');
+            expect(text).toContain('Unconfirmed');
         });
     });
 });
 
-// Check the actual exported table cells: a generic search for "On request" can
-// accidentally match the rent, and formatter-only tests missed the v3/TCI bug.
+// Inspect the handover cells themselves, including both index and details.
+// A label elsewhere in a deck does not prove that these tables agree.
 const xmlTableRows = (xml) => [...xml.matchAll(/<a:tr\b[^>]*>([\s\S]*?)<\/a:tr>/g)]
     .map((row) => [...row[1].matchAll(/<a:tc\b[^>]*>([\s\S]*?)<\/a:tc>/g)]
         .map((cell) => [...cell[1].matchAll(/<a:t>([\s\S]*?)<\/a:t>/g)]
@@ -348,10 +398,12 @@ async function exportedTables(buffer) {
 }
 
 describe.each([
+    ['standard', createPptBuffer],
     ['v2', createPptBufferV2],
     ['v3', createPptBufferV3],
     ['godamwale', createPptBufferGodamwale],
     ['tci', createPptBufferTci],
+    ['detailed', createDetailedPptBuffer],
 ])('%s exported handover tables', (variant, createBuffer) => {
     beforeEach(() => jest.useFakeTimers({ now: NOW, doNotFake: ['nextTick', 'setImmediate'] }));
     afterEach(() => jest.useRealTimers());
@@ -362,22 +414,29 @@ describe.each([
             [{ ...VARIABLE_WAREHOUSE, availability: 'No' }, '2 Months Post LOI'],
             [{ ...VARIABLE_WAREHOUSE, availability: null }, '2 Months Post LOI'],
             [FIXED_WAREHOUSE, FIXED_HANDOVER_LABEL],
-            [{ ...FIXED_WAREHOUSE, handoverDate: null }, 'Immediate'],
-            [{ ...FIXED_WAREHOUSE, handoverType: null, handoverDate: null }, 'Immediate'],
-            [{ ...VARIABLE_WAREHOUSE, handoverLeadValue: null }, 'On request'],
+            [{ ...FIXED_WAREHOUSE, handoverDate: null }, 'Unconfirmed'],
+            [{ ...FIXED_WAREHOUSE, handoverType: null, handoverDate: null }, 'Unconfirmed'],
+            [{ ...VARIABLE_WAREHOUSE, handoverLeadValue: null }, 'Unconfirmed'],
         ]],
-        ['availability fallbacks from the October 15 export audit', [
+        ['the new SOP applied to the October 15 export cases', [
             // 2984/2986: legacy Yes with all timing fields null.
-            [{ ...FIXED_WAREHOUSE, handoverType: null, handoverDate: null }, 'Immediate'],
+            [{ ...FIXED_WAREHOUSE, handoverType: null, handoverDate: null }, 'Unconfirmed'],
             // 2990: FIXED with no date and a default lead unit left on the row.
-            [{ ...FIXED_WAREHOUSE, handoverDate: null, handoverLeadUnit: 'MONTHS' }, 'Immediate'],
+            [{ ...FIXED_WAREHOUSE, handoverDate: null, handoverLeadUnit: 'MONTHS' }, 'Unconfirmed'],
             // 2983/3008 and 2204: affirmative legacy availability strings.
-            [{ ...FIXED_WAREHOUSE, handoverType: null, handoverDate: null, availability: 'Immediate' }, 'Immediate'],
-            [{ ...FIXED_WAREHOUSE, handoverType: null, handoverDate: null, availability: 'Available' }, 'Immediate'],
-            [{ ...FIXED_WAREHOUSE, handoverDate: null, availability: ' yes ' }, 'Immediate'],
-            [{ ...FIXED_WAREHOUSE, handoverDate: null, availability: 'No' }, 'On request'],
-            [{ ...FIXED_WAREHOUSE, handoverDate: null, availability: null }, 'On request'],
-            [{ ...FIXED_WAREHOUSE, handoverDate: null, availability: 'Under construction/ Available on August' }, 'On request'],
+            [{ ...FIXED_WAREHOUSE, handoverType: null, handoverDate: null, availability: 'Immediate' }, 'Unconfirmed'],
+            [{ ...FIXED_WAREHOUSE, handoverType: null, handoverDate: null, availability: 'Available' }, 'Unconfirmed'],
+            [{ ...FIXED_WAREHOUSE, handoverDate: null, availability: ' yes ' }, 'Unconfirmed'],
+            [{ ...FIXED_WAREHOUSE, handoverDate: null, availability: 'No' }, 'Unconfirmed'],
+            [{ ...FIXED_WAREHOUSE, handoverDate: null, availability: null }, 'Unconfirmed'],
+            [{ ...FIXED_WAREHOUSE, handoverDate: null, availability: 'Under construction/ Available on August' }, 'Unconfirmed'],
+        ]],
+        ['malformed timing and inactive fields', [
+            [{ ...VARIABLE_WAREHOUSE, handoverLeadValue: ' ' }, 'Unconfirmed'],
+            [{ ...VARIABLE_WAREHOUSE, handoverLeadUnit: null, handoverDate: '2026-01-01' }, 'Unconfirmed'],
+            [{ ...FIXED_WAREHOUSE, handoverDate: null, handoverLeadValue: 2, handoverLeadUnit: 'MONTHS' }, 'Unconfirmed'],
+            [{ ...FIXED_WAREHOUSE, handoverDate: '2026-02-30' }, 'Unconfirmed'],
+            [{ ...VARIABLE_WAREHOUSE, handoverLeadValue: '120', handoverLeadUnit: 'DAYS' }, '120 Days Post LOI'],
         ]],
         ['dates, immediate boundaries and incomplete lead times', [
             [{ ...FIXED_WAREHOUSE, handoverDate: '2026-01-01' }, 'Immediate'],
@@ -386,8 +445,8 @@ describe.each([
             [{ ...VARIABLE_WAREHOUSE, handoverLeadValue: 0 }, 'Immediate'],
             [{ ...VARIABLE_WAREHOUSE, handoverLeadValue: 1, handoverLeadUnit: 'DAYS' }, '1 Day Post LOI'],
             [{ ...FIXED_WAREHOUSE, handoverType: null }, FIXED_HANDOVER_LABEL],
-            [{ ...FIXED_WAREHOUSE, handoverDate: 'not a date' }, 'On request'],
-            [{ ...VARIABLE_WAREHOUSE, handoverLeadUnit: null, handoverDate: FIXED_HANDOVER_DATE }, 'On request'],
+            [{ ...FIXED_WAREHOUSE, handoverDate: 'not a date' }, 'Unconfirmed'],
+            [{ ...VARIABLE_WAREHOUSE, handoverLeadUnit: null, handoverDate: FIXED_HANDOVER_DATE }, 'Unconfirmed'],
         ]],
     ])('exports consistent handover for %s', async (_label, cases) => {
         const warehouses = cases.map(([warehouse], index) => ({ ...warehouse, id: index + 1 }));
@@ -399,10 +458,10 @@ describe.each([
             .map((row) => row[1]);
         expect(handoverValues).toEqual(expected);
 
-        if (variant !== 'tci') {
-            const indexRows = slides.find((rows) => rows[0]?.includes('Availability'));
+        if (!['tci', 'detailed'].includes(variant)) {
+            const indexRows = slides.find((rows) => rows[0]?.includes('Handover'));
             expect(indexRows).toBeDefined();
-            const availabilityColumn = indexRows[0].indexOf('Availability');
+            const availabilityColumn = indexRows[0].indexOf('Handover');
             expect(indexRows.slice(1).map((row) => row[availabilityColumn])).toEqual(handoverValues);
         }
     });
@@ -429,9 +488,9 @@ describe.each([
         expect(slides.flat()
             .filter((row) => row[0] === 'Handover timeline' || row[0] === 'Handover')
             .map((row) => row[1])).toEqual(['28 Aug 2026', '28 Aug 2026']);
-        if (variant !== 'tci') {
-            const indexRows = slides.find((rows) => rows[0]?.includes('Availability'));
-            const availabilityColumn = indexRows[0].indexOf('Availability');
+        if (!['tci', 'detailed'].includes(variant)) {
+            const indexRows = slides.find((rows) => rows[0]?.includes('Handover'));
+            const availabilityColumn = indexRows[0].indexOf('Handover');
             expect(indexRows.slice(1).map((row) => row[availabilityColumn]))
                 .toEqual(['28 Aug 2026', '28 Aug 2026']);
         }

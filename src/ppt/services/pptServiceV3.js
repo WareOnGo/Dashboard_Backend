@@ -150,7 +150,10 @@ const createPptBufferV3 = async (warehouses, selectedImages = {}, customDetails 
     // row per property, immediately before the sign-off so it is the last thing
     // discussed. Paginates past 12 properties rather than shrinking rows below the
     // height of the text someone has to type into them.
-    generateProsConsSlideV3(pptx, warehouses);
+    // Keep existing callers' decks unchanged unless they explicitly opt out.
+    if (customDetails.prosConsSlide !== false) {
+        generateProsConsSlideV3(pptx, warehouses);
+    }
 
     if (flags.pocSlide) {
         generateContactSlideV2(pptx, customDetails);

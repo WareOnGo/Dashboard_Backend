@@ -112,7 +112,9 @@ pooler compatibility, with compensation covering the failure path.
 ### 4. Capabilities, not roles
 Access is a set of independent booleans on `VerifiedNumber` (`dashboardAccess`,
 `callDashboardAccess`, `reviewerAccess`, `adminAccess`) rather than a single role enum, so a
-user can hold any combination and granting access is one column flip. See
+user can hold independent service access. Warehouse permissions are nested under
+Dashboard access, with view/edit and own/all dependencies; see
+[Warehouse permissions and rollout](docs/warehouse-permissions.md). See also
 [Authentication & authorization](#authentication--authorization).
 
 ### 5. Contact numbers are redacted by default and revealed with a stated reason
@@ -471,6 +473,15 @@ Full list with commentary in `.env.example`.
 | Ingest | `STAGING_INGEST_SECRET` | **Unset ⇒ ingest returns 503** |
 | WhatsApp | `GUPSHUP_ENABLED`, `GUPSHUP_API_KEY`, `GUPSHUP_SOURCE`, `GUPSHUP_SRC_NAME`, `GUPSHUP_TEMPLATE_ID`, `GUPSHUP_APPROVE_COMMENT`, `GUPSHUP_ENDPOINT` | Off unless `GUPSHUP_ENABLED` is exactly `"true"` |
 
+For Supabase runtime traffic, use the transaction pooler on port `6543` with
+`pgbouncer=true&connection_limit=2&pool_timeout=20` (Prisma 6). Copy the actual host
+and credentials from Supabase's connection settings. Session mode on port `5432`
+can reject local startup with `EMAXCONNSESSION` when other applications occupy its
+pool. The backend already shares one Prisma client; adding more clients or
+raising its pool size does not resolve that condition. Supply a separate
+direct/session connection when running Prisma schema migration commands.
+After editing `.env`, enter `rs` in nodemon or restart `npm run dev` to reload it.
+
 ---
 
 ## Testing
@@ -527,6 +538,7 @@ the ones with an `npm` alias are wired in `package.json`.
 | Script | What it does |
 |---|---|
 | `backfillMicroMarkets.js` (`npm run backfill:micromarkets`) | Re-tags warehouses against the reviewer-drawn polygons. Needs `--all` whenever a polygon is renamed or moved. |
+| `migrateWarehousePermissions.js` (`npm run migrate:warehouse-permissions`) | Adds warehouse grants, enables all four for existing employees, and defaults future employees to View all + Edit own (including Dashboard and View own). Edit all defaults off. Run with `-- --apply` before deploying the new API; reruns update defaults while preserving existing values and revocations. |
 | `backfillDashboardAccess.js` (`npm run backfill:dashboard-access`) | Grants `dashboardAccess` to existing users. Must run *before* the capability gate is enabled. |
 | `setupGeoColumns.js` | Adds the PostGIS bits Prisma cannot express — generated `geog` point columns, the `osm_highway` LineString column, and their GiST indexes. Idempotent; `--verify` checks without writing. |
 | `importOsmPois.js` (`npm run ingest:osm-pois`) | Imports OSM points of interest into `osm_poi` and highway centrelines into `osm_highway`. See below. |
@@ -607,6 +619,35 @@ Things worth knowing before running it:
 - **Adding a warehouse column** touches four places: `Warehouse` and `StagedWarehouse` in
   the schema, `warehouseValidator`, and — if it belongs to the nested extension —
   `StagingService.WAREHOUSE_DATA_FIELDS`. The drift test will tell you if you missed one.
+- **Last edited by:** `Warehouse.lastEditedBy` and `StagedWarehouse.lastEditedBy` store the
+  authenticated editor's trimmed email, falling back to their user ID as text. The API
+  sets this metadata on authenticated submissions and changed warehouse/review edits;
+  it is intentionally excluded from writable validators. Publication preserves the
+  submission's last editor. No-op saves issue no warehouse write, and approval checks
+  the revision read with the submission so a concurrent edit requires another review.
+  Staged edits also require PENDING status at write time. Historical
+  rows remain null until edited or backfilled from audit evidence; external ingests
+  without a user also start null.
+  Before deploying the updated backend, inspect with
+  `node scripts/migrateWarehouseLastEditedBy.js`, then apply with
+  `node scripts/migrateWarehouseLastEditedBy.js --apply` and run `npx prisma generate`.
+  This additive migration does not run at startup. The dashboard displays the stored
+  value in warehouse details and as read-only metadata in the edit/review form.
+  To backfill, run `node scripts/backfillWarehouseLastEditedBy.js` to save a dry-run
+  plan, then `node scripts/backfillWarehouseLastEditedBy.js --apply <plan.json>`.
+  It uses the latest human CREATE/UPDATE audit, including pre-publication submission
+  history, and falls back to a recorded user ID when no email was logged. New audits
+  preserve the trusted `actorUserId`; older Scout logs supply `scoutId`.
+  Reads, approvals, known no-op saves, and system backfills do not supply an editor.
+  Existing attribution and rows without evidence stay unchanged. Row versions and
+  audit-history fingerprints guard concurrent edits. Updates, including an evidence
+  audit for each row, commit together without changing warehouse timestamps. The
+  proposed identity and evidence are re-derived before applying a saved plan. The
+  command saves an apply receipt and a rollback script guarded against later edits.
+  New runs also record written row revisions in their database audits: rerunning the
+  same plan recovers its receipt after a process or local-file failure, without
+  applying the updates twice. Earlier runs still require their saved receipt and
+  rollback file because their audits predate this recovery metadata.
 - **CORS is partly hard-coded.** `src/app.js` pins the CloudFront origin and localhost dev
   ports alongside `CORS_ORIGIN`. A new frontend origin needs a code change here, not just
   an env var.

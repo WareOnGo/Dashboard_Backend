@@ -2,7 +2,9 @@
 const { z } = require('zod');
 const BaseValidator = require('./baseValidator');
 const { reviewDateSchema, expectedAvailabilitySchema } = require('../utils/availabilityReview');
+const { parseHandoverDate, parseHandoverLeadValue } = require('../utils/handoverTiming');
 const { FILE_UPLOAD } = require('../utils/constants');
+const { referencesSchema } = require('../utils/voiceNotes');
 
 /**
  * Use-cases a warehouse suits, stored in Warehouse.suitableFor.
@@ -75,6 +77,7 @@ class WarehouseValidator extends BaseValidator {
         numberOfDocks: z.string().optional().nullable(),
         clearHeightFt: z.string().optional().nullable(),
         otherSpecifications: z.string().optional().nullable(),
+        ai_description: z.string().optional().nullable(),
         availability: z.string().optional().nullable(),
         availabilityLastReviewedOn: reviewDateSchema.optional().nullable(),
         visibility: z.boolean().optional().nullable(),
@@ -144,23 +147,35 @@ class WarehouseValidator extends BaseValidator {
 
         status: z.enum(['Under construction', 'Build to suit', 'Ready to move']).optional().nullable(),
 
-        // Handover timing is either a precise date (FIXED) or a lead time relative to
-        // today (VARIABLE, e.g. 2 + MONTHS). handoverType picks which side is read;
+        // Handover timing is either a precise date (FIXED) or a lead time after the
+        // letter of intent (VARIABLE, e.g. 2 + MONTHS). handoverType picks which side is read;
         // both are accepted and stored unconditionally so that toggling the mode back
         // restores the previous value — same treatment as the RCC-only specs above.
         // Validated per-field only, which also keeps the lenient staging ingest path
-        // (stagingValidator.ingestSchema aliases updateWarehouseSchema) accepting
+        // (stagingValidator.ingestSchema uses a partial create schema) accepting
         // partial partner payloads.
-        handoverDate: z.coerce.date().optional().nullable(),
+        handoverDate: z.union([z.date(), z.string()])
+            .refine(value => parseHandoverDate(value) !== null, 'Enter a valid handover date')
+            .transform(parseHandoverDate).optional().nullable(),
         handoverType: z.enum(['FIXED', 'VARIABLE']).optional().nullable(),
-        handoverLeadValue: z.coerce.number().int().positive().max(120).optional().nullable(),
+        handoverLeadValue: z.union([z.number(), z.string()])
+            .refine(value => {
+                const n = parseHandoverLeadValue(value);
+                return n !== null && n > 0;
+            }, 'Lead time must be a whole number between 1 and 120')
+            .transform(parseHandoverLeadValue).optional().nullable(),
         handoverLeadUnit: z.enum(['DAYS', 'WEEKS', 'MONTHS']).optional().nullable(),
 
-        lockInDate: z.coerce.date().optional().nullable(),
+        // Use the same strict calendar parsing as handover: coercion otherwise
+        // turns February 30 into March, and false/0 into an epoch date.
+        lockInDate: z.union([z.date(), z.string()])
+            .refine(value => parseHandoverDate(value) !== null, 'Enter a valid lock-in date')
+            .transform(parseHandoverDate).optional().nullable(),
 
         cam: z.string().optional().nullable(),
         chargeableArea: z.coerce.number().int().optional().nullable(),
         scoutNotes: z.string().optional().nullable(),
+        scoutVoiceNotes: referencesSchema.optional().nullable(),
 
         // Nested object
         warehouseData: this.warehouseDataSchema,

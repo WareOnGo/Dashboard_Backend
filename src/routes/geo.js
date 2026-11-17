@@ -24,7 +24,7 @@ router.get('/layers', geoController.layers);
 // --- Viewport reads (bbox-bounded, return GeoJSON FeatureCollections) ---
 router.get('/osm-pois', geoController.osmPois);
 router.get('/points', geoController.ownPois);
-router.get('/warehouses', geoController.warehouses);
+router.get('/warehouses', authMiddleware.requireAccess(CAPS.WAREHOUSE_VIEW_OWN), geoController.warehouses);
 
 // --- Our own points of interest ---
 router.post('/points', geoController.createPoint);

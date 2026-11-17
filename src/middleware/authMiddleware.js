@@ -1,6 +1,9 @@
 const JWTService = require('../services/jwtService');
-const { isAdmin } = require('../utils/admin');
 const { CAPS, resolveCapabilities, can } = require('../utils/access');
+const WAREHOUSE_CAPABILITIES = new Set([
+    CAPS.WAREHOUSE_VIEW_OWN, CAPS.WAREHOUSE_EDIT_OWN,
+    CAPS.WAREHOUSE_VIEW_ALL, CAPS.WAREHOUSE_EDIT_ALL,
+]);
 
 /**
  * Authentication middleware for protecting routes with JWT validation
@@ -37,9 +40,8 @@ class AuthMiddleware {
                 name: userPayload.name,
                 picture: userPayload.picture,
                 domain: userPayload.domain,
-                // Re-evaluate from env on every request so the allowlist can be
-                // updated without forcing existing users to re-login.
-                isAdmin: isAdmin(userPayload.email),
+                // Authorization is resolved by requireAccess against the active roster.
+                isAdmin: false,
                 isAuthenticated: true
             };
 
@@ -83,7 +85,7 @@ class AuthMiddleware {
                 name: userPayload.name,
                 picture: userPayload.picture,
                 domain: userPayload.domain,
-                isAdmin: isAdmin(userPayload.email),
+                isAdmin: false,
                 isAuthenticated: true
             };
 
@@ -125,23 +127,15 @@ class AuthMiddleware {
      * Middleware to restrict access to admin users only.
      * Must be used after authenticateJWT.
      */
-    requireAdmin = (req, res, next) => {
-        if (!req.user || !req.user.isAuthenticated) {
-            return this.sendUnauthorizedResponse(res, 'Authentication required');
-        }
-        if (!req.user.isAdmin) {
-            return this.sendForbiddenResponse(res, 'Admin access required', 'ADMIN_ONLY');
-        }
-        next();
-    };
+    requireAdmin = (req, res, next) => this.requireAccess(CAPS.ADMIN)(req, res, next);
 
     /**
      * Capability gate factory. Must be used after authenticateJWT.
      *
      * Resolves the caller's capability set from the DB (env-admins/adminAccess get all caps)
      * and stashes it on req.user for downstream handlers/middleware:
-     *   - req.user.capabilities — { DASHBOARD, CALL_DASHBOARD, REVIEW, ADMIN } booleans
-     *   - req.user.isAdmin      — promoted to true if the user holds the ADMIN capability
+     *   - req.user.capabilities — { DASHBOARD, CALL_DASHBOARD, REVIEW, ANALYST, ADMIN } booleans
+     *   - req.user.isAdmin      — derived only from the current ADMIN capability
      *   - req.user.isReviewer   — convenience mirror of the REVIEW capability (frontend back-compat)
      *
      * @param {string} capability - one of CAPS (e.g. CAPS.REVIEW)
@@ -155,9 +149,13 @@ class AuthMiddleware {
         }
 
         try {
-            const caps = await resolveCapabilities(req.user.email);
+            // Warehouse data must observe revocations committed on other instances,
+            // including reads. A process-local cache cannot enforce that boundary.
+            const fresh = capability === CAPS.ADMIN || WAREHOUSE_CAPABILITIES.has(capability)
+                || !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
+            const caps = await resolveCapabilities(req.user.email, { fresh });
             req.user.capabilities = caps;
-            req.user.isAdmin = req.user.isAdmin || can(caps, CAPS.ADMIN);
+            req.user.isAdmin = can(caps, CAPS.ADMIN);
             req.user.isReviewer = can(caps, CAPS.REVIEW);
 
             if (!can(caps, capability)) {

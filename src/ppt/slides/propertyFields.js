@@ -76,20 +76,25 @@ function propertyFields(warehouse, flags = {}, now = new Date()) {
     // Power: prefer the numeric KVA field; fall back to "Available" per PM
     // direction since this column isn't reliably backfilled yet.
     const powerKva = asValue(wd.powerKva);
-    const electricalValue = powerKva ? `${powerKva} KVA` : 'Available';
+    const electricalValue = powerKva
+        ? (/^\d+(?:\.\d+)?$/.test(String(powerKva)) ? `${powerKva} KVA` : String(powerKva))
+        : 'Available';
 
     // CLU display follows the v2 convention: blank/Other land types resolve to
     // "Unverified CLU"; anything else shows as "<landType> CLU".
     const landTypeStr = asValue(wd.landType);
     const isUnverifiedCLU = !landTypeStr || /^others?$/i.test(landTypeStr);
-    const cluValue = isUnverifiedCLU ? 'Unverified CLU' : `${landTypeStr} CLU`;
+    const cluValue = isUnverifiedCLU ? 'Unverified CLU'
+        : /\bCLU$/i.test(landTypeStr) ? landTypeStr : `${landTypeStr} CLU`;
 
     // Some rows already carry the unit ("10 ft", "10ft", "10 FT.") — strip any
     // trailing ft/feet token before re-appending so we don't end up with "10 ft ft".
     const eaves = (() => {
         const v = asValue(warehouse.clearHeightFt);
         if (!v) return 'N/A';
-        return `${String(v).replace(/\s*(ft|feet)\.?\s*$/i, '').trim()} ft`;
+        const text = String(v).trim();
+        if (/\s*(ft|feet)\.?\s*$/i.test(text)) return `${text.replace(/\s*(ft|feet)\.?\s*$/i, '').trim()} ft`;
+        return /^\d+(?:\.\d+)?$/.test(text) ? `${text} ft` : text;
     })();
 
     const rental = showCommercials

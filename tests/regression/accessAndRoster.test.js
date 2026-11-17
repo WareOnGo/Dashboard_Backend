@@ -7,8 +7,9 @@ beforeEach(reset);
 const auth = email => ['Authorization', `Bearer ${tokenFor(email)}`];
 const roles = [
   ['database admin', active({ adminAccess: true }), '', 204],
-  ['environment admin', null, 'user@wareongo.com', 204],
-  ['inactive environment admin override', active({ is_active: false }), 'user@wareongo.com', 204],
+  ['active environment admin', active(), 'user@wareongo.com', 204],
+  ['inactive environment admin', active({ is_active: false }), 'user@wareongo.com', 403],
+  ['missing environment admin', null, 'user@wareongo.com', 403],
   ['dashboard user', active(), '', 403],
   ['reviewer', active({ reviewerAccess: true }), '', 403],
   ['inactive database admin', active({ adminAccess: true, is_active: false }), '', 403],
@@ -110,6 +111,8 @@ describe('roster create contract', () => {
       .send({ name: 'New Hire', phone_number: '+91 98000-00001', email }).expect(201);
     expect(prisma.verifiedNumber.create.mock.calls[0][0].data).toMatchObject({
       phone_number: '919800000001', empID: expect.stringMatching(/^[A-Z0-9]{6}$/),
+      dashboardAccess: true, viewOwnWarehouseEntries: true, editOwnWarehouseEntries: true,
+      viewAllWarehouseEntries: true, editAllWarehouseEntries: false,
       ...(email ? { email: 'hire@wareongo.com' } : {}),
     });
   });

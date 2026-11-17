@@ -5,12 +5,13 @@
  * that is one DB round trip in front of every page load. The cache exists to remove
  * that, but it sits directly on the authorization path, so three properties matter
  * more than the hit rate: a revoke must not linger, a DB failure must not be pinned
- * as "no access" for the whole TTL, and the env allowlist must keep working when the
- * database is unreachable.
+ * as "no access" for the whole TTL, and the env allowlist must never bypass a disabled, missing or ambiguous roster identity.
  */
 const mockFindFirst = jest.fn();
 jest.mock('../../src/utils/database', () => ({
-    getClient: () => ({ verifiedNumber: { findFirst: mockFindFirst } }),
+    getClient: () => ({ verifiedNumber: { findMany: async options => {
+        const row = await mockFindFirst(options); return Array.isArray(row) ? row : row ? [row] : [];
+    } } }),
 }));
 
 const GRANTED = {
@@ -96,15 +97,15 @@ describe('capability caching', () => {
         expect(mockFindFirst).toHaveBeenCalledTimes(1);
     });
 
-    it('never consults the database for an env-allowlisted admin', async () => {
+    it('fails closed for an env admin when the database is unavailable', async () => {
         process.env.ADMIN_EMAILS = 'boss@wareongo.com';
         mockFindFirst.mockRejectedValue(new Error('database is down'));
 
         const caps = await access.resolveCapabilities('boss@wareongo.com');
 
-        expect(caps.ADMIN).toBe(true);
-        expect(caps.DASHBOARD).toBe(true);
-        expect(mockFindFirst).not.toHaveBeenCalled();
+        expect(caps.ADMIN).toBe(false);
+        expect(caps.DASHBOARD).toBe(false);
+        expect(mockFindFirst).toHaveBeenCalledTimes(1);
     });
 
     it('keeps users separate', async () => {
@@ -120,12 +121,12 @@ describe('capability caching', () => {
 
 test.each([false, undefined])('inactive or unknown active flag %s grants no capabilities even to a DB admin', async is_active => {
     mockFindFirst.mockResolvedValue({ ...GRANTED, is_active, adminAccess: true, reviewerAccess: true, callDashboardAccess: true });
-    expect(Object.values(await access.resolveCapabilities('asha@wareongo.com'))).toEqual([false, false, false, false, false]);
+    expect(Object.values(await access.resolveCapabilities('asha@wareongo.com'))).toEqual(Object.keys(access.CAPS).map(() => false));
     expect(mockFindFirst.mock.calls[0][0].select.is_active).toBe(true);
 });
 test('an active DB admin holds all capabilities', async () => {
     mockFindFirst.mockResolvedValue({ ...GRANTED, adminAccess: true });
-    expect(Object.values(await access.resolveCapabilities('asha@wareongo.com'))).toEqual([true, true, true, true, true]);
+    expect(Object.values(await access.resolveCapabilities('asha@wareongo.com'))).toEqual(Object.keys(access.CAPS).map(() => true));
 });
 test('a concurrent cold burst shares one capability query', async () => {
     let release;
@@ -153,6 +154,7 @@ test('Analyst access is independent of dashboard, reviewer and admin privileges'
     mockFindFirst.mockResolvedValue({ ...GRANTED, dashboardAccess: false, analystAccess: true });
     expect(await access.resolveCapabilities('analyst@wareongo.com')).toEqual({
         DASHBOARD: false, CALL_DASHBOARD: false, REVIEW: false, ANALYST: true, ADMIN: false,
+        WAREHOUSE_VIEW_OWN: false, WAREHOUSE_EDIT_OWN: false, WAREHOUSE_VIEW_ALL: false, WAREHOUSE_EDIT_ALL: false,
     });
     mockFindFirst.mockResolvedValue({ ...GRANTED, dashboardAccess: false, analystAccess: false });
     access.invalidateCapabilities('analyst@wareongo.com');
@@ -162,4 +164,29 @@ test('Analyst access is independent of dashboard, reviewer and admin privileges'
 test.each([undefined, 'true', 1, false])('Analyst flag %s fails closed unless it is true', async analystAccess => {
     mockFindFirst.mockResolvedValue({ ...GRANTED, analystAccess });
     expect((await access.resolveCapabilities('employee@wareongo.com')).ANALYST).toBe(false);
+});
+
+
+test.each([null, { ...GRANTED, is_active: false }, [GRANTED, GRANTED]])('denies an environment admin with missing, inactive or ambiguous roster (%#)', async rows => {
+    process.env.ADMIN_EMAILS = 'boss@wareongo.com';
+    mockFindFirst.mockResolvedValue(rows);
+    expect(Object.values(await access.resolveCapabilities('boss@wareongo.com')).every(value => value === false)).toBe(true);
+});
+test('allows an active unique environment admin and revokes cached access on deactivation', async () => {
+    process.env.ADMIN_EMAILS = 'boss@wareongo.com';
+    mockFindFirst.mockResolvedValue(GRANTED);
+    expect((await access.resolveCapabilities('boss@wareongo.com')).ADMIN).toBe(true);
+    mockFindFirst.mockResolvedValue({ ...GRANTED, is_active: false });
+    access.invalidateCapabilities('boss@wareongo.com');
+    expect((await access.resolveCapabilities('boss@wareongo.com')).ADMIN).toBe(false);
+});
+
+
+test('a fresh admin/mutation check rejects deactivation even with a warm read cache', async () => {
+    mockFindFirst.mockResolvedValue({ ...GRANTED, adminAccess: true });
+    expect((await access.resolveCapabilities('boss@wareongo.com')).ADMIN).toBe(true);
+    // Another instance updates the roster; this process receives no invalidation.
+    mockFindFirst.mockResolvedValue({ ...GRANTED, adminAccess: true, is_active: false });
+    expect((await access.resolveCapabilities('boss@wareongo.com', { fresh: true })).ADMIN).toBe(false);
+    expect(mockFindFirst).toHaveBeenCalledTimes(2);
 });

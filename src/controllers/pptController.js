@@ -1,5 +1,6 @@
 // src/controllers/pptController.js
 const BaseController = require('./baseController');
+const { assertWarehouseAccess } = require('../utils/warehouseAccess');
 const { logError, logWarn, logInfo } = require('../ppt/utils/logger');
 
 const PPTX_CONTENT_TYPE =
@@ -157,6 +158,8 @@ class PptController extends BaseController {
                     logInfo('pptController', variant, 'No ids supplied, using placeholder data');
                 }
 
+                for (const warehouse of warehouses) assertWarehouseAccess(req.user, warehouse);
+
                 logInfo('pptController', variant, `Generating ${label} presentation`, {
                     warehouseIds, warehouseCount: warehouses.length,
                 });
@@ -179,6 +182,10 @@ class PptController extends BaseController {
                 audit('success', { httpStatus: 200, bytes: buffer.length });
                 return;
             } catch (error) {
+                if (error.statusCode === 403) {
+                    audit('failed', { httpStatus: 403, errorMessage: error.message });
+                    return res.status(403).json({ error: error.message });
+                }
                 logError('pptController', variant, `Failed to generate ${label} ${fileType}`, {
                     warehouseIds, error: error.message, stack: error.stack,
                 });

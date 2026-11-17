@@ -8,32 +8,17 @@ const { CAPS } = require('../utils/access');
 const pptController = container.resolve('pptController');
 
 /**
- * Warehouse proposal deck generation.
+ * Warehouse proposal exports require WAREHOUSE_VIEW_OWN. The controller checks
+ * every selected row against the same own/all scope as the dashboard before
+ * generating a file. Run migrateWarehousePermissions.js before deploying this
+ * gate so current employees retain their existing access.
  *
- * Merged in from the standalone Warehouse Proposal Engine, which ran these
- * endpoints with no authentication of any kind — the browser sent a Bearer
- * token and the service ignored it, so anyone who could reach its public URL
- * could generate a deck for any warehouse ID. They now sit behind the same gate
- * as the rest of the dashboard.
- *
- * Gated on DASHBOARD, matching GET /api/warehouses — if you can see the
- * warehouses, you can put them in a deck.
- *
- * These briefly required CAPS.DASHBOARD once before and broke every non-admin,
- * because the column was set on nobody (0 of 19 VerifiedNumber rows) and only
- * the admin master-override still worked. The precondition that failure implies
- * is now met: the column was backfilled for every active employee first, and a
- * user who lacks it cannot load the warehouse list either, so they never reach
- * an export button — rather than being refused at the end of a deck they had
- * already waited for. Do not reintroduce the gate on a column nobody holds.
- *
- * Paths are mounted flat under /api (not /api/ppt) to preserve the exact URLs
- * the frontend already calls, so cutover is a config change, not a code change.
+ * Paths stay flat under /api to preserve the frontend's existing URLs.
  */
 // Applied per-route rather than via router.use(): this router is mounted flat
 // at /api, so router-level middleware would also run for every unmatched /api/*
 // path and turn what should be a 404 into a 401.
-const gate = [authMiddleware.authenticateJWT, authMiddleware.requireAccess(CAPS.DASHBOARD)];
+const gate = [authMiddleware.authenticateJWT, authMiddleware.requireAccess(CAPS.WAREHOUSE_VIEW_OWN)];
 
 router.post('/generate-ppt', ...gate,
     pptController.handleGenerate({ variant: 'standard', label: 'standard' }));

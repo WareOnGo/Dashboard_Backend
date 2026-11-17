@@ -17,11 +17,11 @@ class WarehouseModel extends BaseModel {
     }
 
     /** Return only distinct location pairs and types, never full listing data. */
-    async findFilterOptions() {
+    async findFilterOptions(where = {}) {
         try {
             const [locations, types] = await Promise.all([
-                this.model.groupBy({ by: ['state', 'city'] }),
-                this.model.groupBy({ by: ['warehouseType'] }),
+                this.model.groupBy({ by: ['state', 'city'], where }),
+                this.model.groupBy({ by: ['warehouseType'], where }),
             ]);
             return {
                 locations: locations.map(({ state, city }) => ({ state, city })),
@@ -204,7 +204,7 @@ class WarehouseModel extends BaseModel {
      * @param {Object} updateData - Data to update including optional nested WarehouseData
      * @returns {Object} Updated warehouse with WarehouseData
      */
-    async update(id, updateData, availabilityGuard) {
+    async update(id, updateData, availabilityGuard, auditContext) {
         try {
             const { warehouseData, media: incomingMedia, ...warehouse } = updateData;
 
@@ -229,7 +229,16 @@ class WarehouseModel extends BaseModel {
                 include: { WarehouseData: true },
             };
 
-            const updated = await this.model.update(updatePayload);
+            // Commit the edit and transaction-local identity together using the
+            // array transaction supported by the shared database pooler.
+            const updated = auditContext?.actorEmail
+                ? (await this.prisma.$transaction([
+                    this.prisma.$queryRawUnsafe("SELECT set_config('wareongo.actor_email',$1,true),set_config('wareongo.edit_source','Warehouse edit',true)", auditContext.actorEmail),
+                    this.model.update(updatePayload),
+                ]))[1]
+                : await this.model.update(updatePayload);
+            // Best-effort registration must run after commit: even a caught SQL
+            // error aborts a PostgreSQL transaction and would roll back the edit.
             if (Object.hasOwn(updateData, 'media') || Object.hasOwn(updateData, 'photos')) {
                 await registerWarehouseImages(this.prisma, updated.id);
             }
@@ -266,7 +275,7 @@ class WarehouseModel extends BaseModel {
      * @param {string} searchCriteria.maxRate - Maximum rate per sqft
      * @returns {Array} Array of matching warehouses
      */
-    async search(searchCriteria) {
+    async search(searchCriteria, accessWhere = {}) {
         try {
             const where = {};
 
@@ -312,7 +321,7 @@ class WarehouseModel extends BaseModel {
             }
 
             return await this.model.findMany({
-                where,
+                where: Object.keys(accessWhere).length ? { AND: [accessWhere, where] } : where,
                 include: { WarehouseData: true },
                 orderBy: { createdAt: 'desc' }
             });
@@ -371,10 +380,10 @@ class WarehouseModel extends BaseModel {
     }
 
     /**
-     * Get warehouse statistics
+     * Get warehouse statistics for a trusted warehouseScope() ownership filter.
      * @returns {Object} Statistics about warehouses
      */
-    async getStatistics() {
+    async getStatistics(where = {}) {
         try {
             const [
                 totalCount,
@@ -382,27 +391,32 @@ class WarehouseModel extends BaseModel {
                 byState,
                 averageSpace
             ] = await Promise.all([
-                this.model.count(),
+                this.model.count({ where }),
                 this.model.groupBy({
+                    where,
                     by: ['warehouseType'],
                     _count: true
                 }),
                 this.model.groupBy({
+                    where,
                     by: ['state'],
                     _count: true
                 }),
-                this.model.aggregate({
-                    _avg: {
-                        totalSpaceSqft: true
-                    }
-                })
+                // PostgreSQL cannot AVG(integer[]). Sum each warehouse's areas
+                // first, then average those totals, excluding unknown/empty areas.
+                // As with GIS, the sole filter here is the server-owned scope.
+                this.prisma.$queryRaw`
+                    SELECT AVG((SELECT SUM(area) FROM unnest(w."totalSpaceSqft") AS area))::double precision AS "averageSpace"
+                    FROM "Warehouse" w
+                    ${where.uploadedBy ? Prisma.sql`WHERE w."uploadedBy" ILIKE ${where.uploadedBy.equals}` : Prisma.empty}
+                `
             ]);
 
             return {
                 totalWarehouses: totalCount,
                 byType,
                 byState,
-                averageSpace: averageSpace._avg.totalSpaceSqft
+                averageSpace: averageSpace[0].averageSpace
             };
         } catch (error) {
             this.handleDatabaseError(error);

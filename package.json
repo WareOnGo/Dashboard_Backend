@@ -18,6 +18,7 @@
     "docker:logs": "./scripts/docker-dev.sh logs",
     "deploy:ecr": "./scripts/deploy-ecr.sh",
     "backfill:micromarkets": "node scripts/backfillMicroMarkets.js",
+    "migrate:warehouse-permissions": "node scripts/migrateWarehousePermissions.js",
     "backfill:dashboard-access": "node scripts/backfillDashboardAccess.js",
     "ingest:osm-pois": "node -r dotenv/config scripts/importOsmPois.js",
     "ingest:osm-pois:verify": "node -r dotenv/config scripts/importOsmPois.js --verify",

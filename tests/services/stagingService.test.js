@@ -15,6 +15,18 @@ const baseSubmission = () => ({
 });
 
 describe('StagingService mapping', () => {
+    it('preserves canonical voice notes through staging, validation and promotion mapping', () => {
+        const note = { id: '6e5f8cef-838a-4fda-a51c-85a2bd566f2b', storageKey: 'private/audio.m4a', durationMs: 43000, sizeBytes: 300000, contentType: 'audio/mp4' };
+        const row = svc.toStagedRow({ ...baseSubmission(), scoutVoiceNotes: [note] }, { source: 'SCOUT', submittedBy: scout.email });
+        const payload = svc.buildPromotionPayload(row);
+        const result = WarehouseValidator.validateCreate(payload);
+        expect(result.success).toBe(true);
+        expect(result.data.scoutVoiceNotes).toEqual([note]);
+        expect(svc.buildPromotionPayload({ ...row, scoutVoiceNotes: null }).scoutVoiceNotes).toEqual([]);
+    });
+    it('blocks partner ingest from attaching someone else’s voice note', async () => {
+        await expect(svc.createIngestSubmission({ submission: { ...baseSubmission(), scoutVoiceNotes: [{ id: '6e5f8cef-838a-4fda-a51c-85a2bd566f2b' }] } })).rejects.toThrow('not attached');
+    });
     describe('toStagedRow', () => {
         it('flattens nested warehouseData and forces source-identity fields', () => {
             const submission = { ...baseSubmission(), wogVerified: true, visibility: true };

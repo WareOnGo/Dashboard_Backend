@@ -4,6 +4,7 @@ const WarehouseValidator = require('../validators/warehouseValidator');
 const { geocodeUrl } = require('../utils/googleMaps');
 const { deriveZone } = require('../utils/deriveZone');
 const { computeChanges } = require('../utils/auditDiff');
+const { editorIdentity } = require('../utils/editorIdentity');
 const { prepareAvailabilityUpdate, validateReviewAvailability } = require('../utils/availabilityReview');
 
 /**
@@ -17,7 +18,8 @@ const WAREHOUSE_DATA_FIELDS = [
 ];
 
 /**
- * StagedWarehouse columns that are pipeline metadata, never warehouse data.
+ * Server-owned metadata excluded from editable warehouse payloads.
+ * lastEditedBy is copied separately from the saved row during promotion.
  * `warehouseDeleted` is not a column at all but a read-time annotation added by
  * StagedWarehouseModel.annotateWarehouseExistence — it belongs here for the same reason:
  * without it, buildPromotionPayload leaks it into the promotion payload, where it survives
@@ -26,7 +28,7 @@ const WAREHOUSE_DATA_FIELDS = [
 const STAGING_META_FIELDS = new Set([
     'id', 'reviewStatus', 'source', 'submittedBy', 'submittedAt', 'reviewedBy',
     'reviewedAt', 'rejectionReason', 'warehouseId', 'rawPayload', 'flags', 'reviewMeta',
-    'warehouseDeleted',
+    'warehouseDeleted', 'lastEditedBy', '__editVersion',
 ]);
 
 const REVIEWABLE = new Set(['PENDING']);
@@ -89,11 +91,12 @@ function validationError(message, issues) {
  * docs/STAGING_VALIDATION_LAYER.md.
  */
 class StagingService extends BaseService {
-    constructor(stagedWarehouseModel, warehouseService, settingsService) {
+    constructor(stagedWarehouseModel, warehouseService, settingsService, voiceNoteService = null) {
         super();
         this.stagedWarehouseModel = stagedWarehouseModel;
         this.warehouseService = warehouseService;
         this.settingsService = settingsService;
+        this.voiceNoteService = voiceNoteService;
     }
 
     /**
@@ -110,12 +113,21 @@ class StagingService extends BaseService {
      * @returns {Object} Created staged row
      */
     async createScoutSubmission({ submission, scout }) {
+        if (submission.scoutVoiceNotes?.length) {
+            if (!this.voiceNoteService) throw require('../utils/voiceNotes').fail('Voice uploads are unavailable.', 503);
+            return this.voiceNoteService.withAttachments(submission.scoutVoiceNotes, scout, canonical =>
+                this.saveScoutSubmission({ submission: { ...submission, scoutVoiceNotes: canonical }, scout }), submission);
+        }
+        return this.saveScoutSubmission({ submission, scout });
+    }
+
+    async saveScoutSubmission({ submission, scout }) {
         return this.executeOperation(async () => {
             const staged = this.toStagedRow(submission, {
                 source: 'SCOUT',
                 submittedBy: scout.email || scout.name,
+                lastEditedBy: editorIdentity(scout),
             });
-            await this.autofillCoordinatesFromUrl(staged);
             const created = await this.stagedWarehouseModel.create(staged);
             return this.maybeAutoApprove(created);
         });
@@ -134,12 +146,13 @@ class StagingService extends BaseService {
      * @returns {Object} Created staged row
      */
     async createDashboardSubmission({ submission, user }) {
+        require('../utils/voiceNotes').retainVoiceNotes(submission);
         return this.executeOperation(async () => {
             const staged = this.toStagedRow(submission, {
                 source: 'DASHBOARD',
                 submittedBy: user.email,
+                lastEditedBy: editorIdentity(user),
             });
-            await this.autofillCoordinatesFromUrl(staged);
             const created = await this.stagedWarehouseModel.create(staged);
             return this.maybeAutoApprove(created);
         });
@@ -161,6 +174,7 @@ class StagingService extends BaseService {
      * @returns {Object} Created staged row
      */
     async createIngestSubmission({ submission, source = 'PARTNER_API', submittedBy = 'webhook:partner_api' }) {
+        require('../utils/voiceNotes').retainVoiceNotes(submission);
         return this.executeOperation(async () => {
             const staged = this.toStagedRow(submission, { source, submittedBy });
             await this.autofillCoordinatesFromUrl(staged);
@@ -175,11 +189,11 @@ class StagingService extends BaseService {
      * submission so a caller cannot self-approve or spoof attribution.
      *
      * @param {Object} submission - Validated payload with nested `warehouseData`
-     * @param {Object} meta - { source, submittedBy }
+     * @param {Object} meta - { source, submittedBy, lastEditedBy? }
      * @returns {Object} Flat staged row ready for Prisma
      * @private
      */
-    toStagedRow(submission, { source, submittedBy }) {
+    toStagedRow(submission, { source, submittedBy, lastEditedBy = null }) {
         validateReviewAvailability(submission);
         const { warehouseData = {}, ...flatWarehouse } = submission;
 
@@ -208,6 +222,7 @@ class StagingService extends BaseService {
 
             // Forced fields — must win over anything in the submission.
             uploadedBy: submittedBy,
+            lastEditedBy,
             wogVerified: false,
             visibility: false,
         };
@@ -240,38 +255,6 @@ class StagingService extends BaseService {
         }
     }
 
-    /**
-     * On edit, re-geocode latitude/longitude only when the submission's
-     * `googleLocation` actually changes. Mutates the flat `mapped` edits in place.
-     *
-     * Never throws (best-effort). If the same edit explicitly sets latitude and
-     * longitude, those win and no geocoding happens. If the URL is cleared,
-     * existing coordinates are left untouched rather than fabricated.
-     *
-     * @param {Object} row - The current staged row (pre-edit)
-     * @param {Object} mapped - The flattened proposed edits (post flattenForMirror)
-     * @returns {Promise<void>}
-     * @private
-     */
-    async autofillCoordinatesOnUrlChange(row, mapped) {
-        const urlChanged =
-            'googleLocation' in mapped && mapped.googleLocation !== row.googleLocation;
-        if (!urlChanged) return;
-        // Respect explicit coordinate edits made in the same request.
-        if (mapped.latitude != null && mapped.longitude != null) return;
-        // URL cleared — don't invent coordinates from nothing.
-        if (!mapped.googleLocation) return;
-
-        try {
-            const { lat, lng } = await geocodeUrl(mapped.googleLocation);
-            if (lat != null && lng != null) {
-                mapped.latitude = lat;
-                mapped.longitude = lng;
-            }
-        } catch {
-            // best-effort; the edit proceeds without refreshed coordinates
-        }
-    }
 
     /**
      * List staged submissions (review queue), newest first.
@@ -306,9 +289,10 @@ class StagingService extends BaseService {
      * Returns the updated row plus a field-level diff for audit logging.
      * @param {string} id
      * @param {Object} edits - Validated partial warehouse payload (may contain nested warehouseData)
+     * @param {Object} [user] - Authenticated editor, supplied by the controller
      * @returns {{ submission: Object, changes: Array<{field, from, to}> }}
      */
-    async editSubmission(id, edits) {
+    async editSubmission(id, edits, user) {
         return this.executeOperation(async () => {
             const row = await this.stagedWarehouseModel.findByStagedId(id);
             if (!row) throw notFound(id);
@@ -318,15 +302,19 @@ class StagingService extends BaseService {
 
             const { expectedAvailability, ...fields } = edits;
             const mapped = this.flattenForMirror(fields);
+            delete mapped.uploadedBy;
             const availabilityGuard = prepareAvailabilityUpdate(row, mapped, expectedAvailability);
-            // Re-geocode only when the Google Maps URL itself changes. Done before
-            // computeDiff so the refreshed coordinates show up in the returned changes.
-            await this.autofillCoordinatesOnUrlChange(row, mapped);
+            require('../utils/voiceNotes').retainVoiceNotes(mapped, row);
+            // Preserve unchanged legacy fields and require values when changed.
+            // Maps resolution is deferred; edits must not wait on Google.
+            await require('../utils/formChanges').validateFormChanges(row, mapped);
             const changes = this.computeDiff(row, mapped);
             if (changes.length === 0) {
                 return { submission: row, changes: [] };
             }
 
+            const lastEditedBy = editorIdentity(user);
+            if (lastEditedBy) mapped.lastEditedBy = lastEditedBy;
             const updated = await this.stagedWarehouseModel.updateStaged(id, mapped, availabilityGuard);
             return { submission: updated, changes };
         });
@@ -334,8 +322,8 @@ class StagingService extends BaseService {
 
     /**
      * Approve a staged submission: re-validate with the strict warehouse schema,
-     * then promote it into the master Warehouse table (claim-first + compensation,
-     * not an interactive transaction — see promote()). On validation failure the
+     * then atomically create the master and approval link in one SQL statement
+     * (without an interactive transaction — see promote()). On validation failure the
      * row stays PENDING and a ValidationError (with issues) is thrown so the
      * reviewer can fix the flagged fields.
      * @param {string} id
@@ -344,11 +332,12 @@ class StagingService extends BaseService {
      */
     async approveSubmission(id, reviewer) {
         return this.executeOperation(async () => {
-            const row = await this.stagedWarehouseModel.findByStagedId(id);
+            const row = await this.stagedWarehouseModel.findByStagedId(id, { includeVersion: true });
             if (!row) throw notFound(id);
             if (!REVIEWABLE.has(row.reviewStatus)) {
                 throw conflict('Submission is not in a reviewable state (already approved or rejected).');
             }
+            if (!/^\d+$/.test(row.__editVersion || '')) throw new Error('Submission revision unavailable');
 
             const payload = this.buildPromotionPayload(row);
             const result = WarehouseValidator.validateCreate(payload);
@@ -360,6 +349,8 @@ class StagingService extends BaseService {
             }
 
             const processed = this.warehouseService.applyCreateBusinessRules(result.data);
+            // Publishing preserves the last content editor, including on auto-approval.
+            processed.lastEditedBy = row.lastEditedBy ?? null;
             // Derive micro-market tags from the coordinates geocoded at submission
             // time, so the promoted warehouse lands already tagged.
             await this.warehouseService.applyMicroMarketTags(processed);
@@ -372,7 +363,7 @@ class StagingService extends BaseService {
             return this.stagedWarehouseModel.promote(id, processed, reviewer, {
                 availability: row.availability ?? null,
                 availabilityLastReviewedOn: row.availabilityLastReviewedOn ?? null,
-            });
+            }, row.__editVersion);
         });
     }
 
@@ -452,9 +443,8 @@ class StagingService extends BaseService {
         } catch (error) {
             // Leave the row for manual review if it can't be auto-approved. This covers
             // strict-validation failures (partial ingest payloads) and promotion failures
-            // alike. Re-read rather than assuming: promote()'s compensation is best-effort,
-            // and a lost race (another reviewer approving first) or a failed compensation
-            // would otherwise have us report PENDING for a row that is actually APPROVED.
+            // alike. Re-read because a concurrent reviewer or a connection loss after
+            // the atomic commit can leave the row APPROVED despite this request's error.
             // Cold path, so the extra query costs nothing on the hot one — and it falls
             // back to the in-memory row, since the read can fail for the same reason the
             // promotion did.
@@ -511,6 +501,7 @@ class StagingService extends BaseService {
             if (WAREHOUSE_DATA_FIELDS.includes(key)) continue;
             warehouse[key] = value;
         }
+        if (Object.hasOwn(warehouse, 'scoutVoiceNotes')) warehouse.scoutVoiceNotes = warehouse.scoutVoiceNotes || [];
         return { ...warehouse, warehouseData };
     }
 

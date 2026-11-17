@@ -1,5 +1,6 @@
 // src/controllers/geoController.js
 const BaseController = require('./baseController');
+const { warehouseScope } = require('../utils/warehouseAccess');
 
 /**
  * GeoController — map-view endpoints.
@@ -29,7 +30,7 @@ class GeoController extends BaseController {
 
     /** GET /api/geo/warehouses?bbox=w,s,e,n&limit= */
     warehouses = this.asyncHandler(async (req, res) => {
-        const fc = await this.geoService.warehouses(req.query);
+        const fc = await this.geoService.warehouses(req.query, warehouseScope(req.user));
         return res.status(200).json(fc);
     });
 

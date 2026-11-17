@@ -168,6 +168,7 @@ async function createDetailedPptBuffer(warehouses, selectedImages, customDetails
   // Initialize PptxGenJS with widescreen layout
   const pptx = new PptxGenJS();
   pptx.warehouseImageLoader = imageLoader;
+  pptx.handoverReferenceDate = new Date();
   pptx.layout = 'LAYOUT_WIDE';
 
   // Generate title slide using existing function

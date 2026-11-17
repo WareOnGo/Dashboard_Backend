@@ -154,3 +154,11 @@ tools/ppt-preview/out/
 
 # Private Batch API image snapshots/results; never commit listing data.
 tools/website-image-review-batches/
+
+# Private production snapshots, media audits and recovery plans stay local.
+tools/image-pipeline/
+tools/image-compression-backfill/
+tools/r2-audit/
+tools/*.rollback.sql
+tools/*.plan.json
+tools/*.plan.applied.json

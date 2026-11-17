@@ -1,0 +1,158 @@
+{
+  "verifiedAt": "2026-09-29T06:44:54.997Z",
+  "database": "Configured Backend_Repository DATABASE_URL",
+  "script": "scripts/migrateScoutVoiceNotes.js --apply",
+  "mode": "applied",
+  "columns": [
+    {
+      "table_name": "ScoutVoiceNoteAsset",
+      "column_name": "id",
+      "data_type": "text",
+      "is_nullable": "NO",
+      "column_default": null
+    },
+    {
+      "table_name": "ScoutVoiceNoteAsset",
+      "column_name": "scoutId",
+      "data_type": "integer",
+      "is_nullable": "NO",
+      "column_default": null
+    },
+    {
+      "table_name": "ScoutVoiceNoteAsset",
+      "column_name": "clientRecordingId",
+      "data_type": "text",
+      "is_nullable": "NO",
+      "column_default": null
+    },
+    {
+      "table_name": "ScoutVoiceNoteAsset",
+      "column_name": "draftId",
+      "data_type": "text",
+      "is_nullable": "NO",
+      "column_default": null
+    },
+    {
+      "table_name": "ScoutVoiceNoteAsset",
+      "column_name": "uploadKey",
+      "data_type": "text",
+      "is_nullable": "NO",
+      "column_default": null
+    },
+    {
+      "table_name": "ScoutVoiceNoteAsset",
+      "column_name": "storageKey",
+      "data_type": "text",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "table_name": "ScoutVoiceNoteAsset",
+      "column_name": "contentType",
+      "data_type": "text",
+      "is_nullable": "NO",
+      "column_default": null
+    },
+    {
+      "table_name": "ScoutVoiceNoteAsset",
+      "column_name": "expectedSize",
+      "data_type": "integer",
+      "is_nullable": "NO",
+      "column_default": null
+    },
+    {
+      "table_name": "ScoutVoiceNoteAsset",
+      "column_name": "sizeBytes",
+      "data_type": "integer",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "table_name": "ScoutVoiceNoteAsset",
+      "column_name": "durationMs",
+      "data_type": "integer",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "table_name": "ScoutVoiceNoteAsset",
+      "column_name": "state",
+      "data_type": "text",
+      "is_nullable": "NO",
+      "column_default": "'UPLOADING'::text"
+    },
+    {
+      "table_name": "ScoutVoiceNoteAsset",
+      "column_name": "operationToken",
+      "data_type": "text",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "table_name": "ScoutVoiceNoteAsset",
+      "column_name": "leaseUntil",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "YES",
+      "column_default": null
+    },
+    {
+      "table_name": "ScoutVoiceNoteAsset",
+      "column_name": "expiresAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO",
+      "column_default": null
+    },
+    {
+      "table_name": "ScoutVoiceNoteAsset",
+      "column_name": "createdAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO",
+      "column_default": "CURRENT_TIMESTAMP"
+    },
+    {
+      "table_name": "ScoutVoiceNoteAsset",
+      "column_name": "updatedAt",
+      "data_type": "timestamp without time zone",
+      "is_nullable": "NO",
+      "column_default": "CURRENT_TIMESTAMP"
+    },
+    {
+      "table_name": "StagedWarehouse",
+      "column_name": "scoutVoiceNotes",
+      "data_type": "jsonb",
+      "is_nullable": "YES",
+      "column_default": "'[]'::jsonb"
+    },
+    {
+      "table_name": "Warehouse",
+      "column_name": "scoutVoiceNotes",
+      "data_type": "jsonb",
+      "is_nullable": "NO",
+      "column_default": "'[]'::jsonb"
+    }
+  ],
+  "indexes": [
+    {
+      "indexname": "ScoutVoiceNoteAsset_pkey",
+      "indexdef": "CREATE UNIQUE INDEX \"ScoutVoiceNoteAsset_pkey\" ON public.\"ScoutVoiceNoteAsset\" USING btree (id)"
+    },
+    {
+      "indexname": "ScoutVoiceNoteAsset_scoutId_clientRecordingId_key",
+      "indexdef": "CREATE UNIQUE INDEX \"ScoutVoiceNoteAsset_scoutId_clientRecordingId_key\" ON public.\"ScoutVoiceNoteAsset\" USING btree (\"scoutId\", \"clientRecordingId\")"
+    },
+    {
+      "indexname": "ScoutVoiceNoteAsset_state_expiresAt_idx",
+      "indexdef": "CREATE INDEX \"ScoutVoiceNoteAsset_state_expiresAt_idx\" ON public.\"ScoutVoiceNoteAsset\" USING btree (state, \"expiresAt\")"
+    }
+  ],
+  "security": [
+    {
+      "rls_enabled": true,
+      "server_bypasses_rls": true,
+      "can_select": true,
+      "can_insert": true,
+      "can_update": true,
+      "can_delete": true
+    }
+  ]
+}

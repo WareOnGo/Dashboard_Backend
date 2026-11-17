@@ -40,7 +40,9 @@ const row = (overrides = {}) => ({
 });
 
 function makeModel(overrides = {}) {
-    return {
+    const model = {
+        withRosterEdit: jest.fn(async operation => operation(model)),
+        findEditorAccess: jest.fn(async () => [row({ email: ACTOR.email, adminAccess: true })]),
         listActive: jest.fn(async () => []),
         listAll: jest.fn(async () => []),
         findByIdAdmin: jest.fn(async () => row()),
@@ -53,6 +55,7 @@ function makeModel(overrides = {}) {
         updateById: jest.fn(async (id, data) => ({ ...row(), ...data })),
         ...overrides,
     };
+    return model;
 }
 
 const make = (overrides) => {
@@ -71,6 +74,25 @@ beforeEach(() => {
 });
 
 describe('create', () => {
+    const defaultAccess = {
+        dashboardAccess: true, viewOwnWarehouseEntries: true,
+        editOwnWarehouseEntries: true, viewAllWarehouseEntries: true, editAllWarehouseEntries: false,
+    };
+
+    it.each([
+        [{}, defaultAccess],
+        [{ dashboardAccess: false }, Object.fromEntries(Object.keys(defaultAccess).map(key => [key, false]))],
+        [{ viewOwnWarehouseEntries: false }, { dashboardAccess: true, viewOwnWarehouseEntries: false, editOwnWarehouseEntries: false, viewAllWarehouseEntries: false, editAllWarehouseEntries: false }],
+        [{ editOwnWarehouseEntries: false }, { ...defaultAccess, editOwnWarehouseEntries: false }],
+        [{ viewAllWarehouseEntries: false }, { ...defaultAccess, viewAllWarehouseEntries: false }],
+        [{ editAllWarehouseEntries: true }, { ...defaultAccess, editAllWarehouseEntries: true }],
+    ])('defaults to View all + Edit own, while honoring explicit grants/restrictions %j', async (permissions, expected) => {
+        const { model, service } = make();
+        const created = await service.create({ name: 'New Hire', phone_number: '919800000001', ...permissions }, ACTOR);
+        expect(model.createOne.mock.calls[0][0]).toMatchObject(expected);
+        expect(created).toMatchObject({ ...expected, adminAccess: false, reviewerAccess: false, analystAccess: false, callDashboardAccess: false });
+    });
+
     it('generates an empID rather than trusting the caller', async () => {
         const { model, service } = make();
         const created = await service.create({ name: 'New Hire', email: 'new@wareongo.com', phone_number: '919800000001' }, ACTOR);
@@ -210,6 +232,12 @@ describe('update — lockout guards', () => {
 });
 
 describe('update — general', () => {
+    it('does not reapply creation defaults to an existing employee', async () => {
+        const { model, service } = make();
+        await service.update(1, { name: 'Asha K' }, ACTOR);
+        expect(model.updateById).toHaveBeenCalledWith(1, { name: 'Asha K' });
+    });
+
     it('404s on a missing row', async () => {
         const { service } = make({ findByIdAdmin: jest.fn(async () => null) });
         await expectStatus(service.update(404, { name: 'Ghost' }, ACTOR), 404);
@@ -253,4 +281,27 @@ test('Analyst grants change only that capability and are included in the audit d
     expect(result.row.analystAccess).toBe(true);
     expect(result.row.adminAccess).toBe(false);
     expect(result.changes).toEqual(expect.arrayContaining([expect.objectContaining({ field: 'analystAccess' })]));
+});
+
+
+test.each([false, true])('an environment admin cannot deactivate their own roster row (adminAccess=%s)', async adminAccess => {
+    process.env.ADMIN_EMAILS = ACTOR.email;
+    const { service } = make({ findByIdAdmin: jest.fn(async () => row({ email: ACTOR.email, adminAccess })) });
+    await expectStatus(service.update(1, { is_active: false }, ACTOR), 403);
+});
+
+
+test.each([[], [row({ is_active: false, adminAccess: true })], [row()], [row(), row()]].map(rows => [rows]))(
+    'rechecks the editor inside the write transaction (%#)', async rows => {
+        const { service, model } = make({ findEditorAccess: jest.fn(async () => rows) });
+        await expectStatus(service.update(1, { analystAccess: true }, ACTOR), 403);
+        expect(model.findByIdAdmin).not.toHaveBeenCalled();
+        expect(model.updateById).not.toHaveBeenCalled();
+    });
+
+test('rejects a missing actor before reading or changing the target employee', async () => {
+    const { service, model } = make();
+    await expectStatus(service.update(1, { analystAccess: true }, null), 403);
+    expect(model.findEditorAccess).not.toHaveBeenCalled();
+    expect(model.updateById).not.toHaveBeenCalled();
 });

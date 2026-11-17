@@ -9,6 +9,7 @@ const { generateContactSlide } = require('../slides/contactSlide');
 const createPptBuffer = async (warehouses, selectedImages, customDetails, includeLocation = false, { imageLoader } = {}) => {
     let pptx = new PptxGenJS();
     pptx.warehouseImageLoader = imageLoader;
+    pptx.handoverReferenceDate = new Date();
     pptx.layout = 'LAYOUT_WIDE';
 
     generateTitleSlide(pptx, warehouses[0], customDetails);

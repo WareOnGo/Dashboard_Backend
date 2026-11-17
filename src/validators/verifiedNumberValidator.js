@@ -40,6 +40,10 @@ const capabilityFields = {
     analystAccess: z.boolean().optional(),
     callDashboardAccess: z.boolean().optional(),
     dashboardAccess: z.boolean().optional(),
+    viewOwnWarehouseEntries: z.boolean().optional(),
+    editOwnWarehouseEntries: z.boolean().optional(),
+    viewAllWarehouseEntries: z.boolean().optional(),
+    editAllWarehouseEntries: z.boolean().optional(),
     reviewerAccess: z.boolean().optional(),
 };
 

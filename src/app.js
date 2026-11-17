@@ -134,6 +134,7 @@ app.use('/api/auth', authRoutes);
  * Handles all warehouse-related endpoints under /api/warehouses
  */
 app.use('/api/warehouses', require('./routes/warehouse'));
+app.use('/api/field-reviews', require('./routes/fieldReviews').createRouter(container.resolve('fieldReviewService')));
 
 /**
  * Staging / validation layer routes (admin-only)

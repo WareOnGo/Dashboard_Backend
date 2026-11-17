@@ -1,5 +1,6 @@
 // src/container.js
 const database = require('./utils/database');
+const { FieldReviewService } = require('./fieldReview/service');
 
 // Import Models
 const WarehouseModel = require('./models/warehouseModel');
@@ -16,6 +17,7 @@ const GeoModel = require('./models/geoModel');
 // Import Services
 const WarehouseService = require('./services/warehouseService');
 const FileUploadService = require('./services/fileUploadService');
+const VoiceNoteService = require('./services/voiceNoteService');
 const AuditLogService = require('./services/auditLogService');
 const VerifiedNumberService = require('./services/verifiedNumberService');
 const PptGenerationService = require('./services/pptGenerationService');
@@ -198,6 +200,7 @@ class Container {
      * const controller = container.resolve('warehouseController');
      */
     initialize() {
+        this.registerSingleton('fieldReviewService', container => new FieldReviewService(database.getClient(), container.resolve('microMarketService')));
         // Register Models (singletons)
         // Models are stateless and can be safely shared across requests
         this.registerSingleton('warehouseModel', () => {
@@ -218,6 +221,7 @@ class Container {
         this.registerSingleton('fileUploadService', () => {
             return new FileUploadService();
         });
+        this.registerSingleton('voiceNoteService', () => new VoiceNoteService(database.getClient()));
 
         // Audit Log
         this.registerSingleton('auditLogModel', () => {
@@ -257,7 +261,7 @@ class Container {
             const stagedWarehouseModel = container.resolve('stagedWarehouseModel');
             const warehouseService = container.resolve('warehouseService');
             const settingsService = container.resolve('settingsService');
-            return new StagingService(stagedWarehouseModel, warehouseService, settingsService);
+            return new StagingService(stagedWarehouseModel, warehouseService, settingsService, container.resolve('voiceNoteService'));
         });
 
         // Image metadata and enrichment history readers

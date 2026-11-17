@@ -69,11 +69,16 @@ class StagedWarehouseModel extends BaseModel {
     /**
      * Find a staged row by its uuid id.
      * @param {string} id
+     * @param {{includeVersion?: boolean}} options - Internal approval snapshot only
      * @returns {Object|null}
      */
-    async findByStagedId(id) {
+    async findByStagedId(id, { includeVersion = false } = {}) {
         try {
-            const row = await this.model.findUnique({ where: { id } });
+            // Fetch the content and MVCC revision in one snapshot for approval.
+            // Reading a revision in a later query would miss intervening edits.
+            const row = includeVersion
+                ? (await this.prisma.$queryRaw`SELECT s.*, s.xmin::text AS "__editVersion" FROM "StagedWarehouse" s WHERE s.id=${id}`)[0]
+                : await this.model.findUnique({ where: { id } });
             if (!row) return null;
             await this.annotateWarehouseExistence([row]);
             return row;
@@ -148,11 +153,12 @@ class StagedWarehouseModel extends BaseModel {
     async updateStaged(id, data, availabilityGuard) {
         try {
             return await this.model.update({
-                where: { id, ...(availabilityGuard && { reviewStatus: 'PENDING', ...availabilityGuard }) },
+                where: { id, reviewStatus: 'PENDING', ...availabilityGuard },
                 data,
             });
         } catch (error) {
             if (availabilityGuard && error.code === 'P2025') throw availabilityConflict();
+            if (error.code === 'P2025') throw conflict('Submission changed or is no longer pending. Refresh before editing.');
             this.handleDatabaseError(error);
         }
     }
@@ -230,13 +236,15 @@ class StagedWarehouseModel extends BaseModel {
      * Create the master, its details and the approval link in one SQL statement.
      * Consumers only see committed, linked promotions. Row locking preserves
      * single-winner approval without interactive pooler transactions.
+     * expectedVersion is the MVCC revision read with the validated submission.
      */
-    async promote(id, payload, reviewer, availabilityGuard) {
+    async promote(id, payload, reviewer, availabilityGuard, expectedVersion) {
         try {
             const { warehouseData = {}, media: incomingMedia, ...warehouse } = payload;
             if (warehouse.photos && !incomingMedia) warehouse.media = photosToMedia(warehouse.photos);
             else if (incomingMedia) warehouse.media = incomingMedia;
-            const created = await atomicPromotion(this.prisma, id, warehouse, warehouseData, reviewer, availabilityGuard);
+            const created = await atomicPromotion(this.prisma, id, warehouse, warehouseData, reviewer, availabilityGuard, expectedVersion);
+            if (!created && expectedVersion != null) throw conflict('Submission changed while preparing approval. Refresh and review the latest values.');
             if (!created) throw availabilityGuard ? availabilityConflict()
                 : conflict('Submission is not in a reviewable state (already approved or rejected).');
 

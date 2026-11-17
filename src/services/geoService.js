@@ -135,7 +135,7 @@ class GeoService extends BaseService {
     }
 
     /** Warehouses for a viewport. */
-    async warehouses({ bbox, limit, afterId, ...query }) {
+    async warehouses({ bbox, limit, afterId, ...query }, accessWhere = {}) {
         return this.executeOperation(async () => {
             const box = this.parseBbox(bbox);
             const cap = this.clampLimit(limit);
@@ -154,7 +154,7 @@ class GeoService extends BaseService {
             const microMarkets = term && this.microMarketService
                 ? await this.microMarketService.namesMatching(term)
                 : [];
-            const rows = await this.geoModel.warehousesInBbox(box, cap + 1, filters, microMarkets);
+            const rows = await this.geoModel.warehousesInBbox(box, cap + 1, filters, microMarkets, accessWhere);
             const fc = this.toFeatureCollection(rows.slice(0, cap), (r) => ({
                 id: r.id, city: r.city, availability: r.availability, warehouseType: r.warehouseType,
             }), cap);

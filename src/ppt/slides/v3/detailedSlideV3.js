@@ -2,7 +2,7 @@ const { LAYOUT, COLORS, FONT, FONT_SEMIBOLD, addSlideTitle } = require('./layout
 const { addFooter, addTopRightLogo } = require('../v2/chromeV2');
 const { fetchWarehouseImage } = require('../../utils/image');
 const { logWarn } = require('../../utils/logger');
-const { propertyFields } = require('../propertyFields');
+const { propertyFields, asValue } = require('../propertyFields');
 
 /**
  * An option's specification table.
@@ -152,7 +152,19 @@ async function generateDetailedSlideV3(
     // The project-name band is dropped here but kept in the TCI deck, which is
     // why propertyFields still returns it: the slide title already identifies the
     // property, and the address is on the index slide against the same option.
-    const rows = propertyFields(warehouse, flags, pptx.handoverReferenceDate).filter((row) => row.kind !== 'header');
+    // V3 also omits insulation and the building stability certificate.
+    const rows = propertyFields(warehouse, flags, pptx.handoverReferenceDate).filter((row) => (
+        row.kind !== 'header'
+        && row.label !== 'Insulation details'
+        && row.label !== 'Building Stability Certificate'
+    ));
+    // Bare legacy values are feet; preserve explicit units and show missing data.
+    const plinthHeight = String(asValue(warehouse.plinthHeightFt) ?? 'N/A');
+    rows.splice(rows.findIndex((row) => row.label === 'No. of docks') + 1, 0, {
+        kind: 'field',
+        label: 'Plinth Height',
+        value: /^\d+(?:\.\d+)?$/.test(plinthHeight) ? `${plinthHeight} ft` : plinthHeight,
+    });
 
     const subHeaderOpts = {
         bold: true, color: COLORS.navy, fill: { color: COLORS.bg },

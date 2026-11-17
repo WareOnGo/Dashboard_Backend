@@ -2,6 +2,7 @@
 const BaseService = require('./baseService');
 const WarehouseValidator = require('../validators/warehouseValidator');
 const { computeChanges } = require('../utils/auditDiff');
+const { editorIdentity } = require('../utils/editorIdentity');
 const { prepareAvailabilityUpdate, validateReviewAvailability } = require('../utils/availabilityReview');
 const { phoneSearchDigits, warehouseSearchId } = require('../utils/warehouseSearch');
 
@@ -26,8 +27,8 @@ class WarehouseService extends BaseService {
     }
 
     /** Lightweight suggestions from all listings, independent of pagination. */
-    async getFilterOptions() {
-        return this.warehouseModel.findFilterOptions();
+    async getFilterOptions(accessWhere = {}) {
+        return this.warehouseModel.findFilterOptions(accessWhere);
     }
 
     /**
@@ -65,7 +66,7 @@ class WarehouseService extends BaseService {
      * @param {string} options.sortOrder - Sort order (asc/desc)
      * @returns {Array} Array of warehouses
      */
-    async getAllWarehouses(options = {}) {
+    async getAllWarehouses(options = {}, accessWhere = {}) {
         return this.executeOperation(async () => {
             // Validate + coerce query params (page/limit → numbers, unknown keys stripped).
             const filters = (options && Object.keys(options).length > 0)
@@ -78,7 +79,8 @@ class WarehouseService extends BaseService {
                 ? Math.min(filters.limit, MAX_PAGE_SIZE)
                 : DEFAULT_PAGE_SIZE;
 
-            const where = await this.resolveWhere(filters);
+            const filtersWhere = await this.resolveWhere(filters);
+            const where = Object.keys(accessWhere).length ? { AND: [accessWhere, filtersWhere] } : filtersWhere;
             const orderBy = filters.sortBy
                 ? { [filters.sortBy]: filters.sortOrder || 'desc' }
                 : { createdAt: 'desc' };
@@ -113,13 +115,14 @@ class WarehouseService extends BaseService {
      * @param {Object} options - Same query params as getAllWarehouses (paging/sort ignored)
      * @returns {Array<{id:number, lat:number, lng:number}>}
      */
-    async getWarehouseCoordinates(options = {}) {
+    async getWarehouseCoordinates(options = {}, accessWhere = {}) {
         return this.executeOperation(async () => {
             const filters = (options && Object.keys(options).length > 0)
                 ? this.validateData(options, (data) => WarehouseValidator.validateQuery(data))
                 : {};
 
-            const where = await this.resolveWhere(filters);
+            const filtersWhere = await this.resolveWhere(filters);
+            const where = Object.keys(accessWhere).length ? { AND: [accessWhere, filtersWhere] } : filtersWhere;
             const rows = await this.warehouseModel.findCoordinates(where);
 
             return rows
@@ -204,6 +207,7 @@ class WarehouseService extends BaseService {
         return this.executeOperation(async () => {
             // Validate input data
             const validatedData = this.validateData(warehouseData, (data) => WarehouseValidator.validateCreate(data));
+            require('../utils/voiceNotes').retainVoiceNotes(validatedData);
             
             // Apply business rules and transformations
             const processedData = this.applyCreateBusinessRules(validatedData);
@@ -221,10 +225,11 @@ class WarehouseService extends BaseService {
      * Update an existing warehouse
      * @param {number} id - Warehouse ID
      * @param {Object} updateData - Data to update
+     * @param {Object} [user] - Authenticated editor, supplied by the controller
      * @returns {{warehouse: Object, changes: Array<{field: string, from: *, to: *}>}}
      *   The updated warehouse plus the field-level diff that was applied, for audit logging
      */
-    async updateWarehouse(id, updateData) {
+    async updateWarehouse(id, updateData, user) {
         return this.executeOperation(async () => {
             // Validate ID parameter
             this.validateData({ id: id.toString() }, (data) => WarehouseValidator.validateId(data));
@@ -242,9 +247,23 @@ class WarehouseService extends BaseService {
                 throw error;
             }
             
+            // Preserve attribution and independently validate only changed form fields.
+            delete validatedData.uploadedBy;
+            const locationEdits = {
+                ...(validatedData.warehouseData || {}),
+                ...(Object.hasOwn(validatedData, 'googleLocation') ? { googleLocation: validatedData.googleLocation } : {}),
+            };
+            await require('../utils/formChanges').validateFormChanges(
+                { ...existing.WarehouseData, googleLocation: existing.googleLocation }, locationEdits,
+            );
+            if (Object.hasOwn(locationEdits, 'googleLocation')) {
+                validatedData.googleLocation = locationEdits.googleLocation;
+            }
+
             // Apply business rules for updates
             const processedData = this.applyUpdateBusinessRules(validatedData);
             const availabilityGuard = prepareAvailabilityUpdate(existing, processedData, expectedAvailability);
+            require('../utils/voiceNotes').retainVoiceNotes(processedData, existing);
             // Re-tag only when this edit carries coordinates; a partial update that
             // doesn't touch location keeps whatever tag the row already has.
             await this.applyMicroMarketTags(processedData);
@@ -260,8 +279,19 @@ class WarehouseService extends BaseService {
                 { nested: ['warehouseData'] },
             );
 
+            // An unchanged save must not issue a write: a later concurrent edit
+            // could otherwise be overwritten without updating its attribution.
+            if (!changes.length) return { warehouse: this.transformWarehouse(existing), changes };
+
+            // Set server-owned attribution after validation; client-supplied
+            // lastEditedBy/updatedBy fields are not part of the writable schema.
+            const lastEditedBy = editorIdentity(user);
+            if (lastEditedBy) processedData.lastEditedBy = lastEditedBy;
+
             // Update warehouse through model
-            const updatedWarehouse = await this.warehouseModel.update(id, processedData, availabilityGuard);
+            const updatedWarehouse = lastEditedBy
+                ? await this.warehouseModel.update(id, processedData, availabilityGuard, { actorEmail: lastEditedBy })
+                : await this.warehouseModel.update(id, processedData, availabilityGuard);
             
             // Apply post-update business logic
             return { warehouse: this.transformWarehouse(updatedWarehouse), changes };
@@ -302,7 +332,7 @@ class WarehouseService extends BaseService {
      * @param {Object} searchCriteria - Search parameters
      * @returns {Array} Array of matching warehouses
      */
-    async searchWarehouses(searchCriteria) {
+    async searchWarehouses(searchCriteria, accessWhere = {}) {
         return this.executeOperation(async () => {
             // Validate search criteria
             const validatedCriteria = this.validateSearchCriteria(searchCriteria);
@@ -311,7 +341,7 @@ class WarehouseService extends BaseService {
             const processedCriteria = this.applySearchBusinessRules(validatedCriteria);
             
             // Search warehouses through model
-            const warehouses = await this.warehouseModel.search(processedCriteria);
+            const warehouses = await this.warehouseModel.search(processedCriteria, accessWhere);
             
             // Apply business transformations
             return this.transformWarehouseList(warehouses);
@@ -322,10 +352,10 @@ class WarehouseService extends BaseService {
      * Get warehouse statistics
      * @returns {Object} Warehouse statistics
      */
-    async getWarehouseStatistics() {
+    async getWarehouseStatistics(accessWhere = {}) {
         return this.executeOperation(async () => {
             // Get statistics from model
-            const stats = await this.warehouseModel.getStatistics();
+            const stats = await this.warehouseModel.getStatistics(accessWhere);
             
             // Apply business transformations to statistics
             return this.transformStatistics(stats);
@@ -636,6 +666,9 @@ class WarehouseService extends BaseService {
     normalizeContactNumber(contactNumber) {
         // Remove all non-digit characters
         const digits = contactNumber.replace(/\D/g, '');
+        // An explicit international prefix already identifies the country.
+        // Some international numbers have ten digits including that prefix.
+        if (/^\+\d[\d\s().-]*$/.test(contactNumber.trim())) return `+${digits}`;
         
         // Apply basic formatting (this is a simple example)
         if (digits.length === 10) {

@@ -1,3 +1,4 @@
+const insensitiveExact = require('../utils/insensitiveExact');
 // src/models/verifiedNumberModel.js
 const BaseModel = require('./baseModel');
 
@@ -20,6 +21,10 @@ const ADMIN_SELECT = Object.freeze({
     analystAccess: true,
     callDashboardAccess: true,
     dashboardAccess: true,
+    viewOwnWarehouseEntries: true,
+    editOwnWarehouseEntries: true,
+    viewAllWarehouseEntries: true,
+    editAllWarehouseEntries: true,
     reviewerAccess: true,
 });
 
@@ -32,6 +37,29 @@ class VerifiedNumberModel extends BaseModel {
     constructor(prismaClient = null) {
         super(prismaClient);
         this.model = this.prisma.verifiedNumber;
+    }
+
+    /** Serialize roster edits across processes for the last-admin invariant.
+     * All checks and the write share this bounded transaction. Transaction-scoped
+     * advisory locks work through the transaction pooler; no session lock survives.
+     */
+    withRosterEdit(operation) {
+        return this.prisma.$transaction(async tx => {
+            const rows = await tx.$queryRaw`SELECT pg_try_advisory_xact_lock(1784056941, 1919247476) AS locked`;
+            if (rows[0]?.locked !== true) {
+                throw Object.assign(new Error('Another employee update is in progress. Retry shortly.'), { statusCode: 409 });
+            }
+            return operation(new VerifiedNumberModel(tx));
+        }, { maxWait: 2000, timeout: 5000, isolationLevel: 'ReadCommitted' });
+    }
+
+    /** Recheck the editor after acquiring the lock, including ambiguous identities. */
+    findEditorAccess(email) {
+        return this.model.findMany({
+            where: { email: insensitiveExact(email) },
+            select: { is_active: true, adminAccess: true },
+            take: 2,
+        });
     }
 
     /**
@@ -100,7 +128,7 @@ class VerifiedNumberModel extends BaseModel {
      */
     findByEmailInsensitive(email) {
         return this.model.findFirst({
-            where: { email: { equals: email, mode: 'insensitive' } },
+            where: { email: insensitiveExact(email) },
             select: { id: true, email: true },
         });
     }

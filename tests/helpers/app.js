@@ -3,7 +3,7 @@
 const mockPrisma = {};
 for (const name of ['warehouse', 'stagedWarehouse', 'verifiedNumber', 'warehouseVisitNote',
   'microMarket', 'appSetting', 'auditLog', 'labeledWarehouseImage', 'cronRunLog',
-  'warehouseProximity', 'pointOfInterest', 'osmPoi']) {
+  'warehouseProximity', 'pointOfInterest', 'osmPoi', 'scoutVoiceNoteAsset']) {
   mockPrisma[name] = {};
   for (const method of ['findMany', 'findFirst', 'findUnique', 'count', 'create',
     'update', 'updateMany', 'delete', 'upsert', 'aggregate', 'groupBy']) {
@@ -11,6 +11,7 @@ for (const name of ['warehouse', 'stagedWarehouse', 'verifiedNumber', 'warehouse
   }
 }
 mockPrisma.$queryRaw = jest.fn();
+mockPrisma.$transaction = jest.fn();
 const mockStorage = { send: jest.fn() };
 const mockDatabase = {
   getClient: () => mockPrisma,
@@ -36,6 +37,23 @@ function reset() {
       fn.mockReset().mockImplementation(() => { throw new Error(`Unexpected database call: ${name}.${method}`); });
     }
   }
+  mockPrisma.$transaction.mockImplementation(async operation => Array.isArray(operation) ? Promise.all(operation) : operation(mockPrisma));
+  mockPrisma.$queryRaw.mockImplementation(async (sql, ...values) => {
+    if (String(sql).includes('pg_try_advisory_xact_lock(1784056941, 1919247476)')) return [{ locked: true }];
+    if (String(sql).includes('AS "__editVersion" FROM "StagedWarehouse"')) {
+      const row = await mockPrisma.stagedWarehouse.findUnique({ where: { id: values[0] } });
+      return row ? [{ ...row, __editVersion: '1' }] : [];
+    }
+    throw new Error('Unexpected raw query');
+  });
+  // Capability reads return a bounded identity set; existing model fixtures
+  // retain their single-row identity lookups for service-level assertions.
+  mockPrisma.verifiedNumber.findMany.mockImplementation(async options => {
+    if (options?.take !== 2 || !options?.where?.email) throw new Error('Unexpected roster list');
+    if (options.where.email.equals.toLowerCase() === 'boss@wareongo.com') return [active({ id: 8, email: 'boss@wareongo.com' })];
+    const row = await mockPrisma.verifiedNumber.findFirst(options);
+    return row ? [row] : [];
+  });
   mockPrisma.auditLog.create.mockResolvedValue({ id: 'fixture-audit' });
   mockStorage.send.mockReset().mockImplementation(() => { throw new Error('Unexpected storage call'); });
   mockDatabase.healthCheck.mockReset().mockResolvedValue(true);
@@ -53,6 +71,8 @@ function active(overrides = {}) {
   return { id: 7, name: 'QA Fixture', email: 'user@wareongo.com',
     phone_number: '919800000001', empID: 'QA1234', is_active: true,
     adminAccess: false, dashboardAccess: true, reviewerAccess: false,
+    viewOwnWarehouseEntries: true, editOwnWarehouseEntries: true,
+    viewAllWarehouseEntries: true, editAllWarehouseEntries: true,
     callDashboardAccess: false, ...overrides };
 }
 module.exports = { app, prisma: mockPrisma, storage: mockStorage, database: mockDatabase, reset, tokenFor, active };

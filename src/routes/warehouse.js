@@ -5,8 +5,10 @@ const container = require('../container');
 const validationMiddleware = require('../middleware/validation');
 const { authMiddleware } = require('../middleware/authMiddleware');
 const { CAPS } = require('../utils/access');
+const { requireWarehouseEntry } = require('../middleware/warehouseAccess');
 const rateLimit = require('express-rate-limit');
 const { verifyScoutToken } = require('../middleware/scoutMiddleware');
+const { resolveFormLocation, validateNewWarehouseForm, validateDashboardForm, locationCheckRateLimiter } = require('../middleware/warehouseFormValidation');
 
 // Get controller instances from container
 const warehouseController = container.resolve('warehouseController');
@@ -32,20 +34,30 @@ const scoutUploadRateLimiter = rateLimit({
 });
 
 // --- CRUD Endpoints ---
+router.use('/scout/voice-notes', require('./scoutVoiceNotes'));
+router.post('/scout/resolve-location', locationCheckRateLimiter, verifyScoutToken, resolveFormLocation);
+router.post('/resolve-location', authMiddleware.authenticateJWT,
+    authMiddleware.requireAccess(CAPS.WAREHOUSE_EDIT_OWN), locationCheckRateLimiter, resolveFormLocation);
+router.get('/:id/voice-notes/:noteId/playback',
+    authMiddleware.authenticateJWT,
+    authMiddleware.requireAccess(CAPS.WAREHOUSE_VIEW_OWN),
+    requireWarehouseEntry('view'),
+    require('../controllers/voiceNoteController').warehousePlayback,
+);
 
 /**
  * GET /api/warehouses
  */
 router.get('/', 
     authMiddleware.authenticateJWT,
-    authMiddleware.requireAccess(CAPS.DASHBOARD),
+    authMiddleware.requireAccess(CAPS.WAREHOUSE_VIEW_OWN),
     warehouseController.getAllWarehouses
 );
 
 /** Authenticated, non-sensitive metadata for dashboard filter comboboxes. */
 router.get('/filter-options',
     authMiddleware.authenticateJWT,
-    authMiddleware.requireAccess(CAPS.DASHBOARD),
+    authMiddleware.requireAccess(CAPS.WAREHOUSE_VIEW_OWN),
     warehouseController.getFilterOptions
 );
 
@@ -54,7 +66,7 @@ router.get('/filter-options',
  */
 router.get('/search', 
     authMiddleware.authenticateJWT,
-    authMiddleware.requireAccess(CAPS.DASHBOARD),
+    authMiddleware.requireAccess(CAPS.WAREHOUSE_VIEW_OWN),
     warehouseController.searchWarehouses
 );
 
@@ -63,7 +75,7 @@ router.get('/search',
  */
 router.get('/statistics',
     authMiddleware.authenticateJWT,
-    authMiddleware.requireAccess(CAPS.DASHBOARD),
+    authMiddleware.requireAccess(CAPS.WAREHOUSE_VIEW_OWN),
     warehouseController.getWarehouseStatistics
 );
 
@@ -74,7 +86,7 @@ router.get('/statistics',
  */
 router.get('/coordinates',
     authMiddleware.authenticateJWT,
-    authMiddleware.requireAccess(CAPS.DASHBOARD),
+    authMiddleware.requireAccess(CAPS.WAREHOUSE_VIEW_OWN),
     warehouseController.getWarehouseCoordinates
 );
 
@@ -86,7 +98,8 @@ router.get('/coordinates',
  */
 router.get('/:id/contact-number',
     authMiddleware.authenticateJWT,
-    authMiddleware.requireAccess(CAPS.DASHBOARD),
+    authMiddleware.requireAccess(CAPS.WAREHOUSE_VIEW_OWN),
+    requireWarehouseEntry('view'),
     validationMiddleware.validateContactReveal,
     warehouseController.getContactNumber
 );
@@ -98,7 +111,8 @@ router.get('/:id/contact-number',
  */
 router.get('/:id/visit-notes',
     authMiddleware.authenticateJWT,
-    authMiddleware.requireAccess(CAPS.DASHBOARD),
+    authMiddleware.requireAccess(CAPS.WAREHOUSE_VIEW_OWN),
+    requireWarehouseEntry('view'),
     visitNoteController.list
 );
 
@@ -107,7 +121,8 @@ router.get('/:id/visit-notes',
  */
 router.post('/:id/visit-notes',
     authMiddleware.authenticateJWT,
-    authMiddleware.requireAccess(CAPS.DASHBOARD),
+    authMiddleware.requireAccess(CAPS.WAREHOUSE_EDIT_OWN),
+    requireWarehouseEntry('edit'),
     validationMiddleware.validateVisitNoteCreate,
     visitNoteController.create
 );
@@ -117,7 +132,8 @@ router.post('/:id/visit-notes',
  */
 router.put('/:id/visit-notes/:noteId',
     authMiddleware.authenticateJWT,
-    authMiddleware.requireAccess(CAPS.DASHBOARD),
+    authMiddleware.requireAccess(CAPS.WAREHOUSE_EDIT_OWN),
+    requireWarehouseEntry('edit'),
     validationMiddleware.validateVisitNoteUpdate,
     visitNoteController.update
 );
@@ -137,7 +153,8 @@ router.delete('/:id/visit-notes/:noteId',
  */
 router.get('/:id',
     authMiddleware.authenticateJWT,
-    authMiddleware.requireAccess(CAPS.DASHBOARD),
+    authMiddleware.requireAccess(CAPS.WAREHOUSE_VIEW_OWN),
+    requireWarehouseEntry('view'),
     warehouseController.getWarehouseById
 );
 
@@ -146,7 +163,8 @@ router.get('/:id',
  */
 router.post('/', 
     authMiddleware.authenticateJWT,
-    authMiddleware.requireAccess(CAPS.DASHBOARD),
+    authMiddleware.requireAccess(CAPS.WAREHOUSE_EDIT_OWN),
+    validateDashboardForm,
     validationMiddleware.validateWarehouseCreate,
     warehouseController.createWarehouse
 );
@@ -158,6 +176,7 @@ router.post('/',
 router.post('/scout', 
     scoutRateLimiter,
     verifyScoutToken,
+    validateNewWarehouseForm,
     validationMiddleware.validateWarehouseCreate,
     warehouseController.createScoutWarehouse
 );
@@ -167,7 +186,8 @@ router.post('/scout',
  */
 router.put('/:id', 
     authMiddleware.authenticateJWT,
-    authMiddleware.requireAccess(CAPS.DASHBOARD),
+    authMiddleware.requireAccess(CAPS.WAREHOUSE_EDIT_OWN),
+    requireWarehouseEntry('edit'),
     validationMiddleware.validateWarehouseUpdate,
     warehouseController.updateWarehouse
 );
@@ -188,7 +208,7 @@ router.delete('/:id',
  */
 router.post('/presigned-url', 
     authMiddleware.authenticateJWT,
-    authMiddleware.requireAccess(CAPS.DASHBOARD),
+    authMiddleware.requireAccess(CAPS.WAREHOUSE_EDIT_OWN),
     validationMiddleware.validateFileUpload,
     warehouseController.generatePresignedUrl
 );
@@ -209,7 +229,7 @@ router.post('/scout/presigned-url',
  */
 router.post('/presigned-urls/batch', 
     authMiddleware.authenticateJWT,
-    authMiddleware.requireAccess(CAPS.DASHBOARD),
+    authMiddleware.requireAccess(CAPS.WAREHOUSE_EDIT_OWN),
     validationMiddleware.validateBatchFileUpload,
     warehouseController.generateMultiplePresignedUrls
 );
@@ -219,7 +239,7 @@ router.post('/presigned-urls/batch',
  */
 router.post('/files/:fileName/validate', 
     authMiddleware.authenticateJWT,
-    authMiddleware.requireAccess(CAPS.DASHBOARD),
+    authMiddleware.requireAccess(CAPS.WAREHOUSE_EDIT_OWN),
     warehouseController.validateUploadedFile
 );
 
@@ -237,7 +257,7 @@ router.delete('/files/:fileName',
  */
 router.get('/files/:fileName', 
     authMiddleware.authenticateJWT,
-    authMiddleware.requireAccess(CAPS.DASHBOARD),
+    authMiddleware.requireAccess(CAPS.WAREHOUSE_VIEW_OWN),
     warehouseController.getFileInfo
 );
 

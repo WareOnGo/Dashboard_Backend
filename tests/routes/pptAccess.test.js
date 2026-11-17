@@ -31,7 +31,7 @@ let mockCapabilityLookups = 0;
 
 jest.mock('../../src/utils/access', () => {
     const actual = jest.requireActual('../../src/utils/access');
-    const GRANTED = { DASHBOARD: true, CALL_DASHBOARD: false, REVIEW: false, ADMIN: false };
+    const GRANTED = { DASHBOARD: true, WAREHOUSE_VIEW_OWN: true, CALL_DASHBOARD: false, REVIEW: false, ADMIN: false };
     const NONE = { DASHBOARD: false, CALL_DASHBOARD: false, REVIEW: false, ADMIN: false };
     return {
         ...actual,

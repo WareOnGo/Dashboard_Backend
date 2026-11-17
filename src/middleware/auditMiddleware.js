@@ -1,4 +1,5 @@
 // src/middleware/auditMiddleware.js
+const { editorIdentity, editorUserId } = require('../utils/editorIdentity');
 
 /**
  * Audit middleware factory.
@@ -30,7 +31,8 @@ function createAuditMiddleware(auditLogService) {
         res.on('finish', () => {
             if (pending.length === 0) return;
 
-            const userEmail = req.user?.email || 'anonymous';
+            const userEmail = editorIdentity(req.user) || 'anonymous';
+            const actorUserId = editorUserId(req.user);
             const userName = req.user?.name || null;
             const ipAddress = req.ip || req.connection?.remoteAddress || null;
 
@@ -38,6 +40,9 @@ function createAuditMiddleware(auditLogService) {
                 // Fire-and-forget — AuditLogService.log() already swallows errors
                 auditLogService.log({
                     ...entry,
+                    metadata: entry.metadata || actorUserId != null
+                        ? { ...entry.metadata, actorUserId }
+                        : null,
                     userEmail,
                     userName,
                     ipAddress

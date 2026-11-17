@@ -13,7 +13,7 @@ test('viewport filters are validated and preserve dashboard search, owner, compl
     const fc = await service.warehouses({ bbox, limit: '25', search: 'nelamangla', state: 'Karnataka', contactPerson: 'Sharma', fireNoc: 'available', minArea: '5000', maxRate: '22.5' });
     expect(model.warehousesInBbox).toHaveBeenCalledWith(box, 26, {
         search: 'nelamangla', state: 'Karnataka', contactPerson: 'Sharma', fireNoc: 'available', minArea: 5000, maxRate: 22.5,
-    }, ['Nelamangala']);
+    }, ['Nelamangala'], {});
     expect(markets.namesMatching).toHaveBeenCalledWith('nelamangla');
     expect(fc.features[0].geometry.coordinates).toEqual([77.6, 12.9]);
     expect(fc.features[0].properties).toEqual({ id: 1, city: 'Bengaluru', availability: 'Yes', warehouseType: 'PEB' });
@@ -80,7 +80,7 @@ test('the ordinary GIS call still uses the same bounded query without dashboard 
     const model = { warehousesInBbox: jest.fn().mockResolvedValue([row(7)]) };
     const service = new GeoService(model);
     const fc = await service.warehouses({ bbox });
-    expect(model.warehousesInBbox).toHaveBeenCalledWith(box, 2001, {}, []);
+    expect(model.warehousesInBbox).toHaveBeenCalledWith(box, 2001, {}, [], {});
     expect(fc.features).toHaveLength(1);
     expect(fc.truncated).toBe(false);
 });
@@ -89,7 +89,7 @@ test('a bounded warehouse read can advance beyond a capped page by ID', async ()
     const model = { warehousesInBbox: jest.fn().mockResolvedValue([row(2002)]) };
     const service = new GeoService(model);
     await service.warehouses({ bbox, afterId: '2001', limit: '2000' });
-    expect(model.warehousesInBbox).toHaveBeenCalledWith(box, 2001, { afterId: 2001 }, []);
+    expect(model.warehousesInBbox).toHaveBeenCalledWith(box, 2001, { afterId: 2001 }, [], {});
     const prisma = { $queryRaw: jest.fn().mockResolvedValue([]) };
     await new GeoModel(prisma).warehousesInBbox(box, 2001, { afterId: 2001 });
     const query = Prisma.sql(...prisma.$queryRaw.mock.calls[0]);

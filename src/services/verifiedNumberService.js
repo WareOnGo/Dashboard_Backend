@@ -7,6 +7,7 @@ const { isAdmin } = require('../utils/admin');
 const { invalidateCapabilities } = require('../utils/access');
 const { clearScoutCache } = require('../middleware/scoutMiddleware');
 const database = require('../utils/database');
+const { warehousePermissionPatch, WAREHOUSE_PERMISSION_COLUMNS, NEW_EMPLOYEE_WAREHOUSE_PERMISSIONS } = require('../utils/warehousePermissions');
 
 const clientError = (message, statusCode, details = null) => {
     const err = new Error(message);
@@ -24,6 +25,7 @@ const CAPABILITY_COLUMNS = Object.freeze([
     'analystAccess',
     'callDashboardAccess',
     'dashboardAccess',
+    ...WAREHOUSE_PERMISSION_COLUMNS,
     'reviewerAccess',
 ]);
 
@@ -46,8 +48,8 @@ const sameEmail = (a, b) =>
  *  - Admins must not be able to lock the organization out of this panel, hence the
  *    self-demotion and last-admin rules.
  *
- * Single-statement operations only (no interactive transactions) to stay safe on the
- * Supabase pooler.
+ * Roster edits hold a short transaction-scoped lock through their checks and write;
+ * no network work or session-level state is held on the Supabase pooler.
  */
 class VerifiedNumberService extends BaseService {
     /**
@@ -136,6 +138,11 @@ class VerifiedNumberService extends BaseService {
      * @private
      */
     async assertNotLockingOut(existing, data, actor) {
+        // Environment admins also require an active roster identity. Never let
+        // an admin invalidate their own access through a crafted API request.
+        if (sameEmail(existing.email, actor?.email) && data.is_active === false) {
+            throw clientError('You cannot deactivate your own account. Ask another admin to do it.', 403);
+        }
         const losesAdmin =
             (data.adminAccess === false && existing.adminAccess) ||
             (data.is_active === false && existing.adminAccess);
@@ -143,7 +150,7 @@ class VerifiedNumberService extends BaseService {
         if (!losesAdmin) return;
 
         // An env-allowlisted admin (ADMIN_EMAILS) draws access from the environment,
-        // so editing their own row cannot lock them out.
+        // so removing only their roster admin flag does not remove their access.
         if (sameEmail(existing.email, actor?.email) && !isAdmin(actor?.email)) {
             throw clientError(
                 'You cannot remove your own admin access. Ask another admin to do it.',
@@ -194,6 +201,10 @@ class VerifiedNumberService extends BaseService {
     create(payload, actor) {
         return this.executeOperation(async () => {
             const data = this.normalize(payload);
+            // Explicit restrictions override the creation defaults and cascade as
+            // usual. Defaults are never applied to updates of existing employees.
+            const permissions = warehousePermissionPatch(NEW_EMPLOYEE_WAREHOUSE_PERMISSIONS, data);
+            Object.assign(data, NEW_EMPLOYEE_WAREHOUSE_PERMISSIONS, permissions);
             if (typeof data.phone_number !== 'string' || !data.phone_number) {
                 throw clientError('phone_number is required and must be a valid phone number', 400);
             }
@@ -231,30 +242,37 @@ class VerifiedNumberService extends BaseService {
      */
     update(id, payload, actor) {
         return this.executeOperation(async () => {
-            const { confirmIdentityChange, ...edits } = payload;
-
-            const existing = await this.verifiedNumberModel.findByIdAdmin(id);
-            if (!existing) throw clientError(`Employee with ID ${id} not found`, 404);
-
-            const data = this.normalize(edits);
-
-            await this.assertIdentityChangeConfirmed(existing, data, confirmIdentityChange === true);
-            await this.assertNotLockingOut(existing, data, actor);
-            await this.assertUnique(data, existing.id);
-
-            // Diff before the write, against the normalized payload, so the audit trail
-            // records the values actually persisted rather than the raw request body.
-            const changes = computeChanges(existing, data);
-
             try {
-                const row = await this.verifiedNumberModel.updateById(id, data);
-                // Grants and revokes must take effect on the next request, not after
-                // the capability TTL. Both addresses matter when the email changed.
-                invalidateCapabilities(existing.email);
-                invalidateCapabilities(row.email);
-                clearScoutCache(existing.empID);
-                clearScoutCache(row.empID);
-                return { row, changes };
+                const result = await this.verifiedNumberModel.withRosterEdit(async model => {
+                    if (typeof actor?.email !== 'string' || !actor.email) {
+                        throw clientError('Active administrator access is required.', 403);
+                    }
+                    const editors = await model.findEditorAccess(actor.email);
+                    if (editors.length !== 1 || editors[0].is_active !== true
+                        || (editors[0].adminAccess !== true && !isAdmin(actor.email))) {
+                        throw clientError('Active administrator access is required.', 403);
+                    }
+                    // Bind every guard to the transaction client, never the outer pool.
+                    const guard = new VerifiedNumberService(model);
+                    const { confirmIdentityChange, ...edits } = payload;
+                    const existing = await model.findByIdAdmin(id);
+                    if (!existing) throw clientError(`Employee with ID ${id} not found`, 404);
+                    const data = this.normalize(edits);
+                    Object.assign(data, warehousePermissionPatch(existing, data));
+                    await guard.assertIdentityChangeConfirmed(existing, data, confirmIdentityChange === true);
+                    await guard.assertNotLockingOut(existing, data, actor);
+                    await guard.assertUnique(data, existing.id);
+                    const changes = computeChanges(existing, data);
+                    const row = await model.updateById(id, data);
+                    return { row, changes, existing };
+                });
+                // Invalidate only after commit. Other processes recheck writes and
+                // admin gates even if their ordinary read cache is still warm.
+                invalidateCapabilities(result.existing.email);
+                invalidateCapabilities(result.row.email);
+                clearScoutCache(result.existing.empID);
+                clearScoutCache(result.row.empID);
+                return { row: result.row, changes: result.changes };
             } catch (err) {
                 if (err.code === 'P2025') throw clientError(`Employee with ID ${id} not found`, 404);
                 if (err.code === 'P2002') {

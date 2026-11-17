@@ -1,6 +1,7 @@
 // ppt-slides/detailedSlide.js
 const { logError, logWarn } = require('../utils/logger');
 const { fetchWarehouseImage } = require('../utils/image');
+const { formatHandover } = require('../utils/handover');
 
 /**
  * Generate detailed slides for a warehouse - split into location and technical slides
@@ -94,7 +95,7 @@ async function generateTechnicalSlide(pptx, warehouse, optionIndex) {
 
   // Render technical details and commercials
   currentY = renderTechnicalDetails(slide, warehouse, leftColumnX, currentY, leftColumnW);
-  renderCommercials(slide, warehouse, leftColumnX, currentY, leftColumnW);
+  renderCommercials(slide, warehouse, leftColumnX, currentY, leftColumnW, pptx.handoverReferenceDate);
 
   // Right column for warehouse image
   const rightColumnX = 7.2;
@@ -344,7 +345,7 @@ function renderTechnicalDetails(slide, warehouse, x, y, width) {
  * @param {number} y - Y position
  * @param {number} width - Section width
  */
-function renderCommercials(slide, warehouse, x, y, width) {
+function renderCommercials(slide, warehouse, x, y, width, now) {
   // Section header - aligned with table content (accounting for cell margin)
   slide.addText('Commercials', {
     x: x - 0.05,
@@ -365,6 +366,10 @@ function renderCommercials(slide, warehouse, x, y, width) {
     : 'N/A';
 
   const commercialsData = [
+    [
+      { text: 'Handover', options: { bold: true, fontSize: 10 } },
+      { text: formatHandover(warehouse, now), options: { fontSize: 10 } }
+    ],
     [
       { text: 'Rent per sqft', options: { bold: true, fontSize: 10 } },
       { text: rentPerSqft, options: { fontSize: 10 } }

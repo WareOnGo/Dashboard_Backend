@@ -24,6 +24,16 @@ jest*.config.js
 # process, needs LibreOffice and poppler, and never runs in a container.
 tools/ppt-preview/
 
+# Private production data and generated media must not enter the build context.
+tools/website-image-review-batches/
+tools/image-pipeline/
+tools/image-compression-backfill/
+tools/r2-audit/
+tools/*.rollback.sql
+tools/*.plan.json
+tools/*.plan.applied.json
+*.jsonl
+
 # Development files
 .vscode/
 .idea/

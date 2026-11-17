@@ -60,7 +60,11 @@ model VerifiedNumber {
   adminAccess         Boolean        @default(false)
   analystAccess       Boolean        @default(false)
   callDashboardAccess Boolean        @default(false)
-  dashboardAccess     Boolean        @default(false)
+  dashboardAccess     Boolean        @default(true)
+  viewOwnWarehouseEntries Boolean @default(true)
+  editOwnWarehouseEntries Boolean @default(true)
+  viewAllWarehouseEntries Boolean @default(true)
+  editAllWarehouseEntries Boolean @default(false)
   reviewerAccess      Boolean        @default(false)
   Employee            Employee?
   agent_session       agent_session?
@@ -89,10 +93,14 @@ model Warehouse {
   clearHeightFt               String?
   compliances                 String
   otherSpecifications         String?
+  /// Plain-text website description. Null until copy has been prepared.
+  ai_description              String?              @db.Text
   ratePerSqft                 String
   availabilityLastReviewedOn  DateTime?            @db.Date
   availability                String?
   uploadedBy                  String
+  /// Last authenticated editor's email, or user ID when email is unavailable.
+  lastEditedBy                String?
   isBroker                    String?
   photos                      String?
   createdAt                   DateTime?            @default(now())
@@ -142,6 +150,7 @@ model Warehouse {
   cam                         String?
   chargeableArea              Int?
   scoutNotes                  String?
+  scoutVoiceNotes             Json                    @default("[]")
   liftAccess                  Boolean?
   liftLoadCapacity            String?
   passengerLiftCount          String?
@@ -408,10 +417,14 @@ model StagedWarehouse {
   clearHeightFt               String?
   compliances                 String?
   otherSpecifications         String?
+  /// Mirrors Warehouse.ai_description through submission review and promotion.
+  ai_description              String?           @db.Text
   ratePerSqft                 String?
   availabilityLastReviewedOn  DateTime?            @db.Date
   availability                String?
   uploadedBy                  String?
+  /// Preserved when the submission is promoted to Warehouse.
+  lastEditedBy                String?
   isBroker                    String?
   photos                      String?
   photosWebp                  String?
@@ -469,6 +482,7 @@ model StagedWarehouse {
   powerKva                    String?
   vaastuCompliance            String?
   scoutNotes                  String?
+  scoutVoiceNotes             Json?                   @default("[]")
   liftAccess                  Boolean?
   liftLoadCapacity            String?
   passengerLiftCount          String?
@@ -485,6 +499,28 @@ model StagedWarehouse {
   suitableFor                 String[]          @default([])
 
   @@index([reviewStatus, submittedAt])
+}
+
+model ScoutVoiceNoteAsset {
+  id                String   @id @default(uuid())
+  scoutId           Int
+  clientRecordingId String
+  draftId           String
+  uploadKey         String
+  storageKey        String?
+  contentType       String
+  expectedSize      Int
+  sizeBytes         Int?
+  durationMs        Int?
+  state             String   @default("UPLOADING")
+  operationToken    String?
+  leaseUntil        DateTime?
+  expiresAt         DateTime
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([scoutId, clientRecordingId])
+  @@index([state, expiresAt])
 }
 
 model agent_session {
@@ -1075,8 +1111,8 @@ enum StagingStatus {
 }
 
 /// How a warehouse's handover timing is expressed. FIXED means a precise calendar
-/// date (handoverDate); VARIABLE means a lead time relative to today
-/// (handoverLeadValue + handoverLeadUnit, e.g. "~2 months").
+/// date (handoverDate); VARIABLE means a lead time after the letter of intent
+/// (handoverLeadValue + handoverLeadUnit, e.g. "2 Months Post LOI").
 ///
 /// handoverType selects which side is READ — it does not clear the other. Both are
 /// kept so that toggling the mode back restores whatever was there before, the same
@@ -1108,4 +1144,87 @@ enum WaterSupply {
 enum BlogStatus {
   DRAFT
   PUBLISHED
+}
+
+// Field review is independent of staged submission publishing. Warehouse IDs are
+// retained as scalar references so deleting a listing never deletes its audit.
+model WarehouseFieldReview {
+  id           String @id @default(uuid())
+  warehouseId  Int
+  assigneeId   Int
+  uploaderId   Int?
+  createdBy    String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @default(now()) @updatedAt
+  closedAt     DateTime?
+  version      Int @default(0)
+  flags        WarehouseFieldFlag[]
+  events       WarehouseFieldReviewEvent[]
+  @@index([assigneeId, closedAt])
+  @@index([warehouseId, createdAt])
+}
+
+model WarehouseFieldFlag {
+  id               String @id @default(uuid())
+  reviewId         String
+  warehouseId      Int
+  fieldKey         String
+  labelSnapshot    String @default("")
+  comment          String
+  createdBy        String?
+  originalValue    Json
+  status           String @default("NEEDS_RESPONSE")
+  version          Int @default(0)
+  baselineValue    Json?
+  baselineVersion  Int?
+  proposedValue    Json?
+  resolution       String?
+  explanation      String?
+  respondedBy      String?
+  respondedAt      DateTime?
+  returnComment    String?
+  decision         String?
+  decisionReason   String?
+  finalValue       Json?
+  decidedBy        String?
+  decidedAt        DateTime?
+  createdAt        DateTime @default(now())
+  review           WarehouseFieldReview @relation(fields: [reviewId], references: [id], onDelete: Restrict)
+  @@index([reviewId, status])
+  @@index([warehouseId, fieldKey])
+}
+
+model WarehouseFieldReviewEvent {
+  id          String @id @default(uuid())
+  reviewId    String
+  flagId      String?
+  action      String
+  actorEmail  String
+  actorName   String
+  payload     Json
+  requestId   String? @unique
+  requestHash String?
+  createdAt   DateTime @default(now())
+  review      WarehouseFieldReview @relation(fields: [reviewId], references: [id], onDelete: Restrict)
+  @@index([reviewId, createdAt])
+}
+
+model WarehouseFieldVersion {
+  warehouseId Int
+  fieldKey    String
+  version     Int @default(0)
+  @@id([warehouseId, fieldKey])
+}
+
+model WarehouseFieldEdit {
+  id          String @id @default(uuid())
+  warehouseId Int
+  fieldKey    String
+  version     Int?
+  oldValue    Json
+  newValue    Json
+  actorEmail  String?
+  source      String
+  createdAt   DateTime @default(now())
+  @@index([warehouseId, fieldKey, createdAt])
 }

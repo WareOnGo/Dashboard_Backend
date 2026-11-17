@@ -134,7 +134,7 @@ class StagingController extends BaseController {
     /** PATCH /api/staging/:id */
     updateSubmission = this.asyncHandler(async (req, res, next) => {
         try {
-            const { submission, changes } = await this.stagingService.editSubmission(req.params.id, req.body);
+            const { submission, changes } = await this.stagingService.editSubmission(req.params.id, req.body, req.user);
 
             req.audit(
                 'UPDATE',

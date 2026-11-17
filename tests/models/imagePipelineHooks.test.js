@@ -29,3 +29,23 @@ test('promotion registers only after the warehouse has been linked successfully'
     await expect(model.promote('staged', { media, warehouseData: {} }, { email: 'fixture@example.test' })).rejects.toThrow('link failed');
     expect(registerWarehouseImages).not.toHaveBeenCalled();
 });
+
+test('authenticated edits commit before best-effort image registration', async () => {
+    const prisma = fixture();
+    const events = [];
+    prisma.$transaction = jest.fn(async operation => {
+        expect(Array.isArray(operation)).toBe(true);
+        const saved = await Promise.all(operation);
+        events.push('committed');
+        return saved;
+    });
+    registerWarehouseImages.mockImplementationOnce(async client => {
+        expect(client).toBe(prisma);
+        expect(events).toEqual(['committed']);
+        events.push('registered');
+    });
+    const result = await new WarehouseModel(prisma).update(8, { media }, undefined, { actorEmail: 'editor@example.test' });
+    expect(result.id).toBe(8);
+    expect(events).toEqual(['committed', 'registered']);
+    expect(prisma.$queryRawUnsafe).toHaveBeenCalledWith(expect.stringContaining("wareongo.actor_email"), 'editor@example.test');
+});

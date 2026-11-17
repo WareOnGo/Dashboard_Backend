@@ -33,6 +33,7 @@ const IGNORED_FIELDS = new Set([
     'updatedBy',
     'updatedByEmail',
     'lastModified',
+    'lastEditedBy',
     'updatedAt',
     'status_updated_at',
     'reviewerEmail',

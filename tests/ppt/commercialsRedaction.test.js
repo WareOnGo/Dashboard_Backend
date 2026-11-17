@@ -143,7 +143,10 @@ describe('the flag survives the HTTP layer', () => {
         const controller = new PptController(new PptGenerationService(model), { log: () => {} });
         const app = express();
         app.use(express.json({ limit: '10mb' }));
-        app.post('/api/generate-ppt-v2', controller.handleGenerate({ variant: 'v2', label: 'v2' }));
+        app.post('/api/generate-ppt-v2', (req, _res, next) => {
+            req.user = { capabilities: { DASHBOARD: true, WAREHOUSE_VIEW_OWN: true, WAREHOUSE_VIEW_ALL: true } };
+            next();
+        }, controller.handleGenerate({ variant: 'v2', label: 'v2' }));
         return app;
     }
 

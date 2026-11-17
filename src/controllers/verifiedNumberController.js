@@ -1,5 +1,7 @@
 // src/controllers/verifiedNumberController.js
 const BaseController = require('./baseController');
+const { isAdmin } = require('../utils/admin');
+const adminRow = row => ({ ...row, environmentAdmin: isAdmin(row.email) });
 const { changeMetadata } = require('../utils/auditDiff');
 
 /**
@@ -48,7 +50,7 @@ class VerifiedNumberController extends BaseController {
             // Express 5 makes req.query read-only, so validated params land here.
             const { search, includeInactive } = req.validatedQuery || {};
             const rows = await this.verifiedNumberService.list({ search, includeInactive });
-            this.sendSuccess(res, { data: rows });
+            this.sendSuccess(res, { data: rows.map(adminRow) });
         } catch (error) {
             this.handleServiceError(res, error, next);
         }
@@ -72,11 +74,15 @@ class VerifiedNumberController extends BaseController {
                         analystAccess: row.analystAccess,
                         callDashboardAccess: row.callDashboardAccess,
                         dashboardAccess: row.dashboardAccess,
+                        viewOwnWarehouseEntries: row.viewOwnWarehouseEntries,
+                        editOwnWarehouseEntries: row.editOwnWarehouseEntries,
+                        viewAllWarehouseEntries: row.viewAllWarehouseEntries,
+                        editAllWarehouseEntries: row.editAllWarehouseEntries,
                         reviewerAccess: row.reviewerAccess,
                     }
                 );
             }
-            this.sendCreated(res, row);
+            this.sendCreated(res, adminRow(row));
         } catch (error) {
             this.handleServiceError(res, error, next);
         }
@@ -103,7 +109,7 @@ class VerifiedNumberController extends BaseController {
                     changeMetadata(changes)
                 );
             }
-            this.sendSuccess(res, row);
+            this.sendSuccess(res, adminRow(row));
         } catch (error) {
             this.handleServiceError(res, error, next);
         }

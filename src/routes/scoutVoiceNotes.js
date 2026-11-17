@@ -1,0 +1,12 @@
+const router = require('express').Router();
+const rateLimit = require('express-rate-limit');
+const { verifyScoutToken } = require('../middleware/scoutMiddleware');
+const controller = require('../controllers/voiceNoteController');
+router.get('/configuration', controller.configuration);
+router.use(rateLimit({ windowMs: 3600000, max: 200, standardHeaders: true, legacyHeaders: false }));
+router.use(verifyScoutToken);
+router.post('/uploads', controller.begin);
+router.post('/uploads/:id/complete', controller.complete);
+router.get('/uploads/:id/playback', controller.ownPlayback);
+router.delete('/uploads/:id', controller.abandon);
+module.exports = router;

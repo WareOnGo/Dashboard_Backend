@@ -1,3 +1,4 @@
+const { assertWarehouseAccess } = require('../utils/warehouseAccess');
 // src/services/fileUploadService.js
 const BaseService = require('./baseService');
 const WarehouseValidator = require('../validators/warehouseValidator');
@@ -125,12 +126,12 @@ class FileUploadService extends BaseService {
      * @param {Object} validationOptions - Validation options
      * @returns {Object} Validation result
      */
-    async validateUploadedFile(fileName, validationOptions = {}) {
+    async validateUploadedFile(fileName, validationOptions = {}, user) {
         return this.executeOperation(async () => {
             const fileUrl = this.buildPublicUrl(fileName);
             
             // Apply business rules for file validation
-            const validationResult = await this.applyFileValidationBusinessRules(fileName, validationOptions);
+            const validationResult = await this.applyFileValidationBusinessRules(fileName, validationOptions, user);
             
             return {
                 fileName,
@@ -246,9 +247,10 @@ class FileUploadService extends BaseService {
      * @returns {Object} Validation result
      * @private
      */
-    async applyFileValidationBusinessRules(fileName, options = {}) {
+    async applyFileValidationBusinessRules(fileName, options = {}, user) {
         const validated = this.validateData(options, data => WarehouseValidator.fileValidationSchema.safeParse(data));
         const file = await this.getFileInfo(fileName);
+        if (user) assertWarehouseAccess(user, { uploadedBy: file.metadata?.uploader }, 'edit');
         const errors = [];
         const maxSize = validated.maxSize ?? FILE_UPLOAD.MAX_FILE_SIZE;
         if (!Number.isSafeInteger(file.size) || file.size <= 0) {

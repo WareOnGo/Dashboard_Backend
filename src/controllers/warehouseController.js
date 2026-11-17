@@ -2,6 +2,7 @@
 const BaseController = require('./baseController');
 const { changeMetadata } = require('../utils/auditDiff');
 const { toSubmissionResult } = require('../utils/submissionResult');
+const { warehouseScope, assertWarehouseAccess } = require('../utils/warehouseAccess');
 
 /**
  * WarehouseController class for handling warehouse HTTP requests
@@ -62,7 +63,7 @@ class WarehouseController extends BaseController {
         try {
             // The service validates/coerces the query params and returns a paginated
             // envelope: { data, pagination: { page, limit, total, totalPages } }.
-            const result = await this.warehouseService.getAllWarehouses(req.query);
+            const result = await this.warehouseService.getAllWarehouses(req.query, warehouseScope(req.user));
 
             // Opt-in: attach scene-type labels for each row's images, so a client
             // that will open a details view already has them and never needs a
@@ -94,7 +95,7 @@ class WarehouseController extends BaseController {
     });
 
     getFilterOptions = this.asyncHandler(async (req, res) => {
-        const options = await this.warehouseService.getFilterOptions();
+        const options = await this.warehouseService.getFilterOptions(warehouseScope(req.user));
         req.audit('READ', 'warehouse', null, 'Listed warehouse filter options', {
             locationCount: options.locations.length,
         });
@@ -109,7 +110,7 @@ class WarehouseController extends BaseController {
      */
     getWarehouseCoordinates = this.asyncHandler(async (req, res, next) => {
         try {
-            const data = await this.warehouseService.getWarehouseCoordinates(req.query);
+            const data = await this.warehouseService.getWarehouseCoordinates(req.query, warehouseScope(req.user));
 
             req.audit('READ', 'warehouse', null, 'Listed warehouse coordinates', {
                 resultCount: data.length,
@@ -208,7 +209,7 @@ class WarehouseController extends BaseController {
             });
 
             // Audit log captures scout details
-            req.user = { email: scout.email || scout.name }; // Mock req.user for audit logging if it relies on it
+            req.user = { id: scout.id, email: scout.email, name: scout.name };
             req.audit('CREATE', 'staged_warehouse', staged.id, `Staged scout warehouse in ${req.body.city}, ${req.body.state}`, {
                 source: 'SCOUT', // matches the staged row's `source` value (not 'SCOUT_FORM')
                 scoutId: scout.id,
@@ -251,17 +252,10 @@ class WarehouseController extends BaseController {
                 return this.sendError(res, 'Request body cannot be empty for an update', 400);
             }
             
-            // Add authenticated user context to update data
-            const updateData = {
-                ...req.body,
-                updatedBy: req.user.id,     // Track who updated the record
-                updatedByEmail: req.user.email,
-                lastModified: new Date()
-            };
-            
             // Update warehouse through service. `changes` is the field-level diff
-            // the service computed against the pre-update row.
-            const { warehouse: updatedWarehouse, changes } = await this.warehouseService.updateWarehouse(id, updateData);
+            // the service computed against the pre-update row. Keep trusted user
+            // identity separate from editable request fields.
+            const { warehouse: updatedWarehouse, changes } = await this.warehouseService.updateWarehouse(id, req.body, req.user);
 
             req.audit(
                 'UPDATE',
@@ -365,7 +359,7 @@ class WarehouseController extends BaseController {
             });
 
             // Search warehouses through service
-            const warehouses = await this.warehouseService.searchWarehouses(searchCriteria);
+            const warehouses = await this.warehouseService.searchWarehouses(searchCriteria, warehouseScope(req.user));
 
             req.audit('SEARCH', 'warehouse', null, 'Searched warehouses', {
                 criteria: searchCriteria,
@@ -389,7 +383,7 @@ class WarehouseController extends BaseController {
     getWarehouseStatistics = this.asyncHandler(async (req, res, next) => {
         try {
             // Get statistics from service
-            const statistics = await this.warehouseService.getWarehouseStatistics();
+            const statistics = await this.warehouseService.getWarehouseStatistics(warehouseScope(req.user));
 
             req.audit('READ', 'warehouse', null, 'Viewed warehouse statistics');
 
@@ -541,7 +535,7 @@ class WarehouseController extends BaseController {
             const validationOptions = req.body || {};
 
             // Validate file through service
-            const validationResult = await this.fileUploadService.validateUploadedFile(fileName, validationOptions);
+            const validationResult = await this.fileUploadService.validateUploadedFile(fileName, validationOptions, req.user);
 
             req.audit('READ', 'file', fileName, `Validated uploaded file ${fileName}`);
 
@@ -596,6 +590,7 @@ class WarehouseController extends BaseController {
 
             // Get file info through service
             const fileInfo = await this.fileUploadService.getFileInfo(fileName);
+            assertWarehouseAccess(req.user, { uploadedBy: fileInfo.metadata?.uploader });
 
             req.audit('READ', 'file', fileName, `Viewed file info for ${fileName}`);
 

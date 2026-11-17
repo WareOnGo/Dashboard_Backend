@@ -50,9 +50,10 @@ describe('Last Mile database mapping', () => {
         const fields = values({ offeredSpaceSqft: '9999', totalSpaceSqft: [9999], waterSupply: 'NONE' });
         for (const label of ['Total Land Area', 'Developer Name', 'Plan Sanction', 'Office area',
             'Adjacent Occupiers', 'Roof Type', 'Comments', 'Fire Fighting System/ Sprinklers',
-            'Connected & Sanctioned  Electricity Load', 'Time frame for availability']) {
+            'Connected & Sanctioned  Electricity Load']) {
             expect(fields[label]).toBe('NA');
         }
+        expect(fields['Time frame for availability']).toBe('Unconfirmed');
         expect(fields['Water Source & availability']).toBe('None');
     });
 
@@ -69,7 +70,7 @@ describe('Last Mile database mapping', () => {
         expect(fields['Total Built up Area']).toBe('NA');
         expect(fields['Quoted Rent in Rs./sq. ft./month']).toBe('0');
         expect(fields['Number of Docks/exits']).toBe('0');
-        expect(fields['Time frame for availability']).toBe('NA');
+        expect(fields['Time frame for availability']).toBe('Unconfirmed');
         expect(fields['Google Coordinated']).toBe('NA');
     });
 
@@ -136,6 +137,59 @@ describe('Last Mile database mapping', () => {
             .toContain('query=0,0');
         expect(values({ WarehouseData: { latitude: 91, longitude: 0 } })['Google Coordinated']).toBe('NA');
         expect(values({ googleLocation: 'javascript:alert(1)' })['Google Coordinated']).toBe('javascript:alert(1)');
+    });
+});
+
+describe('Last Mile handover SOP in generated workbooks', () => {
+    beforeEach(() => jest.useFakeTimers({ now: new Date('2026-10-25T00:00:00Z'), doNotFake: ['nextTick', 'setImmediate'] }));
+    afterEach(() => jest.useRealTimers());
+
+    it.each([
+        [{ handoverType: 'FIXED', handoverDate: null, availability: 'Yes' }, 'Unconfirmed'],
+        [{ handoverType: 'FIXED', handoverDate: null, availability: 'Immediate' }, 'Unconfirmed'],
+        [{ handoverType: 'FIXED', handoverDate: null, availability: 'Available' }, 'Unconfirmed'],
+        [{ handoverType: 'FIXED', handoverDate: null, availability: 'No' }, 'Unconfirmed'],
+        [{ handoverType: 'FIXED', handoverDate: null, availability: null }, 'Unconfirmed'],
+        [{ handoverType: null, handoverDate: null, availability: 'Yes' }, 'Unconfirmed'],
+        [{ handoverType: undefined, handoverDate: null, availability: 'Yes' }, 'Unconfirmed'],
+        [{ handoverType: 'FIXED', handoverDate: '2026-02-30', availability: 'Yes' }, 'Unconfirmed'],
+        [{ handoverType: 'FIXED', handoverDate: false, availability: 'Yes' }, 'Unconfirmed'],
+        [{ handoverType: 'FIXED', handoverDate: '2026-10-24', availability: 'No' }, 'Immediate'],
+        [{ handoverType: 'FIXED', handoverDate: '2026-10-25' }, 'Immediate'],
+        [{ handoverType: 'FIXED', handoverDate: '2026-11-08' }, 'Immediate'],
+        [{ handoverType: 'FIXED', handoverDate: '2026-11-09' }, '9 Nov 2026'],
+        [{ handoverType: null, handoverDate: '2026-11-09' }, '9 Nov 2026'],
+        [{ handoverType: 'UNKNOWN', handoverDate: '2026-11-09' }, 'Unconfirmed'],
+        [{ handoverType: 'VARIABLE', handoverLeadValue: null, handoverLeadUnit: 'MONTHS', availability: 'Yes' }, 'Unconfirmed'],
+        [{ handoverType: 'VARIABLE', handoverLeadValue: 2, handoverLeadUnit: null, handoverDate: '2026-10-24' }, 'Unconfirmed'],
+        [{ handoverType: 'VARIABLE', handoverLeadValue: 2, handoverLeadUnit: 'MONTHS', availability: 'Yes' }, '2 Months Post LOI'],
+        [{ handoverType: 'VARIABLE', handoverLeadValue: 1, handoverLeadUnit: 'DAYS', availability: 'No' }, '1 Day Post LOI'],
+        [{ handoverType: 'VARIABLE', handoverLeadValue: 120, handoverLeadUnit: 'MONTHS' }, '120 Months Post LOI'],
+        [{ handoverType: 'VARIABLE', handoverLeadValue: 0, handoverLeadUnit: 'DAYS' }, 'Immediate'],
+        [{ handoverType: 'VARIABLE', handoverLeadValue: true, handoverLeadUnit: 'MONTHS' }, 'Unconfirmed'],
+    ])('writes the SOP handover value for %p', async (timing, expected) => {
+        const workbook = await readWorkbook(await createLastMileBuffer([{ ...warehouse(), ...timing }]));
+        expect(workbook.worksheets[0].getCell('A13').text).toBe('Time frame for availability');
+        expect(workbook.worksheets[0].getCell('B13').text).toBe(expected);
+    });
+
+    it('keeps one reference day across worksheets, then recalculates for a new export', async () => {
+        jest.setSystemTime(new Date('2026-10-25T23:59:59Z'));
+        const records = [1, 2, 3, 4, 5].map(id => ({
+            ...warehouse(id), handoverType: 'FIXED', handoverDate: '2026-11-09',
+        }));
+        fetchImage.mockImplementationOnce(async () => {
+            jest.setSystemTime(new Date('2026-10-26T00:00:01Z'));
+            throw new Error('Photo timed out after midnight');
+        });
+        const workbook = await readWorkbook(await createLastMileBuffer(records, { 1: ['https://photos.test/one.webp'] }));
+        expect(fetchImage).toHaveBeenCalledTimes(1);
+        expect(workbook.worksheets[0].getCell('B13').text).toBe('9 Nov 2026');
+        expect(workbook.worksheets[1].getCell('B13').text).toBe('9 Nov 2026');
+
+        const nextWorkbook = await readWorkbook(await createLastMileBuffer(records));
+        expect(nextWorkbook.worksheets[0].getCell('B13').text).toBe('Immediate');
+        expect(nextWorkbook.worksheets[1].getCell('B13').text).toBe('Immediate');
     });
 });
 

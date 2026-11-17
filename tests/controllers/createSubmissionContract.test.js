@@ -38,6 +38,10 @@ function makePrisma({ linkFails = false } = {}) {
     return {
         staged,
         warehouses,
+        $queryRaw: async (_sql, id) => {
+            const row = staged.find(value => value.id === id);
+            return row ? [{ ...row, __editVersion: '1' }] : [];
+        },
         $queryRawUnsafe: async (_sql, id, warehouseJson, detailsJson, email, reviewedAt) => {
             const row = staged.find(value => value.id === id && value.reviewStatus === 'PENDING');
             if (!row) return [];
