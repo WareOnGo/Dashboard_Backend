@@ -25,7 +25,7 @@ Availability and Last reviewed now use one linked review item. The [adversarial 
 
 ## Deployment
 
-The migration is additive and **is not applied automatically on server startup**. It has only been exercised against an isolated local test database during development.
+The migration is additive and **is not applied automatically on server startup**. Production installation was applied and verified on 18 November 2026 (IST): all five tables, both tracking triggers, the active-review uniqueness indexes, RLS and backend access were verified, with direct public/API table access revoked.
 
 Before enabling this code in a deployed environment:
 
