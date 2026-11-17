@@ -375,10 +375,16 @@ function skip(name, reason) {
   const v3Details = v3.slides.find((sl) => /Option 1 - ID 1000$|Option 1 - ID 1000 •/.test(sl.joined))
     || v3.slides[2];
 
-  // The columns are TCI's, not v2's — these labels exist in one and not the other.
-  const tciOnlyLabels = ['Type of Option', 'Status of Land', 'Electrical workload', 'Building Stability Certificate', 'Handover timeline'];
-  const missing = tciOnlyLabels.filter((label) => !v3Details.joined.includes(label));
-  check('carries the TCI field set', missing.length === 0, `missing: ${missing.join(', ')}`);
+  // V3 shares the TCI field source but has its own specification rows.
+  const v3Labels = ['Type of Option', 'Status of Land', 'Plinth Height', 'Electrical workload', 'Handover timeline'];
+  const missing = v3Labels.filter((label) => !v3Details.joined.includes(label));
+  const excluded = ['Insulation details', 'Building Stability Certificate']
+    .filter((label) => v3Details.joined.includes(label));
+  check(
+    'carries the V3 field set',
+    missing.length === 0 && excluded.length === 0,
+    `missing: ${missing.join(', ')}; unexpected: ${excluded.join(', ')}`,
+  );
 
   // Dropped from v3 only — the slide title already identifies the property, and
   // the TCI deck still carries it.
