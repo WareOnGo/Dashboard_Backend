@@ -27,6 +27,14 @@ file metadata, field reviews, and browser state when permissions change.
    generated `AVG(integer[])`, which PostgreSQL rejects. A disposable database test
    reproduced this. The query now sums each warehouse's area array before averaging
    permitted warehouses, retaining the same escaped ownership filter as GIS.
+5. **High — search integration could bypass ownership.** Reconciliation with the
+   newer ranked search required applying the scope to candidate selection, final
+   page reads, coordinates and viewport queries. Pasted-ID diagnostics now check
+   existence only inside that scope, so inaccessible IDs appear missing rather
+   than revealing another employee's warehouse. PostgreSQL regressions cover
+   ranked and pasted searches, case-insensitive owners and literal underscores;
+   service regressions cover pagination, explicit sorting, all-results exports
+   and map queries. Dashboard scope changes also clear pasted-ID diagnostics.
 
 ## Boundaries verified and retained
 

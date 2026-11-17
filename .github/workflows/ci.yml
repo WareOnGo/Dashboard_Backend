@@ -24,8 +24,12 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
+      - name: Install voice-note media tools
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - run: npm ci
       - run: npm run test:ci
+      - name: Analytics access policy regressions
+        run: node --test tests/scripts/warehouseAnalyticsAccess.test.cjs
       - name: Save coverage
         if: always()
         uses: actions/upload-artifact@v4

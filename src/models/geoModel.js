@@ -86,7 +86,7 @@ class GeoModel extends BaseModel {
      * Deliberately lean: pin identity, labels, availability and coordinates.
      * Opening a warehouse fetches the full record.
      */
-    async warehousesInBbox(bbox, limit, filters = {}, microMarkets = [], accessWhere = {}) {
+    async warehousesInBbox(bbox, limit, filters = {}, searchIds = null, accessWhere = {}) {
         try {
             const envelope = Prisma.sql`ST_MakeEnvelope(${bbox.west}, ${bbox.south}, ${bbox.east}, ${bbox.north}, 4326)::geography`;
             return await this.prisma.$queryRaw`
@@ -98,7 +98,7 @@ class GeoModel extends BaseModel {
                   AND d.longitude BETWEEN ${bbox.west} AND ${bbox.east}
                   AND d.latitude BETWEEN ${bbox.south} AND ${bbox.north}
                 ${accessWhere.uploadedBy ? Prisma.sql`AND w."uploadedBy" ILIKE ${accessWhere.uploadedBy.equals}` : Prisma.empty}
-                ${warehouseMapFilters(filters, microMarkets)}
+                ${warehouseMapFilters(filters, searchIds)}
                 ORDER BY w.id
                 LIMIT ${limit}
             `;

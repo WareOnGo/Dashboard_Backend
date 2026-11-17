@@ -103,14 +103,15 @@ class StagingController extends BaseController {
         }
     });
 
-    /** GET /api/staging?reviewStatus=&page=&limit= */
+    /** GET /api/staging?reviewStatus=&page=&limit=&search= */
     listSubmissions = this.asyncHandler(async (req, res, next) => {
         try {
-            const { reviewStatus, page, limit } = req.validatedQuery || {};
-            const submissions = await this.stagingService.listSubmissions({ reviewStatus, page, limit });
+            const { reviewStatus, page, limit, search } = req.validatedQuery || {};
+            const submissions = await this.stagingService.listSubmissions({ reviewStatus, page, limit, search });
 
             req.audit('READ', 'staged_warehouse', null, 'Listed staged submissions', {
                 reviewStatus: reviewStatus || 'ALL',
+                search,
                 resultCount: submissions.length,
             });
 

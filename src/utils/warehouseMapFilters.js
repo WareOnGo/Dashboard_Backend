@@ -1,12 +1,10 @@
 const { Prisma } = require('@prisma/client');
-const { phoneSearchDigits, phoneSearchCondition, warehouseSearchId } = require('./warehouseSearch');
 
 // These column names are fixed here; request values are always SQL parameters.
 const TEXT_FIELDS = [
     'city', 'state', 'zone', 'warehouseType', 'warehouseOwnerType',
     'availability', 'isBroker', 'uploadedBy', 'contactPerson', 'listing_type', 'status',
 ];
-const SEARCH_FIELDS = ['address', 'city', 'contactPerson', 'warehouseType', 'warehouseOwnerType'];
 const column = (field) => Prisma.raw(`w."${field}"`);
 const contains = (field, value) => Prisma.sql`${column(field)} ILIKE ${`%${value}%`}`;
 
@@ -14,19 +12,19 @@ const contains = (field, value) => Prisma.sql`${column(field)} ILIKE ${`%${value
  * SQL equivalent of WarehouseService.buildWhere/resolveWhere for viewport reads.
  * Apply filters in the spatial query BEFORE LIMIT; filtering a capped set of pins
  * afterwards would silently omit matching warehouses in busy areas.
+ *
+ * Free-text search is not re-implemented here. The caller resolves it with
+ * WarehouseService.resolveSearch, the same matcher the list uses, and passes the
+ * matching ids, so the map and the list can never disagree about a query.
+ *
+ * @param {Object} [filters] - validated query params
+ * @param {number[]|null} [searchIds] - ids matching the search box; null when no search
  */
-function warehouseMapFilters(filters = {}, microMarkets = []) {
+function warehouseMapFilters(filters = {}, searchIds = null) {
     const conditions = [];
     if (filters.afterId != null) conditions.push(Prisma.sql`w.id > ${filters.afterId}`);
-    const term = filters.search?.trim();
-    if (term) {
-        const search = SEARCH_FIELDS.map(field => contains(field, term));
-        const id = warehouseSearchId(term);
-        if (id !== null) search.push(Prisma.sql`w.id = ${id}`);
-        const phoneDigits = phoneSearchDigits(term);
-        if (phoneDigits) search.push(phoneSearchCondition(phoneDigits));
-        if (microMarkets.length) search.push(Prisma.sql`w.micromarket && ARRAY[${Prisma.join(microMarkets)}]::text[]`);
-        conditions.push(Prisma.sql`(${Prisma.join(search, ' OR ')})`);
+    if (searchIds) {
+        conditions.push(searchIds.length ? Prisma.sql`w.id = ANY(${searchIds}::int[])` : Prisma.sql`FALSE`);
     }
     for (const field of TEXT_FIELDS) {
         if (filters[field]) conditions.push(contains(field, filters[field]));
@@ -45,7 +43,8 @@ function warehouseMapFilters(filters = {}, microMarkets = []) {
     if (filters.landType) conditions.push(Prisma.sql`d."landType" ILIKE ${`%${filters.landType}%`}`);
 
     // Match the listing's numeric filters: ANY offered area, and a safely parsed
-    // text rate. Keeping these inside this query avoids an all-warehouse ID scan.
+    // text rate. Keeping these inside this query avoids an all-warehouse ID scan
+    // (unless a search is set: resolving it already ran the list's range scan).
     if (filters.minArea != null || filters.maxArea != null) {
         conditions.push(Prisma.sql`EXISTS (
             SELECT 1 FROM unnest(w."totalSpaceSqft") AS area

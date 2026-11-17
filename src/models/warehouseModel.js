@@ -3,8 +3,8 @@ const { registerWarehouseImages } = require('./imagePipelineRepository.cjs');
 const { Prisma } = require('@prisma/client');
 const BaseModel = require('./baseModel');
 const { availabilityConflict } = require('../utils/availabilityReview');
+const { SEARCH_FIELDS } = require('../utils/warehouseSearchRanking');
 const { photosToMedia } = require('../utils/mediaUtils');
-const { phoneSearchCondition } = require('../utils/warehouseSearch');
 
 /**
  * WarehouseModel class for handling warehouse data operations
@@ -65,14 +65,36 @@ class WarehouseModel extends BaseModel {
         }
     }
 
-    /** Resolve formatted primary/alternate phone matches before paging or counting. */
-    async findIdsByContactNumber(digits) {
+    /**
+     * The searchable fields of every warehouse matching `where`, for in-memory
+     * relevance ranking (see utils/warehouseSearchRanking). Deliberately slim:
+     * no relations, media or long text, so ranking the whole filtered set stays
+     * a single small read.
+     * @param {Object} [where] - Prisma where clause
+     * @returns {Promise<Array<Object>>}
+     */
+    async findSearchCandidates(where = {}) {
         try {
-            const condition = phoneSearchCondition(digits);
-            const rows = await this.prisma.$queryRaw`
-                SELECT w.id FROM "Warehouse" w WHERE ${condition}
-            `;
-            return rows.map((row) => Number(row.id));
+            return await this.model.findMany({
+                where,
+                select: Object.fromEntries(
+                    ['id', 'createdAt', 'micromarket', ...SEARCH_FIELDS].map((field) => [field, true]),
+                ),
+            });
+        } catch (error) {
+            this.handleDatabaseError(error);
+        }
+    }
+
+    /**
+     * Ids of the warehouses matching `where`.
+     * @param {Object} [where] - Prisma where clause
+     * @returns {Promise<number[]>}
+     */
+    async findIds(where = {}) {
+        try {
+            const rows = await this.model.findMany({ where, select: { id: true } });
+            return rows.map((row) => row.id);
         } catch (error) {
             this.handleDatabaseError(error);
         }
