@@ -333,6 +333,19 @@ class WarehouseService extends BaseService {
                 throw error;
             }
             
+            // Preserve attribution and independently validate only changed form fields.
+            delete validatedData.uploadedBy;
+            const locationEdits = {
+                ...(validatedData.warehouseData || {}),
+                ...(Object.hasOwn(validatedData, 'googleLocation') ? { googleLocation: validatedData.googleLocation } : {}),
+            };
+            await require('../utils/formChanges').validateFormChanges(
+                { ...existing.WarehouseData, googleLocation: existing.googleLocation }, locationEdits,
+            );
+            if (Object.hasOwn(locationEdits, 'googleLocation')) {
+                validatedData.googleLocation = locationEdits.googleLocation;
+            }
+
             // Apply business rules for updates
             const processedData = this.applyUpdateBusinessRules(validatedData);
             const availabilityGuard = prepareAvailabilityUpdate(existing, processedData, expectedAvailability);
@@ -700,6 +713,10 @@ class WarehouseService extends BaseService {
         // Remove all non-digit characters
         const digits = contactNumber.replace(/\D/g, '');
         
+        // An explicit international prefix already identifies the country.
+        // Some international numbers have ten digits including that prefix.
+        if (/^\+\d[\d\s().-]*$/.test(contactNumber.trim())) return `+${digits}`;
+
         // Apply basic formatting (this is a simple example)
         if (digits.length === 10) {
             return `+91${digits}`;

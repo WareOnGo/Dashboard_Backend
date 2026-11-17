@@ -38,6 +38,12 @@ class ErrorHandler {
             timestamp: new Date().toISOString()
         });
 
+        if (error.name === 'LocationValidationError') {
+            return res.status(error.statusCode).json(ErrorHandler.createErrorResponse(
+                error.message, 'LOCATION_VALIDATION_FAILED', req.path, { issues: error.issues },
+            ));
+        }
+
         // Handle Prisma errors
         if (error instanceof Prisma.PrismaClientKnownRequestError) {
             return ErrorHandler.handlePrismaError(error, req, res);

@@ -7,6 +7,7 @@ const { authMiddleware } = require('../middleware/authMiddleware');
 const { CAPS } = require('../utils/access');
 const rateLimit = require('express-rate-limit');
 const { verifyScoutToken } = require('../middleware/scoutMiddleware');
+const { resolveFormLocation, validateNewWarehouseForm, validateDashboardForm, locationCheckRateLimiter } = require('../middleware/warehouseFormValidation');
 
 // Get controller instances from container
 const warehouseController = container.resolve('warehouseController');
@@ -32,6 +33,9 @@ const scoutUploadRateLimiter = rateLimit({
 });
 
 // --- CRUD Endpoints ---
+router.post('/scout/resolve-location', locationCheckRateLimiter, verifyScoutToken, resolveFormLocation);
+router.post('/resolve-location', authMiddleware.authenticateJWT,
+    authMiddleware.requireAccess(CAPS.DASHBOARD), locationCheckRateLimiter, resolveFormLocation);
 
 /**
  * GET /api/warehouses
@@ -147,6 +151,7 @@ router.get('/:id',
 router.post('/', 
     authMiddleware.authenticateJWT,
     authMiddleware.requireAccess(CAPS.DASHBOARD),
+    validateDashboardForm,
     validationMiddleware.validateWarehouseCreate,
     warehouseController.createWarehouse
 );
@@ -158,6 +163,7 @@ router.post('/',
 router.post('/scout', 
     scoutRateLimiter,
     verifyScoutToken,
+    validateNewWarehouseForm,
     validationMiddleware.validateWarehouseCreate,
     warehouseController.createScoutWarehouse
 );

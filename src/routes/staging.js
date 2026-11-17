@@ -8,6 +8,7 @@ const { authMiddleware } = require('../middleware/authMiddleware');
 const { CAPS } = require('../utils/access');
 const { verifyWebhookSecret } = require('../middleware/webhookMiddleware');
 const StagingValidator = require('../validators/stagingValidator');
+const { resolveFormLocation, locationCheckRateLimiter } = require('../middleware/warehouseFormValidation');
 
 const stagingController = container.resolve('stagingController');
 
@@ -41,6 +42,7 @@ router.post('/ingest',
 // pass here; the one exception is DELETE, which layers requireAdmin below so reviewers get no
 // delete access. requireAccess also stashes req.user.capabilities / isReviewer / isAdmin.
 router.use(authMiddleware.authenticateJWT, authMiddleware.requireAccess(CAPS.REVIEW));
+router.post('/resolve-location', locationCheckRateLimiter, resolveFormLocation);
 
 /**
  * GET /api/staging?reviewStatus=&page=&limit=

@@ -17,12 +17,14 @@ const { BROWSER_HEADERS } = require('./session');
  * @param {string} ftid
  * @returns {Promise<{lat: number, lng: number}|null>}
  */
-async function resolveViaCid(ftid) {
+async function resolveViaCid(ftid, { signal, fetchImpl = fetch } = {}) {
   const pbUrl =
     `https://www.google.com/maps/preview/place?authuser=0&hl=en&gl=in` +
     `&pb=!1m17!1s${ftid}!3m12!1m3!1d10000!2d77.5!3d13.0!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!4m2!3d13.0!4d77.5`;
 
-  const r = await fetch(pbUrl, {
+  const r = await fetchImpl(pbUrl, {
+    signal,
+    redirect: 'error',
     headers: {
       ...BROWSER_HEADERS,
       Accept: 'application/json',

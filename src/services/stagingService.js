@@ -116,7 +116,6 @@ class StagingService extends BaseService {
                 source: 'SCOUT',
                 submittedBy: scout.email || scout.name,
             });
-            await this.autofillCoordinatesFromUrl(staged);
             const created = await this.stagedWarehouseModel.create(staged);
             return this.maybeAutoApprove(created);
         });
@@ -140,7 +139,6 @@ class StagingService extends BaseService {
                 source: 'DASHBOARD',
                 submittedBy: user.email,
             });
-            await this.autofillCoordinatesFromUrl(staged);
             const created = await this.stagedWarehouseModel.create(staged);
             return this.maybeAutoApprove(created);
         });
@@ -242,39 +240,6 @@ class StagingService extends BaseService {
     }
 
     /**
-     * On edit, re-geocode latitude/longitude only when the submission's
-     * `googleLocation` actually changes. Mutates the flat `mapped` edits in place.
-     *
-     * Never throws (best-effort). If the same edit explicitly sets latitude and
-     * longitude, those win and no geocoding happens. If the URL is cleared,
-     * existing coordinates are left untouched rather than fabricated.
-     *
-     * @param {Object} row - The current staged row (pre-edit)
-     * @param {Object} mapped - The flattened proposed edits (post flattenForMirror)
-     * @returns {Promise<void>}
-     * @private
-     */
-    async autofillCoordinatesOnUrlChange(row, mapped) {
-        const urlChanged =
-            'googleLocation' in mapped && mapped.googleLocation !== row.googleLocation;
-        if (!urlChanged) return;
-        // Respect explicit coordinate edits made in the same request.
-        if (mapped.latitude != null && mapped.longitude != null) return;
-        // URL cleared — don't invent coordinates from nothing.
-        if (!mapped.googleLocation) return;
-
-        try {
-            const { lat, lng } = await geocodeUrl(mapped.googleLocation);
-            if (lat != null && lng != null) {
-                mapped.latitude = lat;
-                mapped.longitude = lng;
-            }
-        } catch {
-            // best-effort; the edit proceeds without refreshed coordinates
-        }
-    }
-
-    /**
      * List staged submissions (review queue), newest first, or by relevance when
      * searching.
      *
@@ -342,10 +307,11 @@ class StagingService extends BaseService {
 
             const { expectedAvailability, ...fields } = edits;
             const mapped = this.flattenForMirror(fields);
+            delete mapped.uploadedBy;
             const availabilityGuard = prepareAvailabilityUpdate(row, mapped, expectedAvailability);
-            // Re-geocode only when the Google Maps URL itself changes. Done before
-            // computeDiff so the refreshed coordinates show up in the returned changes.
-            await this.autofillCoordinatesOnUrlChange(row, mapped);
+            // Enforce required fields only after the compatibility rollout.
+            // Saving never waits on Maps resolution.
+            await require('../utils/formChanges').validateFormChanges(row, mapped);
             const changes = this.computeDiff(row, mapped);
             if (changes.length === 0) {
                 return { submission: row, changes: [] };
