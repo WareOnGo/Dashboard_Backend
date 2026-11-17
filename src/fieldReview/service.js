@@ -16,6 +16,9 @@ const {
 } = require('../utils/auditDiff');
 const { resolveTags } = require('../utils/microMarketGeometry');
 const { editorIdentity } = require('../utils/editorIdentity');
+const WarehouseModel = require('../models/warehouseModel');
+const WarehouseService = require('../services/warehouseService');
+const { parseIdList } = require('../utils/warehouseSearchRanking');
 const {
   fields,
   byKey,
@@ -886,9 +889,8 @@ class FieldReviewService {
     view = 'current',
     page = 1,
     limit = 12,
-    search = '',
-    city = '',
-    assigneeId
+    assigneeId,
+    ...filters
   } = {}) {
     return this.db.$transaction(async tx => {
       const actor = await this.actor(tx, user);
@@ -900,43 +902,34 @@ class FieldReviewService {
       };
       let ids;
       const accessWhere = warehouseScope(actor);
-      if (search || city || accessWhere.uploadedBy) {
-        const whid = /^\d+$/.test(search) && Number(search) > 0 && Number(search) <= 2147483647 ? Number(search) : null;
-        const query = {
-          ...(city ? {
-            city: {
-              contains: city,
-              mode: 'insensitive'
-            }
-          } : {}),
-          ...(search ? {
-            OR: [{
-              city: {
-                contains: search,
-                mode: 'insensitive'
-              }
-            }, {
-              address: {
-                contains: search,
-                mode: 'insensitive'
-              }
-            }, {
-              micromarket: {
-                has: search
-              }
-            }, ...(whid ? [{
-              id: whid
-            }] : [])]
-          } : {})
-        };
+      const queueIds = (await tx.warehouseFieldReview.groupBy({
+        by: ['warehouseId'], where: scope
+      })).map(row => row.warehouseId);
+      const queueAccess = { AND: [accessWhere, { id: { in: queueIds } }] };
+      // Suggestions cover the entire permitted queue, independent of its page,
+      // segment and active filters. No unassigned warehouse metadata is returned.
+      const filterOptions = await tx.warehouse.groupBy({
+        by: ['state', 'city', 'warehouseType'], where: queueAccess
+      });
+      const search = filters.search?.trim() || '';
+      const hasWarehouseFilters = Object.entries(filters).some(([key, value]) =>
+        key !== 'search' && value != null && value !== '');
+      if (search || hasWarehouseFilters || accessWhere.uploadedBy) {
+        const { where } = await new WarehouseService(new WarehouseModel(tx)).resolveSearch(filters, queueAccess);
         ids = (await tx.warehouse.findMany({
-          where: { AND: [accessWhere, query] },
+          where,
           select: {
             id: true
           }
         })).map(w => w.id);
-        // A deleted warehouse still has discoverable review history by WHID.
-        if (!city && whid && !accessWhere.uploadedBy) ids.push(whid);
+        // Deleted warehouses retain searchable history by explicit ID, but have
+        // no current attributes to match filters or establish own-entry access.
+        if (search && !hasWarehouseFilters && !accessWhere.uploadedBy) {
+          const whid = /^\d+$/.test(search) && Number(search) > 0 && Number(search) <= 2147483647 ? Number(search) : null;
+          const requestedIds = parseIdList(search)?.ids || (whid ? [whid] : []);
+          const assignedIds = new Set(queueIds);
+          ids = [...new Set([...ids, ...requestedIds.filter(id => assignedIds.has(id))])];
+        }
       }
       const base = {
         ...scope,
@@ -1025,6 +1018,7 @@ class FieldReviewService {
       });
       return {
         assignees: actor.isAdmin ? (await this.roster(tx)).map(publicPerson) : undefined,
+        filterOptions,
         data: reviews.map(r => ({
           ...r,
           warehouse: plainWarehouse(warehouses.find(w => w.id === r.warehouseId)),

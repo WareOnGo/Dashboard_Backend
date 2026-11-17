@@ -14,14 +14,15 @@ const {
 const {
   ReviewError
 } = require('../fieldReview/service');
+const WarehouseValidator = require('../validators/warehouseValidator');
 const id = z.string().uuid();
 const number = z.coerce.number().int().positive().max(2147483647);
-const query = z.object({
+const query = WarehouseValidator.warehouseQuerySchema.omit({
+  page: true, limit: true, all: true, ids: true, sortBy: true, sortOrder: true
+}).extend({
   view: z.enum(['current', 'previous', 'verify', 'employee', 'all']).default('current'),
   page: number.default(1),
-  limit: number.max(48).default(12),
-  search: z.string().trim().max(120).default(''),
-  city: z.string().trim().max(120).default(''),
+  limit: number.max(100).default(12),
   assigneeId: number.optional()
 });
 function createRouter(service, auth = authMiddleware) {

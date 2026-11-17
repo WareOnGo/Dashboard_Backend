@@ -540,6 +540,8 @@ test('deleted warehouses retain searchable review history and reject writes', as
   expect((await service.list(employee, {
     search: '4821'
   })).data).toHaveLength(1);
+  expect((await service.list(employee, { search: '4821, 9999' })).data).toHaveLength(1);
+  expect((await service.list(employee, { search: '4821', city: 'Bhiwandi' })).data).toHaveLength(0);
   await expect(submit(r)).rejects.toMatchObject({
     code: 'WAREHOUSE_NOT_FOUND'
   });
@@ -928,6 +930,58 @@ describe('linked availability review', () => {
 });
 
 
+test('dashboard filters, counts and suggestions cover only the assigned queue across pages', async () => {
+  await db.warehouse.update({ where: { id: 4821 }, data: {
+    warehouseOwnerType: 'Individual', availability: 'Yes', isBroker: 'Yes',
+    listing_type: 'Rent', status: 'Ready', visibility: true,
+    WarehouseData: { create: { fireNocAvailable: true, landType: 'Warehouse CLU' } }
+  } });
+  const template = await live();
+  for (const [id, city, state, warehouseType, assigneeId] of [
+    [4822, 'Ahmedabad', 'Gujarat', 'RCC', 2],
+    [4823, 'Private city', 'Private state', 'Private type', 3]
+  ]) {
+    await db.warehouse.create({ data: { ...template, id, city, state, warehouseType } });
+    await service.create({ requestId: randomUUID(), warehouseId: id, assigneeId,
+      fields: [{ key: 'ratePerSqft', comment: 'Confirm rate.' }]
+    }, admin);
+  }
+  await create();
+  const first = await service.list(employee, { limit: 1 });
+  const second = await service.list(employee, { limit: 1, page: 2 });
+  expect(first.pagination).toMatchObject({ total: 2, totalPages: 2 });
+  expect(first.data).toHaveLength(1);
+  expect(second.data).toHaveLength(1);
+  expect(new Set([...first.data, ...second.data].map(r => r.warehouseId))).toEqual(new Set([4821, 4822]));
+  expect(first.filterOptions).toHaveLength(2);
+  expect(first.filterOptions).toEqual(expect.arrayContaining([
+    { state: 'Maharashtra', city: 'Bhiwandi', warehouseType: 'PEB' },
+    { state: 'Gujarat', city: 'Ahmedabad', warehouseType: 'RCC' }
+  ]));
+  const filtered = await service.list(employee, {
+    state: 'maharashtra', city: 'bhiwandi', zone: 'west', warehouseType: 'PEB',
+    warehouseOwnerType: 'Individual', contactPerson: 'Fixture Owner',
+    availability: 'Yes', isBroker: 'y', listing_type: 'Rent', status: 'Ready',
+    uploadedBy: 'Employee One', visibility: 'visible', fireNoc: 'available', landType: 'CLU',
+    minArea: 40000, maxArea: 60000, minRate: 20, maxRate: 22.5
+  });
+  expect(filtered.data.map(r => r.warehouseId)).toEqual([4821]);
+  expect(filtered.counts).toEqual({ current: 1, previous: 0 });
+  expect(filtered.filterOptions).toEqual(first.filterOptions);
+  expect((await service.list(employee, { minArea: 50001 })).data).toEqual([]);
+  expect((await service.list(employee, { fireNoc: 'not_available' })).data.map(r => r.warehouseId)).toEqual([4822]);
+  const inaccessible = await service.list(employee, { search: '4823', assigneeId: 3 });
+  expect(inaccessible.data).toEqual([]);
+  expect(inaccessible.counts.current).toBe(0);
+  expect(inaccessible.filterOptions).toEqual(first.filterOptions);
+  const pasted = await service.list(employee, { search: '4823, 4821, 4822' });
+  expect(new Set(pasted.data.map(r => r.warehouseId))).toEqual(new Set([4821, 4822]));
+  expect((await service.list(employee, { search: 'Fixture Owner' })).pagination.total).toBe(2);
+  expect((await service.list(admin, { view: 'employee', assigneeId: 3 })).filterOptions).toEqual([
+    { state: 'Private state', city: 'Private city', warehouseType: 'Private type' }
+  ]);
+});
+
 test('warehouse view permissions also constrain assigned review detail, history, summaries and queue counts', async () => {
   const review = await create();
   await db.verifiedNumber.update({ where: { id: 2 }, data: { viewAllWarehouseEntries: false, editAllWarehouseEntries: false } });
@@ -937,10 +991,15 @@ test('warehouse view permissions also constrain assigned review detail, history,
   const queue = await service.list(employee);
   expect(queue.data).toEqual([]);
   expect(queue.counts.current).toBe(0);
+  expect(queue.filterOptions).toEqual([]);
+  expect((await service.list(employee, { search: '4821' })).data).toEqual([]);
   // Legacy display names never confer ownership; a recorded email does.
   await db.warehouse.update({ where: { id: 4821 }, data: { uploadedBy: employee.email.toUpperCase() } });
   expect((await service.detail(review.id, employee)).canRespond).toBe(true);
   expect((await service.list(employee)).pagination.total).toBe(1);
+  expect((await service.list(employee)).filterOptions).toEqual([
+    { state: 'Maharashtra', city: 'Bhiwandi', warehouseType: 'PEB' }
+  ]);
   expect(await service.summaries([4821], employee)).toHaveLength(1);
 });
 

@@ -40,6 +40,29 @@ test('requires JWT before any field-review service call', async () => {
   await request(app).get(root).expect(401);
   expect(service.list).not.toHaveBeenCalled();
 });
+test('queue filters use the dashboard vocabulary and bounded pagination', async () => {
+  await auth(request(app).get(root)).query({
+    view: 'previous', page: '2', limit: '100', search: '4821, 4822',
+    state: 'Maharashtra', city: 'Bhiwandi', warehouseType: 'PEB',
+    contactPerson: 'Owner', minArea: '25000', maxRate: '22.5',
+    visibility: 'visible', fireNoc: 'available', landType: 'CLU',
+    all: 'true'
+  }).expect(200);
+  expect(service.list).toHaveBeenCalledWith(expect.objectContaining({ email: 'user@wareongo.com' }), {
+    view: 'previous', page: 2, limit: 100, search: '4821, 4822',
+    state: 'Maharashtra', city: 'Bhiwandi', warehouseType: 'PEB',
+    contactPerson: 'Owner', minArea: 25000, maxRate: 22.5,
+    visibility: 'visible', fireNoc: 'available', landType: 'CLU'
+  });
+});
+test.each([
+  { minArea: '-1' }, { maxRate: 'not a number' }, { limit: '101' },
+  { visibility: 'all' }, { fireNoc: 'Yes' },
+  { search: Array.from({ length: 501 }, (_, i) => i + 1).join(',') }
+])('invalid queue filters cannot reach the service: %j', async query => {
+  await auth(request(app).get(root)).query(query).expect(400);
+  expect(service.list).not.toHaveBeenCalled();
+});
 test('employees cannot create, decide, return, reopen or reassign', async () => {
   for (const path of ['', '/' + id + '/flags/' + flag + '/decision', '/' + id + '/flags/' + flag + '/return', '/' + id + '/flags/' + flag + '/reopen']) await auth(request(app).post(root + path)).send(body()).expect(403);
   await auth(request(app).patch(root + '/' + id + '/assignee')).send({
