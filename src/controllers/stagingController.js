@@ -52,12 +52,12 @@ class StagingController extends BaseController {
     });
 
     /**
-     * Map service-thrown client errors (4xx) to responses; let 5xx bubble to the
-     * global handler. The global handler only honors statusCode for ValidationError,
-     * so NotFound/Conflict are rendered here.
+     * Keep the existing staging error shape; named form conflicts use the global
+     * handler so their status and code match the warehouse update endpoint.
      * @private
      */
     handleServiceError(res, error, next) {
+        if (error?.name === 'FormConflictError') return next(error);
         if (error && error.statusCode && error.statusCode < 500) {
             const details = error.issues ? { issues: error.issues } : null;
             return this.sendError(res, error.message, error.statusCode, details);

@@ -11,6 +11,7 @@
     "test:ci": "jest --coverage --watchAll=false --runInBand",
     "test:regression": "jest --runInBand tests/regression tests/app.test.js tests/routes/warehouse.test.js tests/utils/lookupCache.test.js tests/utils/capabilityCache.test.js tests/middleware/scoutMiddleware.test.js",
     "test:integration": "jest --config jest.integration.config.js --runInBand",
+    "check:form-policy": "node scripts/syncPptFormPolicy.cjs --check",
     "docker:build": "./scripts/docker-dev.sh build",
     "docker:run": "./scripts/docker-dev.sh run",
     "docker:up": "./scripts/docker-dev.sh compose-up",

@@ -16,6 +16,7 @@ const {
 } = require('../utils/auditDiff');
 const { resolveTags } = require('../utils/microMarketGeometry');
 const { editorIdentity } = require('../utils/editorIdentity');
+const { validateFormChanges } = require('../utils/formChanges');
 const WarehouseModel = require('../models/warehouseModel');
 const WarehouseService = require('../services/warehouseService');
 const { parseIdList } = require('../utils/warehouseSearchRanking');
@@ -41,6 +42,9 @@ const fail = (status, code, message) => {
   throw new ReviewError(status, code, message);
 };
 const J = value => value == null ? Prisma.JsonNull : jsonValue(value);
+const preserveInactiveHandover = (value, current) => value.handoverType === 'VARIABLE'
+  ? { ...value, handoverDate: current.handoverDate }
+  : { ...value, handoverLeadValue: current.handoverLeadValue, handoverLeadUnit: current.handoverLeadUnit };
 const active = {
   not: 'VERIFIED'
 };
@@ -526,6 +530,10 @@ class FieldReviewService {
       let proposal;
       try {
         proposal = body.resolution === 'NO_CHANGE' ? baseline : parseValue(flag.fieldKey, body.proposedValue);
+        if (body.resolution === 'CORRECTION' && flag.fieldKey === 'handover') {
+          proposal = preserveInactiveHandover(proposal, baseline);
+        }
+        if (body.resolution === 'CORRECTION') await validateFormChanges(warehouse, patchFor(flag.fieldKey, proposal));
       } catch (e) {
         fail(400, 'INVALID_FIELD_VALUE', e.issues?.[0]?.message || e.message);
       }
@@ -598,10 +606,10 @@ class FieldReviewService {
           // The comparison/choice covers the selected timing type. Preserve the
           // latest saved timing for the other type rather than overwriting
           // undisplayed values from the employee's older snapshot.
-          final = final.handoverType === 'VARIABLE'
-            ? { ...final, handoverDate: current.handoverDate }
-            : { ...final, handoverLeadValue: current.handoverLeadValue, handoverLeadUnit: current.handoverLeadUnit };
+          final = preserveInactiveHandover(final, current);
         }
+        try { await validateFormChanges(warehouse, patchFor(flag.fieldKey, final)); }
+        catch (e) { fail(400, 'INVALID_FIELD_VALUE', e.issues?.[0]?.message || e.message); }
         await tx.$queryRawUnsafe("SELECT set_config('wareongo.actor_email',$1,true),set_config('wareongo.edit_source','Field review verification',true)", actor.email);
         const patch = patchFor(flag.fieldKey, final);
         // Handover and Availability/Last reviewed are explicit compound fields.

@@ -5,6 +5,7 @@ const WarehouseService = require('../../src/services/warehouseService');
 const StagedWarehouseModel = require('../../src/models/stagedWarehouseModel');
 const StagingService = require('../../src/services/stagingService');
 const WarehouseValidator = require('../../src/validators/warehouseValidator');
+const { pptFormSnapshot } = require('../../src/utils/pptFormPolicy');
 const { migrate } = require('../../scripts/migrateAvailabilityReview');
 const testDatabaseUrl = require('../helpers/testDatabaseUrl');
 const { createSchema, dropSchema } = require('../helpers/availabilityReviewDatabase');
@@ -52,7 +53,7 @@ test('same-answer review, status flip, unrelated edit and clear round-trip throu
     const before = { availability: 'Yes', availabilityLastReviewedOn: '2025-01-10' };
     await service.updateWarehouse(700, { availabilityLastReviewedOn: '2025-01-15', expectedAvailability: before });
     expect((await warehouseModel.findById(700)).availabilityLastReviewedOn).toEqual(date('2025-01-15'));
-    await service.updateWarehouse(700, { ratePerSqft: '30' });
+    await service.updateWarehouse(700, { ratePerSqft: '30', expectedFormValues: pptFormSnapshot(await warehouseModel.findById(700)) });
     expect((await warehouseModel.findById(700)).availabilityLastReviewedOn).toEqual(date('2025-01-15'));
     await service.updateWarehouse(700, { availability: 'No', availabilityLastReviewedOn: '2025-01-02' });
     expect(await warehouseModel.findById(700)).toMatchObject({ availability: 'No', availabilityLastReviewedOn: date('2025-01-02') });

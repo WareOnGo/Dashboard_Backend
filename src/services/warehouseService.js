@@ -329,7 +329,7 @@ class WarehouseService extends BaseService {
             this.validateData({ id: id.toString() }, (data) => WarehouseValidator.validateId(data));
             
             // Validate update data
-            const { expectedAvailability, ...validatedData } = this.validateData(updateData, (data) => WarehouseValidator.validateUpdate(data));
+            const { expectedAvailability, expectedFormValues, ...validatedData } = this.validateData(updateData, (data) => WarehouseValidator.validateUpdate(data));
             
             // Fetch the pre-update row rather than just checking existence: it is
             // the "before" side of the audit diff, and it costs the same round trip.
@@ -343,19 +343,13 @@ class WarehouseService extends BaseService {
             
             // Preserve attribution and independently validate only changed form fields.
             delete validatedData.uploadedBy;
-            const locationEdits = {
-                ...(validatedData.warehouseData || {}),
-                ...(Object.hasOwn(validatedData, 'googleLocation') ? { googleLocation: validatedData.googleLocation } : {}),
-            };
-            await require('../utils/formChanges').validateFormChanges(
-                { ...existing.WarehouseData, googleLocation: existing.googleLocation }, locationEdits,
-            );
-            if (Object.hasOwn(locationEdits, 'googleLocation')) {
-                validatedData.googleLocation = locationEdits.googleLocation;
-            }
+            const { validateFormChanges, formUpdateGuard, prepareFormUpdate } = require('../utils/formChanges');
+            prepareFormUpdate(existing, validatedData, expectedFormValues);
+            await validateFormChanges(existing, validatedData);
 
             // Apply business rules for updates
             const processedData = this.applyUpdateBusinessRules(validatedData);
+            const formGuard = formUpdateGuard(existing, processedData);
             const availabilityGuard = prepareAvailabilityUpdate(existing, processedData, expectedAvailability);
             require('../utils/voiceNotes').retainVoiceNotes(processedData, existing);
             // Re-tag only when this edit carries coordinates; a partial update that
@@ -383,7 +377,9 @@ class WarehouseService extends BaseService {
             if (lastEditedBy) processedData.lastEditedBy = lastEditedBy;
 
             // Update warehouse through model
-            const updatedWarehouse = lastEditedBy
+            const updatedWarehouse = formGuard
+                ? await this.warehouseModel.update(id, processedData, availabilityGuard, lastEditedBy ? { actorEmail: lastEditedBy } : undefined, formGuard)
+                : lastEditedBy
                 ? await this.warehouseModel.update(id, processedData, availabilityGuard, { actorEmail: lastEditedBy })
                 : await this.warehouseModel.update(id, processedData, availabilityGuard);
             

@@ -226,7 +226,7 @@ class WarehouseModel extends BaseModel {
      * @param {Object} updateData - Data to update including optional nested WarehouseData
      * @returns {Object} Updated warehouse with WarehouseData
      */
-    async update(id, updateData, availabilityGuard, auditContext) {
+    async update(id, updateData, availabilityGuard, auditContext, formGuard) {
         try {
             const { warehouseData, media: incomingMedia, ...warehouse } = updateData;
 
@@ -237,14 +237,22 @@ class WarehouseModel extends BaseModel {
                 warehouse.media = incomingMedia;
             }
 
+            if (warehouseData && formGuard?.WarehouseData) {
+                // Prisma leaves the parent @updatedAt unchanged for a nested-only
+                // edit. Advance it explicitly so concurrent relation updates lock
+                // and compare the parent row, including saves in the same millisecond.
+                const previousTime = new Date(formGuard.status_updated_at ?? 0).getTime();
+                warehouse.status_updated_at = new Date(Math.max(Date.now(), previousTime + 1));
+            }
+
             const updatePayload = {
-                where: { id: parseInt(id), ...availabilityGuard },
+                where: { id: parseInt(id), ...availabilityGuard, ...(formGuard && { AND: formGuard }) },
                 data: {
                     ...warehouse,
                     // Only update warehouseData if it was provided
                     ...(warehouseData && {
                         WarehouseData: {
-                            update: warehouseData,
+                            upsert: { create: warehouseData, update: warehouseData },
                         },
                     }),
                 },
@@ -266,6 +274,7 @@ class WarehouseModel extends BaseModel {
             }
             return updated;
         } catch (error) {
+            if (formGuard && error.code === 'P2025') throw require('../utils/formChanges').formConflict();
             if (availabilityGuard && error.code === 'P2025') throw availabilityConflict();
             this.handleDatabaseError(error);
         }

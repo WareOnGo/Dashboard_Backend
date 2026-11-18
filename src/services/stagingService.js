@@ -323,14 +323,17 @@ class StagingService extends BaseService {
                 throw conflict('Only pending submissions can be edited. Move it back to pending first.');
             }
 
-            const { expectedAvailability, ...fields } = edits;
+            const { expectedAvailability, expectedFormValues, ...fields } = edits;
             const mapped = this.flattenForMirror(fields);
             delete mapped.uploadedBy;
             const availabilityGuard = prepareAvailabilityUpdate(row, mapped, expectedAvailability);
             require('../utils/voiceNotes').retainVoiceNotes(mapped, row);
-            // Enforce required fields only after the compatibility rollout.
+            // Preserve old blanks and reject clearing or stale protected answers.
             // Saving never waits on Maps resolution.
-            await require('../utils/formChanges').validateFormChanges(row, mapped);
+            const { validateFormChanges, formUpdateGuard, prepareFormUpdate } = require('../utils/formChanges');
+            prepareFormUpdate(row, mapped, expectedFormValues, { staged: true });
+            await validateFormChanges(row, mapped);
+            const formGuard = formUpdateGuard(row, mapped, { staged: true });
             const changes = this.computeDiff(row, mapped);
             if (changes.length === 0) {
                 return { submission: row, changes: [] };
@@ -338,7 +341,9 @@ class StagingService extends BaseService {
 
             const lastEditedBy = editorIdentity(user);
             if (lastEditedBy) mapped.lastEditedBy = lastEditedBy;
-            const updated = await this.stagedWarehouseModel.updateStaged(id, mapped, availabilityGuard);
+            const updated = formGuard
+                ? await this.stagedWarehouseModel.updateStaged(id, mapped, availabilityGuard, formGuard)
+                : await this.stagedWarehouseModel.updateStaged(id, mapped, availabilityGuard);
             return { submission: updated, changes };
         });
     }

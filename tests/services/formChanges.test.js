@@ -1,5 +1,6 @@
 const WarehouseService = require('../../src/services/warehouseService');
 const StagingService = require('../../src/services/stagingService');
+const { pptFormSnapshot } = require('../../src/utils/pptFormPolicy');
 const original = { id: 123, googleLocation: 'legacy map description', uploadedBy: 'original@example.test',
     WarehouseData: { landType: 'Legacy CLU', latitude: 12, longitude: 77 } };
 
@@ -9,21 +10,18 @@ function setup(staged, overrides = {}) {
     if (staged) {
         const row = { ...saved, ...saved.WarehouseData, reviewStatus: 'PENDING' };
         const service = new StagingService({ findByStagedId: jest.fn().mockResolvedValue(row), updateStaged: write }, {});
-        return { write, update: edits => service.editSubmission('staged-id', edits) };
+        return { write, update: edits => service.editSubmission('staged-id', { expectedFormValues: pptFormSnapshot(row), ...edits }) };
     }
     const service = new WarehouseService({ findById: jest.fn().mockResolvedValue(saved), update: write });
     service.applyMicroMarketTags = jest.fn();
-    return { write, update: edits => service.updateWarehouse(123, edits) };
+    return { write, update: edits => service.updateWarehouse(123, { expectedFormValues: pptFormSnapshot(saved), ...edits }) };
 }
 
 describe.each([false, true])('changed-field validation (staged=%s)', staged => {
-    beforeEach(() => { process.env.WAREHOUSE_FORM_REQUIREMENTS_ENFORCED = 'true'; });
-    afterEach(() => { delete process.env.WAREHOUSE_FORM_REQUIREMENTS_ENFORCED; });
-    test('older edits can clear the newly required fields during rollout', async () => {
-        delete process.env.WAREHOUSE_FORM_REQUIREMENTS_ENFORCED;
+    test('saved land and location cannot be cleared without rollout configuration', async () => {
         const { update, write } = setup(staged);
-        await update({ googleLocation: '', warehouseData: { landType: '' } });
-        expect(write).toHaveBeenCalled();
+        await expect(update({ googleLocation: '', warehouseData: { landType: '' } })).rejects.toHaveProperty('issues');
+        expect(write).not.toHaveBeenCalled();
     });
     test('unrelated edits preserve legacy URLs, land types and uploader', async () => {
         const { update, write } = setup(staged);

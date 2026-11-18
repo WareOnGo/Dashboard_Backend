@@ -1,5 +1,6 @@
 const WarehouseService = require('../../src/services/warehouseService');
 const StagingService = require('../../src/services/stagingService');
+const { pptFormSnapshot } = require('../../src/utils/pptFormPolicy');
 
 const submission = {
     warehouseType: 'Industrial', address: '1 Test Rd', city: 'Bengaluru', state: 'Karnataka',
@@ -29,12 +30,14 @@ test.each([
 ])('warehouse edits prefer email with user ID fallback: %j', async (user, expected) => {
     const { service, model } = warehouseFixture();
     const { warehouse, changes } = await service.updateWarehouse(123, {
+        expectedFormValues: pptFormSnapshot(submission),
         warehouseData: { powerKva: '750' },
         lastEditedBy: 'spoofed@example.test', updatedByEmail: 'spoofed@example.test', updatedBy: 'spoofed-id',
     }, user);
     expect(warehouse.lastEditedBy).toBe(expected);
     expect(warehouse.uploadedBy).toBe(submission.uploadedBy);
-    expect(model.update).toHaveBeenCalledWith(123, expect.objectContaining({ lastEditedBy: expected }), undefined, { actorEmail: expected });
+    expect(model.update).toHaveBeenCalledWith(123, expect.objectContaining({ lastEditedBy: expected }), undefined,
+        { actorEmail: expected }, { WarehouseData: { is: { powerKva: '500' } } });
     expect(changes.map(change => change.field)).toEqual(['warehouseData.powerKva']);
 });
 

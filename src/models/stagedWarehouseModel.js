@@ -191,13 +191,14 @@ class StagedWarehouseModel extends BaseModel {
      * @param {Object} data - Whitelisted column edits (already mapped by the service)
      * @returns {Object} Updated staged row
      */
-    async updateStaged(id, data, availabilityGuard) {
+    async updateStaged(id, data, availabilityGuard, formGuard) {
         try {
             return await this.model.update({
-                where: { id, reviewStatus: 'PENDING', ...availabilityGuard },
+                where: { id, reviewStatus: 'PENDING', ...availabilityGuard, ...(formGuard && { AND: formGuard }) },
                 data,
             });
         } catch (error) {
+            if (formGuard && error.code === 'P2025') throw require('../utils/formChanges').formConflict();
             if (availabilityGuard && error.code === 'P2025') throw availabilityConflict();
             if (error.code === 'P2025') throw conflict('Submission changed or is no longer pending. Refresh before editing.');
             this.handleDatabaseError(error);

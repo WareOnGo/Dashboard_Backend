@@ -157,7 +157,8 @@ async function generateDetailedSlideV3(
         row.kind !== 'header'
         && row.label !== 'Insulation details'
         && row.label !== 'Building Stability Certificate'
-    ));
+    )).map(row => row.label === 'Toilets'
+        ? { ...row, value: asValue(warehouse.washroom_count) || 'Unconfirmed' } : row);
     // Bare legacy values are feet; preserve explicit units and show missing data.
     const plinthHeight = String(asValue(warehouse.plinthHeightFt) ?? 'N/A');
     rows.splice(rows.findIndex((row) => row.label === 'No. of docks') + 1, 0, {

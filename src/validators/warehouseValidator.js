@@ -3,6 +3,7 @@ const { z } = require('zod');
 const BaseValidator = require('./baseValidator');
 const { reviewDateSchema, expectedAvailabilitySchema } = require('../utils/availabilityReview');
 const { parseHandoverDate, parseHandoverLeadValue } = require('../utils/handoverTiming');
+const { expectedFormValuesSchema } = require('../utils/formChanges');
 const { FILE_UPLOAD } = require('../utils/constants');
 const { referencesSchema } = require('../utils/voiceNotes');
 const { parseIdList, MAX_ID_LIST } = require('../utils/warehouseSearchRanking');
@@ -191,6 +192,7 @@ class WarehouseValidator extends BaseValidator {
     static updateWarehouseSchema = this.createWarehouseSchema.partial().extend({
         // Request-only snapshot; never persisted or copied into staging columns.
         expectedAvailability: expectedAvailabilitySchema.optional(),
+        expectedFormValues: expectedFormValuesSchema.optional(),
     });
 
     /**

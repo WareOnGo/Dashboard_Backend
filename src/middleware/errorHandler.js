@@ -72,6 +72,9 @@ class ErrorHandler {
         if (error.name === 'AvailabilityConflictError') {
             return ErrorHandler.handleStatusError(error, req, res, 409, 'AVAILABILITY_CONFLICT');
         }
+        if (error.name === 'FormConflictError') {
+            return ErrorHandler.handleStatusError(error, req, res, 409, 'FORM_FIELDS_CHANGED');
+        }
 
         if (error.name === 'NotFoundError') {
             return ErrorHandler.handleStatusError(error, req, res, 404, 'NOT_FOUND');

@@ -3,7 +3,7 @@ const {
   randomUUID
 } = require('node:crypto');
 const {
-  PrismaClient
+  PrismaClient, Prisma
 } = require('@prisma/client');
 const {
   createSchema
@@ -144,6 +144,62 @@ const live = () => db.warehouse.findUnique({
   where: {
     id: 4821
   }
+});
+describe('PPT form requirements across field-review responses and verification', () => {
+  const { completePptForm, requiredPaths } = require('../fixtures/pptForm');
+  beforeEach(async () => {
+    const { warehouseData, uploadedBy: _uploader, ...data } = require('../../src/validators/warehouseValidator').validateCreateOrThrow(completePptForm());
+    await db.warehouse.update({ where: { id: 4821 }, data: { ...data, WarehouseData: { create: warehouseData } } });
+  });
+  test.each(requiredPaths)('a correction cannot clear %s', async key => {
+    const review = await create([key]);
+    await expect(submit(review, 0, { proposedValue: null })).rejects.toMatchObject({ code: 'INVALID_FIELD_VALUE' });
+    expect((await service.detail(review.id, admin)).flags[0].status).toBe('NEEDS_RESPONSE');
+  });
+  test('new handover corrections must provide complete selected timing', async () => {
+    const review = await create(['handover']);
+    await expect(submit(review, 0, { proposedValue: { handoverType: 'VARIABLE', handoverLeadValue: 2 } }))
+      .rejects.toMatchObject({ code: 'INVALID_FIELD_VALUE' });
+    const response = await submit(review, 0, { proposedValue: { handoverType: 'VARIABLE', handoverLeadValue: 2, handoverLeadUnit: 'WEEKS' } });
+    await service.decide(response.id, response.flags[0].id, decision(response.flags[0]), admin);
+    expect(await live()).toMatchObject({ handoverType: 'VARIABLE', handoverLeadValue: 2, handoverLeadUnit: 'WEEKS' });
+  });
+  test.each([
+    ['FIXED', { handoverType: 'VARIABLE', handoverLeadValue: 2, handoverLeadUnit: 'WEEKS' }, { handoverDate: '2027-02-28' }],
+    ['VARIABLE', { handoverType: 'FIXED', handoverDate: '2027-03-15' }, { handoverLeadValue: 4, handoverLeadUnit: 'MONTHS' }],
+  ])('switching from %s preserves inactive timing in the proposal and verified value', async (handoverType, proposedValue, retained) => {
+    await db.warehouse.update({ where: { id: 4821 }, data: { handoverType, handoverLeadValue: 4, handoverLeadUnit: 'MONTHS' } });
+    const review = await create(['handover']);
+    const response = await submit(review, 0, { proposedValue });
+    expect(response.flags[0].proposedValue).toMatchObject({ ...proposedValue, ...retained });
+    expect((await live()).handoverType).toBe(handoverType);
+    const verified = await service.decide(response.id, response.flags[0].id, decision(response.flags[0]), admin);
+    expect(verified.flags[0].finalValue).toMatchObject({ ...proposedValue, ...retained });
+    expect(getValue(await live(), 'handover')).toMatchObject({ ...proposedValue, ...retained });
+  });
+  test('verification rechecks a clearing proposal submitted before enforcement', async () => {
+    const review = await create(['clearHeightFt']);
+    const response = await submit(review, 0, { proposedValue: '31 feet' });
+    // Seed a historical clearing proposal directly; new responses must reject it.
+    await db.warehouseFieldFlag.update({ where: { id: response.flags[0].id }, data: { proposedValue: Prisma.JsonNull } });
+    await expect(service.decide(response.id, response.flags[0].id, decision(response.flags[0]), admin))
+      .rejects.toMatchObject({ code: 'INVALID_FIELD_VALUE' });
+    expect((await live()).clearHeightFt).toBe('30 feet');
+  });
+  test('legacy blanks permit No change, but a stale blank baseline cannot replace a newly filled answer', async () => {
+    await db.warehouse.update({ where: { id: 4821 }, data: { clearHeightFt: null, plinthHeightFt: null } });
+    let review = await create(['clearHeightFt', 'plinthHeightFt']);
+    review = await submit(review, 0, { resolution: 'NO_CHANGE' });
+    review = await service.decide(review.id, review.flags[0].id, decision(review.flags[0]), admin);
+    expect((await live()).clearHeightFt).toBeNull();
+    review = await submit(review, 1, { proposedValue: '1 feet' });
+    await db.warehouse.update({ where: { id: 4821 }, data: { plinthHeightFt: '2 feet' } });
+    review = await service.detail(review.id, admin);
+    await expect(service.decide(review.id, review.flags[1].id, decision(review.flags[1], {
+      choice: 'BASELINE', reason: 'Testing a stale blank baseline', confirmed: true,
+    }), admin)).rejects.toMatchObject({ code: 'INVALID_FIELD_VALUE' });
+    expect((await live()).plinthHeightFt).toBe('2 feet');
+  });
 });
 const polygons = [{ id: 'fixture', name: 'Fixture market', geometry: {
   type: 'Polygon', coordinates: [[[72, 18], [74, 18], [74, 20], [72, 20], [72, 18]]],
@@ -755,17 +811,15 @@ test('legacy handover history exposes the recorded parts without inventing a ful
   expect(new Set(history.items.map(item => item.id)).size).toBe(2);
 });
 
-test('a handover correction can clear a previously confirmed date without changing inactive timing', async () => {
+test('a handover correction cannot clear a previously confirmed date', async () => {
   await db.warehouse.update({ where: { id: 4821 }, data: {
     handoverType: 'FIXED', handoverDate: new Date('2026-12-01'), handoverLeadValue: 2, handoverLeadUnit: 'WEEKS',
   } });
-  let r = await submit(await create(['handover']), 0, { proposedValue: {
+  const review = await create(['handover']);
+  await expect(submit(review, 0, { proposedValue: {
     handoverType: 'FIXED', handoverDate: null, handoverLeadValue: 2, handoverLeadUnit: 'WEEKS',
-  } });
-  expect((await live()).handoverDate).not.toBeNull();
-  r = await service.decide(r.id, r.flags[0].id, decision(r.flags[0]), admin);
-  expect(r.flags[0].status).toBe('VERIFIED');
-  expect(await live()).toMatchObject({ handoverDate: null, handoverLeadValue: 2, handoverLeadUnit: 'WEEKS' });
+  } })).rejects.toMatchObject({ code: 'INVALID_FIELD_VALUE' });
+  expect(await live()).toMatchObject({ handoverDate: new Date('2026-12-01'), handoverLeadValue: 2, handoverLeadUnit: 'WEEKS' });
 });
 
 test.each(['FIXED', 'VARIABLE'].flatMap(mode => ['PROPOSED', 'BASELINE'].map(choice => [mode, choice])))

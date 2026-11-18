@@ -1,6 +1,6 @@
 const { resolvePin } = require('../utils/googleMaps/resolvePin');
 const rateLimit = require('express-rate-limit');
-const { requiresNewFormFields } = require('../utils/formChanges');
+const { PPT_FORM_FIELDS, HANDOVER_FIELDS, pptFormIssues } = require('../utils/pptFormPolicy');
 
 // Location checks have their own allowance; typing a Maps URL must not consume
 // the Scout image/voice upload allowance.
@@ -21,14 +21,14 @@ async function resolveFormLocation(req, res) {
 }
 
 function validateNewWarehouseForm(req, res, next) {
-    if (requiresNewFormFields() && (typeof req.body?.warehouseData?.landType !== 'string' || !req.body.warehouseData.landType.trim())) {
-        return res.status(400).json({ error: 'Validation failed', message: 'Land Type is required.',
-            details: { issues: [{ path: ['warehouseData', 'landType'], message: 'Land Type is required.' }] } });
-    }
-    if (requiresNewFormFields() && (typeof req.body?.googleLocation !== 'string' || !req.body.googleLocation.trim())) {
-        return res.status(400).json({ error: 'Validation failed', message: 'Google Location URL is required.',
-            details: { issues: [{ path: ['googleLocation'], message: 'Google Location URL is required.' }] } });
-    }
+    // Validate only writable payload paths. WarehouseData (the read shape)
+    // and flattened nested keys are stripped by Zod and must not satisfy a
+    // requirement here when the actual warehouseData value is missing.
+    const answers = Object.fromEntries(PPT_FORM_FIELDS.map(field => [field.key,
+        field.nested ? req.body?.warehouseData?.[field.key] : req.body?.[field.key]]));
+    for (const key of HANDOVER_FIELDS) answers[key] = req.body?.[key];
+    const issues = pptFormIssues(null, answers);
+    if (issues.length) return res.status(400).json({ error: 'Validation failed', message: issues[0].message, details: { issues } });
     // Pin resolution is deferred for a later audit. Saving does not contact Maps.
     if (typeof req.body?.googleLocation === 'string') req.body.googleLocation = req.body.googleLocation.trim();
     next();

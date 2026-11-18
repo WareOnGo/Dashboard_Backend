@@ -12,6 +12,7 @@ const request = require('supertest');
 const createAuditMiddleware = require('../../src/middleware/auditMiddleware');
 const WarehouseController = require('../../src/controllers/warehouseController');
 const WarehouseService = require('../../src/services/warehouseService');
+const { pptFormSnapshot } = require('../../src/utils/pptFormPolicy');
 const VisitNoteController = require('../../src/controllers/visitNoteController');
 const VisitNoteService = require('../../src/services/visitNoteService');
 const VisitNoteValidator = require('../../src/validators/visitNoteValidator');
@@ -59,6 +60,7 @@ describe('warehouse UPDATE audit diff', () => {
     it('records before/after for changed fields and omits untouched ones', async () => {
         const { app, captured } = warehouseApp();
         const res = await request(app).put('/api/warehouses/42').send({
+            expectedFormValues: pptFormSnapshot(WAREHOUSE),
             city: 'Mumbai',
             ratePerSqft: '30',
             totalSpaceSqft: [10000],                              // unchanged
@@ -102,7 +104,7 @@ describe('warehouse UPDATE audit diff', () => {
 
     it('records a no-op write with an empty diff rather than inventing changes', async () => {
         const { app, captured } = warehouseApp();
-        await request(app).put('/api/warehouses/42').send({ city: 'Pune', ratePerSqft: '25' });
+        await request(app).put('/api/warehouses/42').send({ city: 'Pune', ratePerSqft: '25', expectedFormValues: pptFormSnapshot(WAREHOUSE) });
         await flushed();
 
         expect(captured[0].metadata.changes).toEqual([]);
