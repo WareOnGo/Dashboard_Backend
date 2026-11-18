@@ -34,6 +34,7 @@ const {
 class ReviewError extends Error {
   constructor(status, code, message) {
     super(message);
+    this.name = 'FieldReviewError';
     this.status = status;
     this.code = code;
   }
@@ -56,14 +57,16 @@ const rosterSelect = {
   is_active: true,
   dashboardAccess: true,
   ...Object.fromEntries(WAREHOUSE_PERMISSION_COLUMNS.map(key => [key, true])),
-  adminAccess: true
+  adminAccess: true,
+  reviewerAccess: true
 };
 const admin = row => !!row?.adminAccess || isAdmin(row?.email);
+const reviewer = row => admin(row) || row?.reviewerAccess === true;
 const eligible = row => row?.is_active && row.email && (effectiveWarehousePermissions(row).viewOwnWarehouseEntries || admin(row));
 const withCapabilities = row => {
-  const permissions = effectiveWarehousePermissions(row);
+  const permissions = { ...row, ...effectiveWarehousePermissions(row) };
   const isAdmin = admin(row);
-  return { ...row, isAdmin, capabilities: Object.fromEntries(Object.entries(CAP_COLUMN)
+  return { ...row, isAdmin, isReviewer: reviewer(row), capabilities: Object.fromEntries(Object.entries(CAP_COLUMN)
     .map(([key, column]) => [key, isAdmin || permissions[column] === true])) };
 };
 const publicPerson = row => row ? {
@@ -94,7 +97,7 @@ class FieldReviewService {
     this.db = db;
     this.microMarketService = microMarketService;
   }
-  async actor(tx, user, adminOnly = false) {
+  async actor(tx, user, reviewerOnly = false) {
     const rows = await tx.verifiedNumber.findMany({
       where: {
         email: insensitiveExact(user.email)
@@ -103,7 +106,7 @@ class FieldReviewService {
       take: 2
     });
     const row = rows.length === 1 ? rows[0] : null;
-    if (!eligible(row) || adminOnly && !admin(row)) fail(403, 'FIELD_REVIEW_FORBIDDEN', 'You do not have access to this action.');
+    if (!eligible(row) || reviewerOnly && !reviewer(row)) fail(403, 'FIELD_REVIEW_FORBIDDEN', 'You do not have access to this action.');
     return withCapabilities(row);
   }
   async roster(tx, warehouse) {
@@ -121,7 +124,7 @@ class FieldReviewService {
     const counts = new Map();
     rows.forEach(r => counts.set(r.email.toLowerCase(), (counts.get(r.email.toLowerCase()) || 0) + 1));
     return rows.filter(r => eligible(r) && counts.get(r.email.toLowerCase()) === 1
-      && (!warehouse || canAccessWarehouse(withCapabilities(r), warehouse, 'edit')));
+      && (!warehouse || canAccessWarehouse(withCapabilities(r), warehouse)));
   }
   async uploader(tx, value, eligiblePeople) {
     const uploaded = String(value || '').trim();
@@ -138,7 +141,7 @@ class FieldReviewService {
     return { id, assigneeId: eligiblePeople.some(person => person.id === id) ? id : null };
   }
   assertOwner(review, actor) {
-    if (!actor.isAdmin && review.assigneeId !== actor.id) fail(403, 'FIELD_REVIEW_FORBIDDEN', 'This review is assigned to another employee.');
+    if (!actor.isReviewer && review.assigneeId !== actor.id) fail(403, 'FIELD_REVIEW_FORBIDDEN', 'This review is assigned to another employee.');
   }
   async warehouse(tx, id, lock = false) {
     if (lock) {
@@ -216,7 +219,7 @@ class FieldReviewService {
       },
       select: rosterSelect
     });
-    const assignees = actor.isAdmin ? (warehouse ? await this.roster(tx, warehouse) : []) : null;
+    const assignees = actor.isReviewer ? (warehouse ? await this.roster(tx, warehouse) : []) : null;
     const legacy = await tx.auditLog.findMany({
       where: {
         entity: 'warehouse',
@@ -256,7 +259,7 @@ class FieldReviewService {
     const cycles = await tx.warehouseFieldReview.findMany({
       where: {
         warehouseId: review.warehouseId,
-        ...(!actor.isAdmin ? {
+        ...(!actor.isReviewer ? {
           assigneeId: actor.id
         } : {})
       },
@@ -274,10 +277,10 @@ class FieldReviewService {
       flags,
       warehouse: plainWarehouse(warehouse),
       assignee: publicPerson(assignee),
-      canRespond: actor.id === review.assigneeId && !!warehouse && canAccessWarehouse(actor, warehouse, 'edit'),
+      canRespond: actor.id === review.assigneeId && !review.closedAt && !!warehouse && canAccessWarehouse(actor, warehouse),
       assigneeCanRespond: assignees ? assignees.some(r => r.id === review.assigneeId)
-        : actor.id === review.assigneeId && !!warehouse && canAccessWarehouse(actor, warehouse, 'edit'),
-      canVerify: actor.isAdmin,
+        : actor.id === review.assigneeId && !!warehouse && canAccessWarehouse(actor, warehouse),
+      canVerify: actor.isReviewer,
       deleted: !warehouse,
       ...events,
       cycles,
@@ -343,6 +346,7 @@ class FieldReviewService {
       const actor = await this.actor(tx, user, true),
         warehouse = await this.warehouse(tx, warehouseId);
       if (!warehouse) fail(404, 'WAREHOUSE_NOT_FOUND', 'Warehouse not found.');
+      assertWarehouseAccess(actor, warehouse);
       const people = await this.roster(tx, warehouse);
       const uploader = await this.uploader(tx, warehouse.uploadedBy, people);
       const current = await tx.warehouseFieldReview.findFirst({
@@ -391,9 +395,10 @@ class FieldReviewService {
       body,
       target
     })).digest('hex');
-    const id = await this.db.$transaction(async tx => {
+    return this.db.$transaction(async tx => {
       const warehouse = await this.warehouse(tx, warehouseId, true);
       const actor = await this.actor(tx, user);
+      assertWarehouseAccess(actor, warehouse);
       const previous = await tx.warehouseFieldReviewEvent.findUnique({
         where: {
           requestId: body.requestId
@@ -401,7 +406,7 @@ class FieldReviewService {
       });
       if (previous) {
         if (previous.actorEmail !== actor.email || previous.requestHash !== hash) fail(409, 'REQUEST_REUSED', 'This request ID was already used for a different action.');
-        return previous.reviewId;
+        return this.detailTx(tx, previous.reviewId, actor);
       }
       const result = await run(tx, actor, warehouse);
       await tx.warehouseFieldReviewEvent.create({
@@ -433,15 +438,16 @@ class FieldReviewService {
           }
         }
       });
-      return result.reviewId;
+      // Prepare the response before committing. A failed snapshot read must
+      // roll back the write instead of reporting an error after it succeeded.
+      return this.detailTx(tx, result.reviewId, actor);
     }, {
       timeout: 15000
     });
-    return this.detail(id, user);
   }
   create(body, user) {
     return this.mutate(body.warehouseId, user, body, 'CREATED', async (tx, actor, warehouse) => {
-      if (!actor.isAdmin) fail(403, 'FIELD_REVIEW_FORBIDDEN', 'Only admins can flag warehouse fields.');
+      if (!actor.isReviewer) fail(403, 'FIELD_REVIEW_FORBIDDEN', 'Only reviewers can flag warehouse fields.');
       const keys = body.fields.map(f => f.key);
       if (new Set(keys).size !== keys.length) fail(400, 'DUPLICATE_FIELDS', 'Select each field once.');
       const duplicate = await tx.warehouseFieldFlag.findFirst({
@@ -463,7 +469,7 @@ class FieldReviewService {
       const roster = await this.roster(tx, warehouse);
       const uploader = await this.uploader(tx, warehouse.uploadedBy, roster);
       const assigneeId = body.assigneeId ?? review?.assigneeId ?? uploader.assigneeId;
-      if (!roster.some(r => r.id === assigneeId)) fail(400, 'ASSIGNEE_REQUIRED', 'Select an active employee who can edit this warehouse.');
+      if (!roster.some(r => r.id === assigneeId)) fail(400, 'ASSIGNEE_REQUIRED', 'Select an active employee who can view this warehouse.');
       if (review && review.assigneeId !== assigneeId) fail(409, 'ASSIGNEE_CHANGED', 'This warehouse already has an assignee. Reassign its active review before adding fields.');
       if (!review) review = await tx.warehouseFieldReview.create({
         data: {
@@ -521,9 +527,10 @@ class FieldReviewService {
   }
   respond(reviewId, flagId, body, user) {
     return this.withFlag(reviewId, flagId, user, body, 'SUBMITTED', async (tx, actor, warehouse, review, flag) => {
-      assertWarehouseAccess(actor, warehouse, 'edit');
+      // The assignment permits proposals for its open flags without granting
+      // ordinary warehouse Edit access. View access was checked by mutate.
       if (actor.id !== review.assigneeId) fail(403, 'FIELD_REVIEW_FORBIDDEN', 'Only the assigned employee can submit a response.');
-      if (!['NEEDS_RESPONSE', 'CHANGES_REQUESTED'].includes(flag.status)) fail(409, 'FLAG_CHANGED', 'This field is already awaiting a decision or is closed.');
+      if (review.closedAt || !['NEEDS_RESPONSE', 'CHANGES_REQUESTED'].includes(flag.status)) fail(409, 'FLAG_CHANGED', 'This field is already awaiting a decision or is closed.');
       const currentVersion = await this.version(tx, warehouse.id, flag.fieldKey);
       if (currentVersion !== body.baselineVersion) fail(409, 'BASELINE_CHANGED', 'The live value changed while you were preparing this response. Review the latest value before resubmitting.');
       const baseline = getValue(warehouse, flag.fieldKey);
@@ -585,7 +592,7 @@ class FieldReviewService {
       }
     }
     return this.withFlag(reviewId, flagId, user, body, 'VERIFIED', async (tx, actor, warehouse, review, flag) => {
-      if (!actor.isAdmin) fail(403, 'FIELD_REVIEW_FORBIDDEN', 'Only an admin can verify a response.');
+      if (!actor.isReviewer) fail(403, 'FIELD_REVIEW_FORBIDDEN', 'Only a reviewer can verify a response.');
       if (flag.status !== 'AWAITING_ADMIN') fail(409, 'FLAG_CHANGED', 'Only submitted responses can be verified.');
       const currentVersion = await this.version(tx, warehouse.id, flag.fieldKey),
         current = getValue(warehouse, flag.fieldKey);
@@ -679,7 +686,7 @@ class FieldReviewService {
   }
   returnForChanges(reviewId, flagId, body, user) {
     return this.withFlag(reviewId, flagId, user, body, 'RETURNED', async (tx, actor, warehouse, review, flag) => {
-      if (!actor.isAdmin) fail(403, 'FIELD_REVIEW_FORBIDDEN', 'Only admins can request changes.');
+      if (!actor.isReviewer) fail(403, 'FIELD_REVIEW_FORBIDDEN', 'Only reviewers can request changes.');
       if (flag.status !== 'AWAITING_ADMIN') fail(409, 'FLAG_CHANGED', 'Only a submitted response can be returned.');
       await tx.warehouseFieldFlag.update({
         where: {
@@ -703,7 +710,7 @@ class FieldReviewService {
   }
   reopen(reviewId, flagId, body, user) {
     return this.withFlag(reviewId, flagId, user, body, 'REOPENED', async (tx, actor, warehouse, review, flag) => {
-      if (!actor.isAdmin) fail(403, 'FIELD_REVIEW_FORBIDDEN', 'Only admins can reopen verified flags.');
+      if (!actor.isReviewer) fail(403, 'FIELD_REVIEW_FORBIDDEN', 'Only reviewers can reopen verified flags.');
       if (flag.status !== 'VERIFIED') fail(409, 'FLAG_CHANGED', 'This field is already active.');
       const duplicate = await tx.warehouseFieldFlag.findFirst({
         where: {
@@ -781,11 +788,11 @@ class FieldReviewService {
     });
     if (!parent) fail(404, 'FIELD_REVIEW_NOT_FOUND', 'Review not found.');
     return this.mutate(parent.warehouseId, user, body, 'REASSIGNED', async (tx, actor, warehouse) => {
-      if (!actor.isAdmin) fail(403, 'FIELD_REVIEW_FORBIDDEN', 'Only admins can reassign work.');
+      if (!actor.isReviewer) fail(403, 'FIELD_REVIEW_FORBIDDEN', 'Only reviewers can reassign work.');
       const review = await this.getReview(tx, reviewId, actor);
       if (review.version !== body.version) fail(409, 'REVIEW_CHANGED', 'Review ownership changed. Refresh before reassigning.');
       if (review.closedAt) fail(409, 'REVIEW_CLOSED', 'Reopen a field before reassigning a completed review.');
-      if (!(await this.roster(tx, warehouse)).some(r => r.id === body.assigneeId)) fail(400, 'INVALID_ASSIGNEE', 'Choose an active employee who can edit this warehouse.');
+      if (!(await this.roster(tx, warehouse)).some(r => r.id === body.assigneeId)) fail(400, 'INVALID_ASSIGNEE', 'Choose an active employee who can view this warehouse.');
       await tx.warehouseFieldReview.update({
         where: {
           id: reviewId
@@ -902,8 +909,8 @@ class FieldReviewService {
   } = {}) {
     return this.db.$transaction(async tx => {
       const actor = await this.actor(tx, user);
-      if (!actor.isAdmin && !['current', 'previous'].includes(view)) fail(403, 'FIELD_REVIEW_FORBIDDEN', 'This queue is admin-only.');
-      const scope = actor.isAdmin ? assigneeId ? {
+      if (!actor.isReviewer && !['current', 'previous'].includes(view)) fail(403, 'FIELD_REVIEW_FORBIDDEN', 'This queue is reviewer-only.');
+      const scope = actor.isReviewer ? assigneeId ? {
         assigneeId
       } : {} : {
         assigneeId: actor.id
@@ -976,7 +983,7 @@ class FieldReviewService {
       };
       if (!states[view]) fail(400, 'INVALID_QUEUE', 'Unknown queue segment.');
       const counts = {};
-      for (const key of actor.isAdmin ? Object.keys(states) : ['current', 'previous']) {
+      for (const key of actor.isReviewer ? Object.keys(states) : ['current', 'previous']) {
         counts[key] = (await tx.warehouseFieldReview.groupBy({
           by: ['warehouseId'],
           where: {
@@ -1025,7 +1032,7 @@ class FieldReviewService {
         select: rosterSelect
       });
       return {
-        assignees: actor.isAdmin ? (await this.roster(tx)).map(publicPerson) : undefined,
+        assignees: actor.isReviewer ? (await this.roster(tx)).map(publicPerson) : undefined,
         filterOptions,
         data: reviews.map(r => ({
           ...r,
@@ -1070,7 +1077,8 @@ class FieldReviewService {
               status: active
             },
             select: {
-              id: true
+              fieldKey: true,
+              comment: true
             }
           }
         }
@@ -1078,8 +1086,11 @@ class FieldReviewService {
       return reviews.map(r => ({
         warehouseId: r.warehouseId,
         activeCount: r.flags.length,
-        reviewId: actor.isAdmin || r.assigneeId === actor.id ? r.id : null,
-        canOpen: actor.isAdmin || r.assigneeId === actor.id
+        activeFieldKeys: r.flags.map(flag => flag.fieldKey).sort(),
+        activeFields: r.flags.map(({ fieldKey, comment }) => ({ fieldKey, comment }))
+          .sort((a, b) => a.fieldKey.localeCompare(b.fieldKey)),
+        reviewId: actor.isReviewer || r.assigneeId === actor.id ? r.id : null,
+        canOpen: actor.isReviewer || r.assigneeId === actor.id
       }));
     }, {
       isolationLevel: 'RepeatableRead'

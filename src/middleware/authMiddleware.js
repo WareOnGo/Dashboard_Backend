@@ -139,11 +139,12 @@ class AuthMiddleware {
      *   - req.user.isReviewer   — convenience mirror of the REVIEW capability (frontend back-compat)
      *
      * @param {string} capability - one of CAPS (e.g. CAPS.REVIEW)
+     * @param {{ fresh?: boolean }} options - require current roster grants even for reads
      * @returns {Function} Express middleware
      *
      * @example router.use(authenticateJWT, requireAccess(CAPS.REVIEW))
      */
-    requireAccess = (capability) => async (req, res, next) => {
+    requireAccess = (capability, { fresh: forceFresh = false } = {}) => async (req, res, next) => {
         if (!req.user || !req.user.isAuthenticated) {
             return this.sendUnauthorizedResponse(res, 'Authentication required');
         }
@@ -151,7 +152,7 @@ class AuthMiddleware {
         try {
             // Warehouse data must observe revocations committed on other instances,
             // including reads. A process-local cache cannot enforce that boundary.
-            const fresh = capability === CAPS.ADMIN || WAREHOUSE_CAPABILITIES.has(capability)
+            const fresh = forceFresh || capability === CAPS.ADMIN || WAREHOUSE_CAPABILITIES.has(capability)
                 || !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
             const caps = await resolveCapabilities(req.user.email, { fresh });
             req.user.capabilities = caps;

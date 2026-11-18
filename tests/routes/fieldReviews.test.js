@@ -4,6 +4,7 @@ const {
   randomUUID
 } = require('node:crypto');
 const {
+  app: warehouseApp,
   prisma,
   reset,
   tokenFor,
@@ -40,6 +41,16 @@ test('requires JWT before any field-review service call', async () => {
   await request(app).get(root).expect(401);
   expect(service.list).not.toHaveBeenCalled();
 });
+test('a viewer without Reviewer or Edit access can request the field markers', async () => {
+  prisma.verifiedNumber.findFirst.mockResolvedValue(active({ editOwnWarehouseEntries: false, editAllWarehouseEntries: false }));
+  const summaries = [{ warehouseId: 4821, activeCount: 1, activeFieldKeys: ['ratePerSqft'],
+    activeFields: [{ fieldKey: 'ratePerSqft', comment: 'Confirm the rent.' }], canOpen: false, reviewId: null }];
+  service.summaries.mockResolvedValue(summaries);
+  const response = await auth(request(app).get(root + '/summaries')).query({ ids: '4821' }).expect(200);
+  expect(response.body).toEqual({ success: true, data: summaries });
+  expect(service.summaries).toHaveBeenCalledWith([4821], expect.objectContaining({ isReviewer: false, isAdmin: false }));
+  expect(service.detail).not.toHaveBeenCalled();
+});
 test('queue filters use the dashboard vocabulary and bounded pagination', async () => {
   await auth(request(app).get(root)).query({
     view: 'previous', page: '2', limit: '100', search: '4821, 4822',
@@ -64,11 +75,63 @@ test.each([
   expect(service.list).not.toHaveBeenCalled();
 });
 test('employees cannot create, decide, return, reopen or reassign', async () => {
+  await auth(request(app).get(root + '/setup/4821')).expect(403);
   for (const path of ['', '/' + id + '/flags/' + flag + '/decision', '/' + id + '/flags/' + flag + '/return', '/' + id + '/flags/' + flag + '/reopen']) await auth(request(app).post(root + path)).send(body()).expect(403);
   await auth(request(app).patch(root + '/' + id + '/assignee')).send({
     assigneeId: 8
   }).expect(403);
-  expect(service.decide).not.toHaveBeenCalled();
+  for (const method of ['setup', 'create', 'decide', 'returnForChanges', 'reopen', 'reassign']) {
+    expect(service[method]).not.toHaveBeenCalled();
+  }
+});
+test.each([
+  ['reviewer', { reviewerAccess: true }],
+  ['admin', { adminAccess: true }]
+])('%s can flag, verify, return, reopen and reassign', async (_role, permissions) => {
+  prisma.verifiedNumber.findFirst.mockResolvedValue(active(permissions));
+  await auth(request(app).get(root + '/setup/4821')).expect(200);
+  await auth(request(app).post(root)).send({
+    requestId: randomUUID(), warehouseId: 4821, assigneeId: 8,
+    fields: [{ key: 'ratePerSqft', comment: 'Confirm the rent.' }]
+  }).expect(200);
+  await auth(request(app).post(root + '/' + id + '/flags/' + flag + '/decision')).send({
+    requestId: randomUUID(), version: 0, currentVersion: 0, choice: 'PROPOSED'
+  }).expect(200);
+  await auth(request(app).post(root + '/' + id + '/flags/' + flag + '/return')).send({
+    requestId: randomUUID(), version: 0, comment: 'Please check again.'
+  }).expect(200);
+  await auth(request(app).post(root + '/' + id + '/flags/' + flag + '/reopen')).send({
+    requestId: randomUUID(), version: 0
+  }).expect(200);
+  await auth(request(app).patch(root + '/' + id + '/assignee')).send({
+    requestId: randomUUID(), version: 0, assigneeId: 8
+  }).expect(200);
+  for (const method of ['setup', 'create', 'decide', 'returnForChanges', 'reopen', 'reassign']) {
+    expect(service[method]).toHaveBeenCalledTimes(1);
+    expect(service[method].mock.calls[0].at(-1)).toMatchObject({
+      email: 'user@wareongo.com', isReviewer: true, isAdmin: !!permissions.adminAccess
+    });
+  }
+});
+test('revoking reviewer access blocks the next management request', async () => {
+  prisma.verifiedNumber.findFirst.mockResolvedValue(active({ reviewerAccess: true }));
+  await auth(request(app).get(root + '/setup/4821')).expect(200);
+  prisma.verifiedNumber.findFirst.mockResolvedValue(active());
+  await auth(request(app).post(root)).send({
+    requestId: randomUUID(), warehouseId: 4821,
+    fields: [{ key: 'ratePerSqft', comment: 'Confirm the rent.' }]
+  }).expect(403);
+  expect(service.create).not.toHaveBeenCalled();
+});
+test.each([false, true])('setup observes a cross-instance reviewer change while the cached grant is %s', async previousGrant => {
+  const { resolveCapabilities } = require('../../src/utils/access');
+  prisma.verifiedNumber.findFirst.mockResolvedValue(active({ reviewerAccess: previousGrant }));
+  expect((await resolveCapabilities('user@wareongo.com')).REVIEW).toBe(previousGrant);
+  // Updating a different API instance does not invalidate this process's cache.
+  prisma.verifiedNumber.findFirst.mockResolvedValue(active({ reviewerAccess: !previousGrant }));
+  await auth(request(app).get(root + '/setup/4821')).expect(previousGrant ? 403 : 200);
+  if (previousGrant) expect(service.setup).not.toHaveBeenCalled();
+  else expect(service.setup).toHaveBeenCalledWith(4821, expect.objectContaining({ isReviewer: true }));
 });
 test('reviewer permission alone does not grant dashboard or field-review access', async () => {
   prisma.verifiedNumber.findFirst.mockResolvedValue(active({
@@ -76,7 +139,11 @@ test('reviewer permission alone does not grant dashboard or field-review access'
     reviewerAccess: true
   }));
   await auth(request(app).get(root)).expect(403);
+  await auth(request(app).get(root + '/setup/4821')).expect(403);
+  await auth(request(app).post(root)).send({}).expect(403);
   expect(service.list).not.toHaveBeenCalled();
+  expect(service.setup).not.toHaveBeenCalled();
+  expect(service.create).not.toHaveBeenCalled();
 });
 test.each(['REJECT', 'ACCEPT', 'APPROVE'])('removed employee action %s is rejected', async resolution => {
   await auth(request(app).post(root + '/' + id + '/flags/' + flag + '/response')).send({
@@ -108,6 +175,18 @@ test('valid response passes the authenticated identity and typed payload only', 
   expect(service.respond).toHaveBeenCalledWith(id, flag, data, expect.objectContaining({
     email: 'user@wareongo.com'
   }));
+});
+test('read-only employees can submit review responses without receiving ordinary warehouse Edit access', async () => {
+  prisma.verifiedNumber.findFirst.mockResolvedValue(active({
+    editOwnWarehouseEntries: false, editAllWarehouseEntries: false,
+  }));
+  const data = body();
+  await auth(request(app).post(root + '/' + id + '/flags/' + flag + '/response')).send(data).expect(200);
+  expect(service.respond).toHaveBeenCalledWith(id, flag, data, expect.objectContaining({
+    capabilities: expect.objectContaining({ WAREHOUSE_EDIT_OWN: false, WAREHOUSE_EDIT_ALL: false }),
+  }));
+  await auth(request(warehouseApp).put('/api/warehouses/4821')).send({ ratePerSqft: '24' }).expect(403);
+  expect(prisma.warehouse.update).not.toHaveBeenCalled();
 });
 test('returns an actionable conflict without an internal exception or 500', async () => {
   prisma.verifiedNumber.findFirst.mockResolvedValue(active({

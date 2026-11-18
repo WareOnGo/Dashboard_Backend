@@ -1,25 +1,25 @@
 # Warehouse field review
 
-Implementation of the approved v0.6 flow. The frontend and backend both use the `field-review` branch. This feature is independent of the staged warehouse submission review queue.
+Implementation of the approved v0.6 flow. This feature is independent of the staged warehouse submission review queue.
 
 Availability and Last reviewed now use one linked review item. The [adversarial review](field-review-adversarial-review.md) records the resolved concurrency failure, verification and remaining limits.
 
 ## User flow
 
-1. An admin opens the existing warehouse View and selects **Flag for review**. Editable fields gain checkboxes. Each selected field requires a comment.
-2. **Review flags** opens the summary and assignee dropdown. New reviews default to the eligible original uploader. The admin can choose another employee. Confirm creates the selected flags together without changing warehouse data.
-3. The assigned employee opens **Flagged for review**, using the existing dashboard cards. **Currently flagged** contains active work, including responses awaiting admin. **Previously flagged** contains completed cycles.
+1. A reviewer opens the existing warehouse View and selects **Flag for review**. Editable fields gain checkboxes. Each selected field requires a comment.
+2. **Review flags** opens the summary and assignee dropdown. New reviews default to the eligible original uploader. The reviewer can choose another employee. Confirm creates the selected flags together without changing warehouse data.
+3. The assigned employee opens **Flagged for review**, using the existing dashboard cards. **Currently flagged** contains active work, including responses awaiting reviewer. **Previously flagged** contains completed cycles.
 4. In **Flagged fields**, the employee directly proposes a correction or selects **No change needed**, adds a verification note, and submits that field. There are no employee Accept, Approve or Reject controls.
 5. **All details** renders `WarehouseDetailsModal` itself, with the normal fields, sections, phone controls and media. Switching tabs preserves response drafts and each tab's scroll. The displayed warehouse data remains live data.
-6. Admins use **To verify** and **Awaiting employee** in the Flag Review Queue. Ordinary verification applies one field and closes its flag; Request changes returns that field with a required comment.
-7. When the live field changed in transit, admins see **Baseline**, **Proposed** and **Current**, with available edit history under Current. No choice is preselected. Keep current, Apply proposed, or Restore baseline closes the flag. Replacing Current requires a reason and confirmation. Another intervening edit cancels that decision and requires a fresh comparison.
-8. A warehouse stays active and carries its orange dashboard marker until its final active field closes. Admins can reopen completed flags, preserving earlier responses and decisions.
+6. Reviewers use **To verify** and **Awaiting employee** in the Flag Review Queue. Ordinary verification applies one field and closes its flag; Request changes returns that field with a required comment.
+7. When the live field changed in transit, reviewers see **Baseline**, **Proposed** and **Current**, with available edit history under Current. No choice is preselected. Keep current, Apply proposed, or Restore baseline closes the flag. Replacing Current requires a reason and confirmation. Another intervening edit cancels that decision and requires a fresh comparison.
+8. A warehouse stays active and carries its orange dashboard marker until its final active field closes. Reviewers can reopen completed flags, preserving earlier responses and decisions.
 
 ### Availability and Last reviewed
 
 1. In the existing View, one **Availability & last reviewed** checkbox flags the pair. The two normal View fields keep their existing layout. The confirmation summary includes both values and one review comment.
 2. The employee sees the availability selector and review-date calendar in one flagged item. Changing Availability in this editor clears the previous date; the employee enters the date they verified the new answer or leaves it blank if unknown. A correction submits both values, including an explicit null date when cleared. No change needed still requires an explanation and verifies the complete pair.
-3. Both values stay staged until admin verification. Changing either live value increments the pair's shared revision and records a complete before/after snapshot. An unrelated field edit does not invalidate this review.
+3. Both values stay staged until reviewer verification. Changing either live value increments the pair's shared revision and records a complete before/after snapshot. An unrelated field edit does not invalidate this review.
 4. A conflict shows the complete pair in **Baseline**, **Proposed** and **Current**, with available history under Current. Each choice applies that complete pair. Replacing Current requires a reason and confirmation; another edit to either value invalidates the displayed comparison, even if it later reverts.
 5. Approval writes both values, closes the flag and records the decision in one transaction. Any failure rolls them all back. Normal View/Edit remains available while the flag is active.
 
@@ -51,11 +51,23 @@ To roll back the application, deploy the previous application version and leave 
 
 A partial unique index enforces one active cycle per warehouse and one active flag per warehouse/field. Approval locks the warehouse and its detail row, rechecks the field/review versions and permission, and writes the selected value, flag closure and event in one transaction. Unrelated field changes do not cause a conflict. Duplicate request keys cannot repeat an action or be reused for another field.
 
-The existing JWT and warehouse permission gates apply. The service also checks current roster eligibility on every operation. Only admins can create, assign, verify, return or reopen. Only the current assignee with Edit access to this warehouse can respond. Assignment options require that same access; the original uploader is the default only when eligible. If an existing assignee loses access, their ownership/history is retained and the admin is prompted to restore access or reassign. Other employees see the dashboard indicator but cannot open another employee's review. Assignment does not grant additional access.
+Mutation responses are assembled inside that same transaction, using its authorized actor. If preparing the response fails, the write rolls back. Idempotent retries also read their response inside the transaction; there is no separate post-commit permission read that could report failure after a successful write.
+
+The existing JWT and warehouse permission gates apply. The `REVIEW` capability (`reviewerAccess`) permits creating flags, verifying responses, requesting changes, reopening and reassignment within the caller’s warehouse View scope. Admins inherit this capability. Reviewer access alone does not grant Dashboard or warehouse View access. The service also checks current roster eligibility on every operation. Only reviewers can create, assign, verify, return or reopen. The current assignee can submit proposals for open flagged fields without warehouse Edit permission. Assignment options require an active, unique employee identity with View access to the warehouse; the original uploader is the default only when eligible. If an existing assignee loses account or View access, their ownership/history is retained; a reviewer can reassign the review, or an admin can restore the employee’s access. Other employees see the dashboard indicator but cannot open another employee's review.
+
+Assignment authorizes only responses to that review’s fields in `NEEDS_RESPONSE` or `CHANGES_REQUESTED`. Closed fields reject responses even if another field is still open. Closing all flags sets `canRespond` to false; reopening restores response permission to the current assignee. Reassignment transfers that permission immediately. Saved warehouse Edit grants are never changed, so no cleanup job is needed and ordinary warehouse editing remains governed by the employee’s existing permissions. Proposals stay staged until verification.
+
+Verification requires Reviewer and warehouse View access; it does not require warehouse Edit access. An employee who also has Reviewer access may respond when assigned and may verify their own response. The setup route explicitly reads fresh reviewer grants, so permission changes made on another API instance do not wait for the local capability cache to expire.
 
 Protected phone snapshots, activity and edit history are masked. Revealing them requires an explanation and records an access event. An existing alternate contact remains visibly masked in All details rather than looking missing. Database API roles cannot directly read the raw snapshots. Deleted warehouses retain review history, remain searchable by WHID, and cannot be recreated through review actions.
 
+Any employee with View access to a warehouse can identify its active flagged fields and read the original review note for each field in normal View. Summaries include `activeFieldKeys` and `activeFields: [{ fieldKey, comment }]` alongside the count. Proposals, response explanations, assignees, history and protected values are not included. Unassigned employees still receive `reviewId: null` and `canOpen: false`. Fields awaiting verification remain active; verified fields disappear from the summary and reopened fields return.
+
+`GET /api/warehouses?includeFieldReviews=true` (and the optional single-warehouse equivalent) embeds this same scoped projection as `fieldReviewSummary` in each row. Unflagged rows receive an explicit empty summary. Review lookups are batched in groups of at most 100 warehouse IDs; full-table consumers pay no extra query or payload unless they opt in. A failed review lookup fails the requested response instead of reporting an unknown review status as unflagged. Fresh access revocations return 403 through the shared warehouse error handler.
+
 ## API
+
+The stored `AWAITING_ADMIN` status is retained for compatibility; the interface labels it **Awaiting reviewer**. This permission change requires no database migration.
 
 All responses use `{ success: true, data }`; failures use `{ success: false, error: { code, message } }`.
 
@@ -64,7 +76,7 @@ All responses use `{ success: true, data }`; failures use `{ success: false, err
 | `GET /setup/:warehouseId` | Flag registry, current values, eligible assignees and default uploader |
 | `POST /` | Atomically create fields after summary confirmation |
 | `GET /` | Role-scoped, paginated queues and warehouse counts |
-| `GET /summaries?ids=...` | One request for visible dashboard card markers |
+| `GET /summaries?ids=...` | Counts, active field keys and their original review notes within the caller’s View scope; used for refreshes and unbundled callers |
 | `GET /:id` | Review, field comparisons, normal warehouse data and recent activity |
 | `GET /:id/events?cursor=...` | Earlier review activity, 50 records at a time |
 | `PATCH /:id/assignee` | Change active review ownership |
@@ -75,24 +87,24 @@ All responses use `{ success: true, data }`; failures use `{ success: false, err
 | `GET /:id/flags/:flagId/history` | Latest 100 available edits for that field |
 | `POST /:id/flags/:flagId/reveal` | Audited protected-value reveal |
 
-Mutations carry a UUID `requestId` and expected flag/review revision. Responses also carry the employee's checked `baselineVersion`; decisions carry the admin's reviewed `currentVersion`. A 409 requires refreshing the comparison/status. The frontend retains drafts and reuses operation keys for retries after uncertain transport failures.
+Mutations carry a UUID `requestId` and expected flag/review revision. Responses also carry the employee's checked `baselineVersion`; decisions carry the reviewer's reviewed `currentVersion`. A 409 requires refreshing the comparison/status. The frontend retains drafts and reuses operation keys for retries after uncertain transport failures.
 
-The `availabilityReview` field replaces the two individual availability keys in the unreleased registry. Its correction value must include both properties, for example `{ "availability": "No", "availabilityLastReviewedOn": "2026-11-16" }`. A missing property, invalid/future date, or a date with no Availability answer is rejected. An explicit null date is allowed. A stale employee response returns `BASELINE_CHANGED`; a stale admin choice returns `CURRENT_CHANGED` if either member of the pair changed.
+The `availabilityReview` field replaces the two individual availability keys in the unreleased registry. Its correction value must include both properties, for example `{ "availability": "No", "availabilityLastReviewedOn": "2026-11-16" }`. A missing property, invalid/future date, or a date with no Availability answer is rejected. An explicit null date is allowed. A stale employee response returns `BASELINE_CHANGED`; a stale reviewer choice returns `CURRENT_CHANGED` if either member of the pair changed.
 
 ## V1 decisions and limits
 
 - The existing warehouse uploader is a freeform string, not a roster foreign key. New reviews resolve a unique eligible email or employee ID first, then a unique exact name, and save the resulting uploader ID. Ambiguous or unavailable uploaders require an explicit assignee. Existing cycles retain their saved assignee.
 - Comments, verification notes and replacement reasons are limited to 500 characters. Both correction and no-change responses require a note.
-- Drafts survive tab switches and closing/reopening previews within the browser session. A changed live revision clears a saved admin choice, reason and confirmation on refresh/reopen; employee input keeps its original baseline and requires explicit reconfirmation. Flag creation setup and summaries reset on identity/role changes, and late results from the old session are ignored. Drafts are not persisted across reloads or devices. Protected drafts are never written to browser storage.
-- Former assignees retain authorship in history but lose access after reassignment. Admins retain access.
+- Drafts survive tab switches and closing/reopening previews within the browser session. A changed live revision clears a saved reviewer choice, reason and confirmation on refresh/reopen; employee input keeps its original baseline and requires explicit reconfirmation. Flag creation setup and summaries reset on identity/role changes, and late results from the old session are ignored. Drafts are not persisted across reloads or devices. Protected drafts are never written to browser storage.
+- Former assignees retain authorship in history but lose access after reassignment. Reviewers retain access.
 - Current field constraints are validated again before applying a proposal or baseline. Legacy values may be verified unchanged. The review API requires actual JSON numbers for numeric fields. Google Maps URL edits follow the current warehouse form's nonempty-text validation and change only that URL; pin resolution is deferred in the existing form as well. Coordinate corrections update derived micro-market tags using polygons fetched before acquiring warehouse locks.
-- Review inputs reuse the current warehouse form's controls and options, including dropdowns, calendars, switches, ordered area inputs, phones, measurements, ventilation and washrooms. String-backed toggles retain their string type; legacy Yes/No values compare consistently with true/false. Compound handover timing is one logical field and follows the form's optional/unconfirmed timing rules: a fixed date may be cleared and an unchosen lead unit stays empty. A Handover decision applies the selected timing type and its displayed values; saved values for the other type are preserved from the current locked row, including newer ordinary edits. Final snapshots record the actual result. Media, generated fields and visibility controls cannot be flagged.
-- No bulk approval, external notifications, employee withdrawal or admin cancellation of mistaken flags in V1. Queues and markers are the notification surfaces.
+- Review inputs reuse the current warehouse form's controls and options, including dropdowns, calendars, switches, ordered area inputs, phones, measurements, ventilation and washrooms. String-backed toggles retain their string type; legacy Yes/No values compare consistently with true/false. Compound handover timing is one logical field and follows the form's current required-field policy; an unchosen lead unit stays empty. Handover proposals and decisions apply the selected timing type and its displayed values; saved values for the other type are preserved from the current locked row, including newer ordinary edits. Switching timing types therefore does not count as clearing the inactive values. Final snapshots record the actual result. Media, generated fields and visibility controls cannot be flagged.
+- No bulk approval, external notifications, employee withdrawal or reviewer cancellation of mistaken flags in V1. Queues and markers are the notification surfaces.
 - Dashboard markers refresh on review actions and page loads. Queue Refresh reloads the server state. Cross-browser live push and automatic polling are not included.
 
 ## Verification
 
-Backend tests cover staged data isolation, all conflict choices, no-change verification, concurrent admins, audit failure rollback, retries, returns, reassignment, revoked access, protected values, deleted warehouses, field histories and location dependencies. Route tests exercise real authentication/capability middleware and strict request validation.
+Backend tests cover staged data isolation, all conflict choices, no-change verification, concurrent reviewers, audit and response-preparation rollback, retries, returns, assignment without Edit access, closure/reopening/reassignment of response permission, revoked account/View access, reviewer/employee permission separation, self-verification, protected values, deleted warehouses, field histories, handover mode switching and location dependencies. Route tests exercise real authentication/capability middleware, denial of ordinary warehouse edits for read-only assignees, cross-instance role changes with a populated cache and strict request validation.
 
 ```sh
 npm test -- --runInBand tests/routes/fieldReviews.test.js

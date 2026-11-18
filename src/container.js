@@ -299,7 +299,8 @@ class Container {
             const fileUploadService = container.resolve('fileUploadService');
             const stagingService = container.resolve('stagingService');
             const imageLabelService = container.resolve('imageLabelService');
-            return new WarehouseController(warehouseService, fileUploadService, stagingService, imageLabelService);
+            return new WarehouseController(warehouseService, fileUploadService, stagingService, imageLabelService,
+                container.resolve('fieldReviewService'));
         });
 
         this.register('imageLabelController', (container) => {

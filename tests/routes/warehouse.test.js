@@ -66,3 +66,52 @@ test('list requires authentication before any database lookup', async () => {
   expect(prisma.verifiedNumber.findFirst).not.toHaveBeenCalled();
   expect(prisma.warehouse.findMany).not.toHaveBeenCalled();
 });
+
+test.each([
+  ['viewer', {}, false], ['reviewer', { reviewerAccess: true }, true], ['assignee', {}, true],
+])('bundles active flags and notes into the warehouse page for a %s', async (role, grants, canOpen) => {
+  prisma.verifiedNumber.findFirst.mockResolvedValue(active({ ...grants, editOwnWarehouseEntries: false, editAllWarehouseEntries: false }));
+  prisma.warehouse.findMany.mockResolvedValue([warehouse, { ...warehouse, id: 124 }]);
+  prisma.warehouse.count.mockResolvedValue(2);
+  prisma.warehouseFieldReview.findMany.mockResolvedValue([{
+    id: 'review-123', warehouseId: 123, assigneeId: role === 'assignee' ? 7 : 8,
+    flags: [{ fieldKey: 'ratePerSqft', comment: 'Confirm the monthly rate.' }],
+  }]);
+  const { body } = await authorized('/api/warehouses?includeFieldReviews=true').expect(200);
+  expect(body.data[0].fieldReviewSummary).toEqual({ warehouseId: 123, activeCount: 1,
+    activeFieldKeys: ['ratePerSqft'], activeFields: [{ fieldKey: 'ratePerSqft', comment: 'Confirm the monthly rate.' }],
+    canOpen, reviewId: canOpen ? 'review-123' : null });
+  expect(body.data[1].fieldReviewSummary).toEqual({ warehouseId: 124, activeCount: 0,
+    activeFieldKeys: [], activeFields: [], canOpen: false, reviewId: null });
+  expect(prisma.warehouseFieldReview.findMany).toHaveBeenCalledTimes(1);
+  expect(prisma.warehouseFieldReview.findMany).toHaveBeenCalledWith({
+    where: { warehouseId: { in: [123, 124] }, closedAt: null },
+    select: { id: true, warehouseId: true, assigneeId: true,
+      flags: { where: { status: { not: 'VERIFIED' } }, select: { fieldKey: true, comment: true } } },
+  });
+  expect(JSON.stringify(body)).not.toContain(warehouse.contactNumber);
+});
+
+test('warehouse consumers that do not request flags avoid the review query and payload', async () => {
+  prisma.warehouse.findMany.mockResolvedValue([warehouse]);
+  prisma.warehouse.count.mockResolvedValue(1);
+  const { body } = await authorized('/api/warehouses').expect(200);
+  expect(body.data[0]).not.toHaveProperty('fieldReviewSummary');
+  expect(prisma.warehouseFieldReview.findMany).not.toHaveBeenCalled();
+});
+
+test('a failed bundled review lookup does not silently report an unflagged warehouse', async () => {
+  prisma.warehouse.findMany.mockResolvedValue([warehouse]);
+  prisma.warehouse.count.mockResolvedValue(1);
+  prisma.warehouseFieldReview.findMany.mockRejectedValue(new Error('Review lookup unavailable'));
+  await authorized('/api/warehouses?includeFieldReviews=true').expect(500);
+});
+
+test('a fresh access revocation during the bundled lookup returns forbidden, not a server error', async () => {
+  prisma.verifiedNumber.findFirst.mockResolvedValueOnce(active()).mockResolvedValue(active({ is_active: false }));
+  prisma.warehouse.findMany.mockResolvedValue([warehouse]);
+  prisma.warehouse.count.mockResolvedValue(1);
+  const { body } = await authorized('/api/warehouses?includeFieldReviews=true').expect(403);
+  expect(body.code).toBe('FIELD_REVIEW_FORBIDDEN');
+  expect(prisma.warehouseFieldReview.findMany).not.toHaveBeenCalled();
+});

@@ -1,4 +1,30 @@
-# Field-review adversarial review — 17 November 2026
+# Field-review adversarial review
+
+## Current review — 19 November 2026
+
+**Ready for production deployment of the reviewed frontend/backend changes after the fixes below.** No remaining blocking correctness or authorization defect was found in this pass. This is not a production-volume load test or a sign-off on unrelated working-tree changes. Nothing was deployed by this review.
+
+The current policy is documented in [field-review.md](field-review.md): reviewers manage reviews, assigned employees may respond without ordinary Edit permission, self-verification is allowed, and warehouse viewers can see active fields and their original reviewer notes. The historical assignment/Edit criteria below have been superseded by those explicit requirements.
+
+| Priority | Reproduced defect | Fix and evidence |
+| --- | --- | --- |
+| P2 | After the modal refreshed, closing/reopening with the same older bundled card restored obsolete flags/notes. This occurs when the independent card-list refresh fails. A forbidden modal refresh could also be replaced by the cached notes on reopening. | Keep refresh results and errors associated with the warehouse, authorization scope and source bundle across modal visibility changes. A new warehouse, session/scope or bundle still invalidates them. Three failing component cases now pass; desktop and mobile browser tests deliberately fail the list refresh and confirm reopening does not restore a closed field or its note. |
+| P2 | Closing while a bundled modal refresh was pending aborted the request and discarded its invalidation. Reopening treated the old bundle as current and never retried. | Retain pending invalidation across visibility changes, resume the refresh on reopening, and ignore the aborted response. The regression failed before the fix and passes afterward. |
+
+Verification on the final code:
+
+- 128 backend validation, API, warehouse-permission and error-handler tests passed.
+- 99 isolated PostgreSQL integration tests passed, including role/assignment checks, concurrent decisions, idempotency, rollback and closing/reopening.
+- 107 affected frontend component tests passed, including 26 highlight/notes cases and 81 dashboard, review-dialog and gallery cases.
+- Six desktop/mobile browser workflows passed. These include ordinary viewers, the failed-list-refresh reproduction, loading status, reviewer/admin verification and employee responses without Edit access.
+- All 76 registry fields have normal View bindings. Targeted lint, the production frontend build and whitespace checks passed.
+- Read-only inspection of the configured database confirmed all five review tables and their RLS/access protections. Installed tracking function/trigger arguments match the checked-in migration, both triggers are enabled, and the active-review/active-field unique indexes and flag lookup index are valid. No migration or production-data write was performed. Several standalone connection attempts failed during inspection; the final fresh Prisma connection and query succeeded, and the running backend health check passed.
+
+Remaining limits: the queue's existing grouping/distinct implementation has not been tested at high volume; cross-browser changes need refresh; requesting bundled reviews couples list availability to the review lookup. The bounded card query, explicit error/loading states and retained authorization checks make these deliberate limits rather than newly hidden failure modes. Existing bundle-size warnings remain.
+
+## Historical review — 17 November 2026
+
+The sections below record the earlier review and its evidence at that time. The current review above supersedes their deployment status and assignment-policy statements.
 
 **Second adversarial pass: five additional defects reproduced and resolved locally.** These affected migration rollback, assignment eligibility, stale admin choices, account changes and Handover's saved alternate timing. The earlier Availability blocker also remains resolved. The fixes below are on `field-review` in both repositories; deployment and the separate performance follow-up remain outside this verification.
 

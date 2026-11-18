@@ -15,13 +15,15 @@ class WarehouseController extends BaseController {
      * @param {FileUploadService} fileUploadService - File upload service instance
      * @param {StagingService} stagingService - Staging/validation layer service instance
      * @param {ImageLabelService} [imageLabelService] - Optional; enables ?includeImageLabels=true
+     * @param {FieldReviewService} [fieldReviewService] - Optional; enables ?includeFieldReviews=true
      */
-    constructor(warehouseService, fileUploadService, stagingService, imageLabelService = null) {
+    constructor(warehouseService, fileUploadService, stagingService, imageLabelService = null, fieldReviewService = null) {
         super();
         this.warehouseService = warehouseService;
         this.fileUploadService = fileUploadService;
         this.stagingService = stagingService;
         this.imageLabelService = imageLabelService;
+        this.fieldReviewService = fieldReviewService;
     }
 
     /**
@@ -52,6 +54,25 @@ class WarehouseController extends BaseController {
         }
     }
 
+    // Use the same scoped projection as the summaries endpoint: active fields
+    // and reviewer notes are visible to viewers; opening a review stays gated.
+    async attachFieldReviews(rows, user) {
+        if (!this.fieldReviewService || !rows.length) return;
+        const ids = [...new Set(rows.map(row => row.id).filter(Number.isInteger))];
+        const summaries = new Map();
+        for (let offset = 0; offset < ids.length; offset += 100) {
+            for (const summary of await this.fieldReviewService.summaries(ids.slice(offset, offset + 100), user)) {
+                summaries.set(summary.warehouseId, summary);
+            }
+        }
+        for (const row of rows) {
+            row.fieldReviewSummary = summaries.get(row.id) ?? {
+                warehouseId: row.id, activeCount: 0, activeFieldKeys: [], activeFields: [],
+                reviewId: null, canOpen: false,
+            };
+        }
+    }
+
     /**
      * Get all warehouses
      * GET /api/warehouses
@@ -70,8 +91,13 @@ class WarehouseController extends BaseController {
             // second round trip. Off by default because the full-table consumers
             // (PPT builder, itinerary, micro-market mapping) call this with
             // all=true and would pay ~3MB for data they never render.
-            if ((req.query.includeImageLabels === 'true' || req.query.includeImages === 'true') && Array.isArray(result?.data) && result.data.length) {
-                await this.attachImageLabels(result.data);
+            if (Array.isArray(result?.data) && result.data.length) {
+                await Promise.all([
+                    (req.query.includeImageLabels === 'true' || req.query.includeImages === 'true')
+                        ? this.attachImageLabels(result.data) : undefined,
+                    req.query.includeFieldReviews === 'true'
+                        ? this.attachFieldReviews(result.data, req.user) : undefined,
+                ]);
             }
 
             req.audit('READ', 'warehouse', null, 'Listed warehouses', {
@@ -136,7 +162,10 @@ class WarehouseController extends BaseController {
             
             // Get warehouse from service
             const warehouse = await this.warehouseService.getWarehouseById(id);
-            await this.attachImageLabels([warehouse]);
+            await Promise.all([
+                this.attachImageLabels([warehouse]),
+                req.query.includeFieldReviews === 'true' ? this.attachFieldReviews([warehouse], req.user) : undefined,
+            ]);
 
             req.audit('READ', 'warehouse', id, `Viewed warehouse ${id}`);
 

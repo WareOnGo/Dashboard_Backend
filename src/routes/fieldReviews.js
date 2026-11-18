@@ -66,21 +66,21 @@ function createRouter(service, auth = authMiddleware) {
       next(error);
     }
   };
-  router.get('/setup/:warehouseId', auth.requireAdmin, route(r => service.setup(number.parse(r.params.warehouseId), r.user)));
+  router.get('/setup/:warehouseId', auth.requireAccess(CAPS.REVIEW, { fresh: true }), route(r => service.setup(number.parse(r.params.warehouseId), r.user)));
   router.get('/summaries', route(r => {
     const ids = z.string().regex(/^\d+(,\d+)*$/).parse(r.query.ids).split(',').map(Number);
     if (ids.length > 100 || ids.some(n => !Number.isSafeInteger(n) || n <= 0 || n > 2147483647)) throw new ReviewError(400, 'INVALID_IDS', 'Supply at most 100 valid warehouse IDs.');
     return service.summaries(ids, r.user);
   }));
   router.get('/', route(r => service.list(r.user, query.parse(r.query))));
-  router.post('/', auth.requireAdmin, route(r => service.create(schemas.create.parse(r.body), r.user)));
+  router.post('/', auth.requireAccess(CAPS.REVIEW), route(r => service.create(schemas.create.parse(r.body), r.user)));
   router.get('/:id/events', route(r => service.events(id.parse(r.params.id), r.user, r.query.cursor ? id.parse(r.query.cursor) : null)));
   router.get('/:id', route(r => service.detail(id.parse(r.params.id), r.user)));
-  router.patch('/:id/assignee', auth.requireAdmin, route(r => service.reassign(id.parse(r.params.id), schemas.assign.parse(r.body), r.user)));
+  router.patch('/:id/assignee', auth.requireAccess(CAPS.REVIEW), route(r => service.reassign(id.parse(r.params.id), schemas.assign.parse(r.body), r.user)));
   router.get('/:id/flags/:flagId/history', route(r => service.history(id.parse(r.params.id), id.parse(r.params.flagId), r.user)));
   router.post('/:id/flags/:flagId/reveal', route(r => service.reveal(id.parse(r.params.id), id.parse(r.params.flagId), schemas.reveal.parse(r.body), r.user)));
-  for (const [path, schema, method, admin] of [['response', 'response', 'respond', false], ['decision', 'decision', 'decide', true], ['return', 'return', 'returnForChanges', true], ['reopen', 'reopen', 'reopen', true]]) {
-    router.post('/:id/flags/:flagId/' + path, ...(admin ? [auth.requireAdmin] : []), route(r => service[method](id.parse(r.params.id), id.parse(r.params.flagId), schemas[schema].parse(r.body), r.user)));
+  for (const [path, schema, method, reviewer] of [['response', 'response', 'respond', false], ['decision', 'decision', 'decide', true], ['return', 'return', 'returnForChanges', true], ['reopen', 'reopen', 'reopen', true]]) {
+    router.post('/:id/flags/:flagId/' + path, ...(reviewer ? [auth.requireAccess(CAPS.REVIEW)] : []), route(r => service[method](id.parse(r.params.id), id.parse(r.params.flagId), schemas[schema].parse(r.body), r.user)));
   }
   return router;
 }

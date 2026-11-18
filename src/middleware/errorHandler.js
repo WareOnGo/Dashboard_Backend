@@ -65,6 +65,9 @@ class ErrorHandler {
         if (error.name === 'ForbiddenError') {
             return ErrorHandler.handleStatusError(error, req, res, 403, 'FORBIDDEN');
         }
+        if (error.name === 'FieldReviewError') {
+            return ErrorHandler.handleStatusError(error, req, res, error.status, error.code);
+        }
 
         // Handled by name rather than by honouring any statusCode: several
         // services set one, and quietly changing what they all return is a

@@ -260,6 +260,29 @@ test('direct response stages typed data; verification applies exactly one field 
     view: 'previous'
   })).data).toHaveLength(1);
 });
+test('an unassigned viewer can read each active field’s note without gaining access to responses or management', async () => {
+  await db.verifiedNumber.update({ where: { id: 3 }, data: { editOwnWarehouseEntries: false, editAllWarehouseEntries: false } });
+  const comments = { ratePerSqft: 'Confirm the rent.', contactNumber: 'Check the contact.', availabilityReview: 'Confirm availability and date.' };
+  let review = await service.create({ requestId: randomUUID(), warehouseId: 4821,
+    fields: Object.entries(comments).map(([key, comment]) => ({ key, comment })) }, admin);
+  const visibleSummary = keys => [{ warehouseId: 4821, activeCount: keys.length, activeFieldKeys: keys.sort(),
+    activeFields: keys.map(fieldKey => ({ fieldKey, comment: comments[fieldKey] })),
+    reviewId: null, canOpen: false }];
+  expect(await service.summaries([4821], other)).toEqual(visibleSummary(['contactNumber', 'ratePerSqft', 'availabilityReview']));
+  await expect(service.detail(review.id, other)).rejects.toMatchObject({ status: 403 });
+  await expect(service.setup(4821, other)).rejects.toMatchObject({ status: 403 });
+  const rateIndex = review.flags.findIndex(flag => flag.fieldKey === 'ratePerSqft');
+  review = await submit(review, rateIndex);
+  expect(await service.summaries([4821], other)).toEqual(visibleSummary(['contactNumber', 'ratePerSqft', 'availabilityReview']));
+  let rate = review.flags.find(flag => flag.fieldKey === 'ratePerSqft');
+  review = await service.decide(review.id, rate.id, decision(rate), admin);
+  expect(await service.summaries([4821], other)).toEqual(visibleSummary(['contactNumber', 'availabilityReview']));
+  rate = review.flags.find(flag => flag.fieldKey === 'ratePerSqft');
+  await service.reopen(review.id, rate.id, { requestId: randomUUID(), version: rate.version }, admin);
+  expect(await service.summaries([4821], other)).toEqual(visibleSummary(['contactNumber', 'ratePerSqft', 'availabilityReview']));
+  await db.verifiedNumber.update({ where: { id: 3 }, data: { viewAllWarehouseEntries: false } });
+  expect(await service.summaries([4821], other)).toEqual([]);
+});
 test.each([['CURRENT', [52000]], ['PROPOSED', [48000]], ['BASELINE', [50000]]])('conflicting value: %s is explicit and audited', async (choice, expected) => {
   let r = await submit(await create());
   await db.warehouse.update({
@@ -632,7 +655,8 @@ test('nested corrections record the admin while no-change verification preserves
   expect((await live()).lastEditedBy).toBe('previous@example.test');
 });
 
-test('coordinates refresh derived micro-markets; a Maps URL correction changes only the URL', async () => {
+test.each([admin, other])('coordinates refresh derived micro-markets for $email; a Maps URL correction changes only the URL', async verifier => {
+  await db.verifiedNumber.update({ where: { id: 3 }, data: { reviewerAccess: true } });
   await db.warehouseData.create({
     data: {
       warehouseId: 4821,
@@ -648,15 +672,15 @@ test('coordinates refresh derived micro-markets; a Maps URL correction changes o
   r = await submit(r, 0, {
     proposedValue: 19.5
   });
-  await geo.decide(r.id, r.flags[0].id, decision(r.flags[0]), admin);
+  await geo.decide(r.id, r.flags[0].id, decision(r.flags[0]), verifier);
   expect(tagging.getPolygons).toHaveBeenCalledTimes(1);
   expect((await live()).micromarket).toEqual(['Fixture market']);
-  expect((await live()).lastEditedBy).toBe(admin.email);
+  expect((await live()).lastEditedBy).toBe(verifier.email);
   r = await create(['googleLocation']);
   r = await submit(r, 0, {
     proposedValue: 'https://www.google.com/maps?q=20,74'
   });
-  await geo.decide(r.id, r.flags[0].id, decision(r.flags[0]), admin);
+  await geo.decide(r.id, r.flags[0].id, decision(r.flags[0]), verifier);
   expect((await db.warehouseData.findUnique({
     where: {
       warehouseId: 4821
@@ -1057,12 +1081,12 @@ test('warehouse view permissions also constrain assigned review detail, history,
   expect(await service.summaries([4821], employee)).toHaveLength(1);
 });
 
-test('revoked edit permissions make assigned reviews read-only and block responses', async () => {
+test('revoking ordinary Edit access does not remove an active assignment’s response permission', async () => {
   const review = await create();
-  await db.verifiedNumber.update({ where: { id: 2 }, data: { editOwnWarehouseEntries: false } });
-  expect((await service.detail(review.id, employee)).canRespond).toBe(false);
-  await expect(submit(review)).rejects.toMatchObject({ statusCode: 403 });
-  expect((await service.detail(review.id, admin)).flags[0].status).toBe('NEEDS_RESPONSE');
+  await db.verifiedNumber.update({ where: { id: 2 }, data: { editOwnWarehouseEntries: false, editAllWarehouseEntries: false } });
+  expect((await service.detail(review.id, employee)).canRespond).toBe(true);
+  expect((await submit(review)).flags[0].status).toBe('AWAITING_ADMIN');
+  expect((await live()).totalSpaceSqft).toEqual([50000]);
 });
 
 test('assignment choices require permission to respond to this warehouse', async () => {
@@ -1082,18 +1106,278 @@ test('assignment choices require permission to respond to this warehouse', async
   expect((await service.detail(r.id, employee)).canRespond).toBe(true);
 });
 
-test('a read-only uploader is not offered for new work, and revoked assignees are identifiable', async () => {
-  const r = await create(['ratePerSqft']);
+test('a read-only uploader is eligible by default and can receive additional flagged fields', async () => {
   await db.verifiedNumber.update({ where: { id: 2 }, data: { editOwnWarehouseEntries: false, editAllWarehouseEntries: false } });
+  const setup = await service.setup(4821, admin);
+  expect(setup.defaultAssigneeId).toBe(2);
+  expect(setup.assignees.some(p => p.id === 2)).toBe(true);
+  const r = await create(['ratePerSqft']);
+  expect((await service.detail(r.id, employee)).canRespond).toBe(true);
+  expect((await service.detail(r.id, admin)).assigneeCanRespond).toBe(true);
+  const extended = await create(['numberOfDocks']);
+  expect(extended).toMatchObject({ id: r.id, assigneeId: 2 });
+  expect(extended.flags).toHaveLength(2);
+});
+
+test.each([
+  [{ dashboardAccess: false }, { status: 403 }],
+  [{ is_active: false }, { status: 403 }],
+  [{ viewOwnWarehouseEntries: false }, { status: 403 }],
+  [{ viewAllWarehouseEntries: false }, { statusCode: 403 }],
+])('an assignment does not override revoked account or View access: %j', async (revoked, rejection) => {
+  const r = await create(['ratePerSqft']);
+  await db.verifiedNumber.update({ where: { id: 2 }, data: {
+    editOwnWarehouseEntries: false, editAllWarehouseEntries: false, ...revoked,
+  } });
   const detail = await service.detail(r.id, admin);
   expect(detail.assignee.id).toBe(2);
   expect(detail.assigneeCanRespond).toBe(false);
   expect(detail.assignees.some(p => p.id === 2)).toBe(false);
+  await expect(submit(r)).rejects.toMatchObject(rejection);
   await expect(create(['numberOfDocks'])).rejects.toMatchObject({ code: 'ASSIGNEE_REQUIRED' });
   await db.warehouseFieldReviewEvent.deleteMany();
   await db.warehouseFieldFlag.deleteMany();
   await db.warehouseFieldReview.deleteMany();
   expect((await service.setup(4821, admin)).defaultAssigneeId).toBeNull();
+});
+
+test('assignment response permission ends for closed flags and returns only when a reviewer reopens them', async () => {
+  const noEdit = { editOwnWarehouseEntries: false, editAllWarehouseEntries: false };
+  await db.verifiedNumber.update({ where: { id: 2 }, data: noEdit });
+  let review = await create(['ratePerSqft', 'numberOfDocks']);
+  const response = (snapshot, key) => {
+    const item = snapshot.flags.find(flag => flag.fieldKey === key);
+    return service.respond(snapshot.id, item.id, { requestId: randomUUID(), version: item.version,
+      baselineVersion: item.currentVersion, resolution: 'NO_CHANGE', explanation: 'Confirmed with the owner.' }, employee);
+  };
+  review = await response(review, 'ratePerSqft');
+  let item = review.flags.find(flag => flag.fieldKey === 'ratePerSqft');
+  review = await service.decide(review.id, item.id, decision(item), admin);
+  expect(review.closedAt).toBeNull();
+  expect((await service.detail(review.id, employee)).canRespond).toBe(true);
+  await expect(response(review, 'ratePerSqft')).rejects.toMatchObject({ status: 409, code: 'FLAG_CHANGED' });
+  review = await response(review, 'numberOfDocks');
+  item = review.flags.find(flag => flag.fieldKey === 'numberOfDocks');
+  review = await service.decide(review.id, item.id, decision(item), admin);
+  expect(review.closedAt).not.toBeNull();
+  expect((await service.detail(review.id, employee)).canRespond).toBe(false);
+  const eventCount = await db.warehouseFieldReviewEvent.count();
+  await expect(response(review, 'numberOfDocks')).rejects.toMatchObject({ status: 409, code: 'FLAG_CHANGED' });
+  expect(await db.warehouseFieldReviewEvent.count()).toBe(eventCount);
+  expect(await db.verifiedNumber.findUnique({ where: { id: 2 } })).toMatchObject(noEdit);
+  item = review.flags.find(flag => flag.fieldKey === 'ratePerSqft');
+  review = await service.reopen(review.id, item.id, { requestId: randomUUID(), version: item.version }, admin);
+  expect((await service.detail(review.id, employee)).canRespond).toBe(true);
+  expect((await response(review, 'ratePerSqft')).flags.find(flag => flag.fieldKey === 'ratePerSqft').status).toBe('AWAITING_ADMIN');
+  expect(await db.verifiedNumber.findUnique({ where: { id: 2 } })).toMatchObject(noEdit);
+});
+
+test('reassignment transfers response permission between employees without Edit access', async () => {
+  await db.verifiedNumber.updateMany({ where: { id: { in: [2, 3] } }, data: {
+    editOwnWarehouseEntries: false, editAllWarehouseEntries: false,
+  } });
+  let review = await create(['ratePerSqft']);
+  const pendingResponse = { requestId: randomUUID(), version: review.flags[0].version,
+    baselineVersion: review.flags[0].currentVersion, resolution: 'CORRECTION', proposedValue: '24',
+    explanation: 'Owner confirmed the rent.' };
+  await expect(service.respond(review.id, review.flags[0].id, pendingResponse, other))
+    .rejects.toMatchObject({ status: 403 });
+  review = await service.reassign(review.id, { requestId: randomUUID(), version: review.version, assigneeId: 3 }, admin);
+  await expect(service.respond(review.id, review.flags[0].id, pendingResponse, employee))
+    .rejects.toMatchObject({ status: 403 });
+  expect((await service.detail(review.id, other)).canRespond).toBe(true);
+  const response = await service.respond(review.id, review.flags[0].id, pendingResponse, other);
+  expect(response.flags[0]).toMatchObject({ status: 'AWAITING_ADMIN', respondedBy: other.email });
+  expect((await live()).ratePerSqft).toBe('22');
+  expect(await db.verifiedNumber.findUnique({ where: { id: 3 } })).toMatchObject({
+    editOwnWarehouseEntries: false, editAllWarehouseEntries: false,
+  });
+});
+
+test('flag creation rolls back if preparing its response fails, and the request can be retried', async () => {
+  const body = { requestId: randomUUID(), warehouseId: 4821,
+    fields: [{ key: 'ratePerSqft', comment: 'Confirm rent.' }] };
+  const originalDetailTx = service.detailTx.bind(service);
+  const snapshot = jest.spyOn(service, 'detailTx').mockImplementationOnce(async (...args) => {
+    await originalDetailTx(...args);
+    throw new Error('Snapshot read failed.');
+  });
+  try {
+    await expect(service.create(body, admin)).rejects.toThrow('Snapshot read failed.');
+    expect(await db.warehouseFieldReview.count()).toBe(0);
+    expect(await db.warehouseFieldFlag.count()).toBe(0);
+    expect(await db.warehouseFieldReviewEvent.count()).toBe(0);
+    const review = await service.create(body, admin);
+    expect(review.flags).toHaveLength(1);
+    expect(await db.warehouseFieldReviewEvent.count({ where: { requestId: body.requestId } })).toBe(1);
+  } finally { snapshot.mockRestore(); }
+});
+
+test('verification rolls back its live value, audit and flag closure if preparing the response fails', async () => {
+  let review = await create(['ratePerSqft']);
+  review = await submit(review);
+  const before = await service.detail(review.id, admin);
+  const snapshot = jest.spyOn(service, 'detailTx').mockRejectedValueOnce(new Error('Snapshot read failed.'));
+  try {
+    await expect(service.decide(review.id, review.flags[0].id, decision(review.flags[0]), admin))
+      .rejects.toThrow('Snapshot read failed.');
+  } finally { snapshot.mockRestore(); }
+  expect((await live()).ratePerSqft).toBe('22');
+  const after = await service.detail(review.id, admin);
+  expect(after.flags[0]).toMatchObject({ status: 'AWAITING_ADMIN', version: before.flags[0].version,
+    currentVersion: before.flags[0].currentVersion });
+  expect(await db.warehouseFieldReviewEvent.count({ where: { action: 'VERIFIED' } })).toBe(0);
+  expect(await db.auditLog.count({ where: { entity: 'warehouse', entityId: '4821' } })).toBe(0);
+});
+
+test('reviewer writes and retries return the transaction snapshot without a fallible post-commit read', async () => {
+  await db.verifiedNumber.update({ where: { id: 3 }, data: { reviewerAccess: true } });
+  const body = { requestId: randomUUID(), warehouseId: 4821,
+    fields: [{ key: 'ratePerSqft', comment: 'Confirm rent.' }] };
+  const detail = jest.spyOn(service, 'detail').mockRejectedValue(new Error('Permission revoked after commit.'));
+  try {
+    const review = await service.create(body, other);
+    expect(review).toMatchObject({ canVerify: true, createdBy: other.email });
+    expect((await service.create(body, other)).id).toBe(review.id);
+    expect(detail).not.toHaveBeenCalled();
+    expect(await db.warehouseFieldFlag.count()).toBe(1);
+    expect(await db.warehouseFieldReviewEvent.count({ where: { requestId: body.requestId } })).toBe(1);
+  } finally { detail.mockRestore(); }
+});
+
+test('a reviewer can create, return, verify, reopen and reassign another employee’s review', async () => {
+  await db.verifiedNumber.update({ where: { id: 3 }, data: { reviewerAccess: true } });
+  expect((await service.setup(4821, other)).defaultAssigneeId).toBe(2);
+  const body = { requestId: randomUUID(), warehouseId: 4821,
+    fields: [{ key: 'ratePerSqft', comment: 'Confirm the rent.' }] };
+  let r = await service.create(body, other);
+  expect(r).toMatchObject({ createdBy: other.email, canVerify: true, canRespond: false, assigneeId: 2 });
+  expect((await service.create(body, other)).id).toBe(r.id);
+  expect(await db.warehouseFieldFlag.count()).toBe(1);
+  expect((await service.list(other, { view: 'employee' })).data.map(item => item.id)).toEqual([r.id]);
+  expect(await service.summaries([4821], other)).toEqual([
+    { warehouseId: 4821, activeCount: 1, activeFieldKeys: ['ratePerSqft'],
+      activeFields: [{ fieldKey: 'ratePerSqft', comment: 'Confirm the rent.' }], reviewId: r.id, canOpen: true }
+  ]);
+  await expect(service.respond(r.id, r.flags[0].id, {
+    requestId: randomUUID(), version: r.flags[0].version, baselineVersion: r.flags[0].currentVersion,
+    resolution: 'NO_CHANGE', explanation: 'Not my assignment.'
+  }, other)).rejects.toMatchObject({ status: 403 });
+  r = await submit(r);
+  expect((await live()).ratePerSqft).toBe('22');
+  expect((await service.list(other, { view: 'verify' })).counts.verify).toBe(1);
+  r = await service.returnForChanges(r.id, r.flags[0].id, {
+    requestId: randomUUID(), version: r.flags[0].version, comment: 'Please reconfirm with the owner.'
+  }, other);
+  expect(r.flags[0].status).toBe('CHANGES_REQUESTED');
+  r = await submit(r);
+  r = await service.decide(r.id, r.flags[0].id, decision(r.flags[0]), other);
+  expect(r.closedAt).not.toBeNull();
+  expect(await live()).toMatchObject({ ratePerSqft: '24', lastEditedBy: other.email });
+  expect((await service.history(r.id, r.flags[0].id, other)).items[0].actorEmail).toBe(other.email);
+  expect((await service.events(r.id, other)).events.some(event => event.action === 'VERIFIED' && event.actorEmail === other.email)).toBe(true);
+  expect((await service.list(other, { view: 'previous' })).counts.previous).toBe(1);
+  r = await service.reopen(r.id, r.flags[0].id, { requestId: randomUUID(), version: r.flags[0].version }, other);
+  expect(r.flags[0].status).toBe('NEEDS_RESPONSE');
+  r = await service.reassign(r.id, { requestId: randomUUID(), version: r.version, assigneeId: 1 }, other);
+  expect(r.assigneeId).toBe(1);
+  expect((await service.list(other, { view: 'all', assigneeId: 1 })).data).toHaveLength(1);
+  expect((await service.list(other, { view: 'all', assigneeId: 2 })).data).toHaveLength(0);
+});
+
+test('a reviewer without Edit access can flag and verify but cannot respond to another employee’s assignment', async () => {
+  await db.verifiedNumber.update({ where: { id: 3 }, data: {
+    reviewerAccess: true, editOwnWarehouseEntries: false, editAllWarehouseEntries: false,
+  } });
+  expect((await service.setup(4821, other)).assignees.map(person => person.id)).toEqual([1, 2, 3]);
+  const body = { requestId: randomUUID(), warehouseId: 4821,
+    fields: [{ key: 'ratePerSqft', comment: 'Confirm the rent.' }] };
+  let review = await service.create(body, other);
+  expect(review).toMatchObject({ assigneeId: 2, canVerify: true, canRespond: false });
+  await expect(service.respond(review.id, review.flags[0].id, {
+    requestId: randomUUID(), version: review.flags[0].version, baselineVersion: review.flags[0].currentVersion,
+    resolution: 'NO_CHANGE', explanation: 'Reviewer is not the assigned employee.',
+  }, other)).rejects.toMatchObject({ status: 403 });
+  review = await submit(review);
+  review = await service.decide(review.id, review.flags[0].id, decision(review.flags[0]), other);
+  expect(review.flags[0].status).toBe('VERIFIED');
+  expect((await live()).ratePerSqft).toBe('24');
+});
+
+test.each([false, true])('an assigned reviewer can verify their own response with ordinary Edit access=%s', async canEdit => {
+  await db.verifiedNumber.update({ where: { id: 2 }, data: {
+    reviewerAccess: true, editOwnWarehouseEntries: canEdit, editAllWarehouseEntries: canEdit,
+  } });
+  let review = await service.create({ requestId: randomUUID(), warehouseId: 4821,
+    fields: [{ key: 'ratePerSqft', comment: 'Confirm the rent.' }] }, employee);
+  expect(review).toMatchObject({ assigneeId: 2, canVerify: true, canRespond: true });
+  review = await submit(review);
+  review = await service.decide(review.id, review.flags[0].id, decision(review.flags[0]), employee);
+  expect(review.flags[0]).toMatchObject({ status: 'VERIFIED', respondedBy: employee.email, decidedBy: employee.email });
+  expect((await live()).ratePerSqft).toBe('24');
+});
+
+test('reviewer management and queue access stay within warehouse view permissions', async () => {
+  let r = await create(['ratePerSqft']);
+  r = await submit(r);
+  await db.verifiedNumber.update({ where: { id: 3 }, data: {
+    reviewerAccess: true, viewAllWarehouseEntries: false, editAllWarehouseEntries: false
+  } });
+  const forbidden = { statusCode: 403 };
+  await expect(service.setup(4821, other)).rejects.toMatchObject(forbidden);
+  await expect(service.create({ requestId: randomUUID(), warehouseId: 4821,
+    fields: [{ key: 'numberOfDocks', comment: 'Confirm docks.' }] }, other)).rejects.toMatchObject(forbidden);
+  await expect(service.detail(r.id, other)).rejects.toMatchObject(forbidden);
+  await expect(service.events(r.id, other)).rejects.toMatchObject(forbidden);
+  await expect(service.history(r.id, r.flags[0].id, other)).rejects.toMatchObject(forbidden);
+  await expect(service.decide(r.id, r.flags[0].id, decision(r.flags[0]), other)).rejects.toMatchObject(forbidden);
+  await expect(service.returnForChanges(r.id, r.flags[0].id, {
+    requestId: randomUUID(), version: r.flags[0].version, comment: 'Check again.'
+  }, other)).rejects.toMatchObject(forbidden);
+  await expect(service.reassign(r.id, { requestId: randomUUID(), version: r.version, assigneeId: 1 }, other))
+    .rejects.toMatchObject(forbidden);
+  const queue = await service.list(other, { view: 'verify' });
+  expect(queue.data).toEqual([]);
+  expect(queue.counts.verify).toBe(0);
+  expect(queue.filterOptions).toEqual([]);
+  expect(await service.summaries([4821], other)).toEqual([]);
+  expect(await db.warehouseFieldFlag.count()).toBe(1);
+  expect((await live()).ratePerSqft).toBe('22');
+  await db.warehouse.update({ where: { id: 4821 }, data: { uploadedBy: other.email.toUpperCase() } });
+  expect((await service.setup(4821, other)).existingReviewId).toBe(r.id);
+  expect((await service.detail(r.id, other)).canVerify).toBe(true);
+  expect((await service.list(other, { view: 'verify' })).counts.verify).toBe(1);
+  r = await service.decide(r.id, r.flags[0].id, decision(r.flags[0]), other);
+  expect(r.flags[0].status).toBe('VERIFIED');
+});
+
+test('revoking reviewer access removes management rights even for the current assignee', async () => {
+  await db.verifiedNumber.update({ where: { id: 2 }, data: { reviewerAccess: true } });
+  let r = await create(['ratePerSqft']);
+  r = await submit(r);
+  expect((await service.detail(r.id, employee)).canVerify).toBe(true);
+  await db.verifiedNumber.update({ where: { id: 2 }, data: { reviewerAccess: false } });
+  const staleUser = { ...employee, isAdmin: true, isReviewer: true, capabilities: { REVIEW: true } };
+  expect((await service.detail(r.id, staleUser)).canVerify).toBe(false);
+  await expect(service.setup(4821, staleUser)).rejects.toMatchObject({ status: 403 });
+  await expect(service.create({ requestId: randomUUID(), warehouseId: 4821,
+    fields: [{ key: 'numberOfDocks', comment: 'Confirm docks.' }] }, staleUser)).rejects.toMatchObject({ status: 403 });
+  await expect(service.decide(r.id, r.flags[0].id, decision(r.flags[0]), staleUser)).rejects.toMatchObject({ status: 403 });
+  await expect(service.returnForChanges(r.id, r.flags[0].id, {
+    requestId: randomUUID(), version: r.flags[0].version, comment: 'Check again.'
+  }, staleUser)).rejects.toMatchObject({ status: 403 });
+  await expect(service.reassign(r.id, { requestId: randomUUID(), version: r.version, assigneeId: 3 }, staleUser))
+    .rejects.toMatchObject({ status: 403 });
+  await expect(service.list(staleUser, { view: 'verify' })).rejects.toMatchObject({ status: 403 });
+  r = await service.decide(r.id, r.flags[0].id, decision(r.flags[0]), admin);
+  await expect(service.reopen(r.id, r.flags[0].id, { requestId: randomUUID(), version: r.flags[0].version }, staleUser))
+    .rejects.toMatchObject({ status: 403 });
+});
+
+test.each([{ dashboardAccess: false }, { is_active: false }])('reviewer access cannot override revoked eligibility: %j', async revoked => {
+  await db.verifiedNumber.update({ where: { id: 3 }, data: { reviewerAccess: true, ...revoked } });
+  await expect(service.setup(4821, other)).rejects.toMatchObject({ status: 403 });
+  await expect(service.list(other, { view: 'verify' })).rejects.toMatchObject({ status: 403 });
 });
 
 test('migration security failure rolls back its tables, triggers and grants', async () => {

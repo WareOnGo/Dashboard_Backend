@@ -3,7 +3,7 @@
 const mockPrisma = {};
 for (const name of ['warehouse', 'stagedWarehouse', 'verifiedNumber', 'warehouseVisitNote',
   'microMarket', 'appSetting', 'auditLog', 'labeledWarehouseImage', 'cronRunLog',
-  'warehouseProximity', 'pointOfInterest', 'osmPoi', 'scoutVoiceNoteAsset']) {
+  'warehouseProximity', 'pointOfInterest', 'osmPoi', 'scoutVoiceNoteAsset', 'warehouseFieldReview']) {
   mockPrisma[name] = {};
   for (const method of ['findMany', 'findFirst', 'findUnique', 'count', 'create',
     'update', 'updateMany', 'delete', 'upsert', 'aggregate', 'groupBy']) {
