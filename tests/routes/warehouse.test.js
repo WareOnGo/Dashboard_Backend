@@ -87,7 +87,7 @@ test.each([
   expect(prisma.warehouseFieldReview.findMany).toHaveBeenCalledWith({
     where: { warehouseId: { in: [123, 124] }, closedAt: null },
     select: { id: true, warehouseId: true, assigneeId: true,
-      flags: { where: { status: { not: 'VERIFIED' } }, select: { fieldKey: true, comment: true } } },
+      flags: { where: { status: { in: ['NEEDS_RESPONSE', 'AWAITING_ADMIN', 'CHANGES_REQUESTED'] } }, select: { fieldKey: true, comment: true } } },
   });
   expect(JSON.stringify(body)).not.toContain(warehouse.contactNumber);
 });

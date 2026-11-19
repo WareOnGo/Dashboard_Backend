@@ -1,5 +1,11 @@
 # Field-review adversarial review
 
+## Release preparation — 19 November 2026
+
+The media-tracking migration was applied to the configured production database before the release push. Read-only verification confirmed that the installed helper/tracker bodies match the reviewed SQL, both tracking triggers are enabled, and the Warehouse trigger includes `media`. The migration's transactional checks confirmed RLS and backend access on all five tables, with no direct public/API access. Warehouse records were not rewritten.
+
+The previous backend `main` deployment had failed three warehouse-route assertions that still expected the pre-cancellation active-flag filter. Those assertions now check the three active statuses; the existing PostgreSQL tests already verify that cancelled flags disappear from summaries. The complete backend CI gate subsequently passed **92 suites / 2,076 tests**, including its coverage thresholds. Application deployment remains a separate step from the database migration.
+
 ## Current review — 19 November 2026 (whole media section)
 
 **Ready for production deployment of the reviewed code. No remaining blocking correctness or authorization defect was found in this pass.** This pass covers the complete field-review workflow on `field-review`, with particular attention to the new whole-media-section implementation. The frontend and backend changes remain local; this review performs no deployment or production-data write.
