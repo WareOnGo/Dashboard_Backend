@@ -113,8 +113,8 @@ async function verify(db,{verifyBase,asReader,clientFor}) {
   const [correspondence]=await asReader(db,`SELECT
     count(*) FILTER(WHERE r.has_client_phone IS DISTINCT FROM o.has_client_phone OR r.has_client_email IS DISTINCT FROM o.has_client_email)::int AS flag_mismatches,
     count(*) FILTER(WHERE r.note_count<>jsonb_array_length(o.notes) OR r.task_count<>jsonb_array_length(o.tasks))::int AS linked_count_mismatches,
-    count(*) FILTER(WHERE COALESCE(position(',' IN COALESCE(analytics.crm_report_text(o.assigned_to),analytics.crm_report_text(o.data->'assigned_to'))),0)=0
-      AND r.secondary_assignee IS DISTINCT FROM analytics.crm_report_text(o.data->'secondaryAssignee'))::int AS single_assignee_secondary_mismatches
+    count(*) FILTER(WHERE r.primary_assignees IS DISTINCT FROM analytics.crm_report_text(o.assigned_to)
+      OR r.secondary_assignee IS DISTINCT FROM o.secondary_assignee)::int AS user_assignment_mismatches
     FROM analytics.crm_report r JOIN analytics.crm_opportunities o USING (opportunity_id)`);
   assert.ok(Object.values(correspondence).every(n=>n===0),'Reporting view disagrees with the masked raw view');
   const [leaks]=await asReader(db,`SELECT count(*)::int AS matches FROM analytics.crm_report r

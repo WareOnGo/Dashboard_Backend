@@ -46,11 +46,8 @@ SELECT
   analytics.crm_mask_text(o.data->>'description') AS description,
   analytics.crm_mask_text(COALESCE(NULLIF(concat_ws(' ',o.data#>>'{pocName,firstName}',o.data#>>'{pocName,lastName}'),''),
     o.data->>'POC Name',NULLIF(concat_ws(' ',o.data#>>'{pointOfContact,name,firstName}',o.data#>>'{pointOfContact,name,lastName}'),''))) AS client_contact_name,
-  NULLIF(btrim(split_part(COALESCE(analytics.crm_report_text(o.assigned_to),
-    analytics.crm_report_text(o.data->'assigned_to')),',',1)),'') AS primary_assignees,
-  COALESCE(NULLIF(btrim(split_part(COALESCE(analytics.crm_report_text(o.assigned_to),
-    analytics.crm_report_text(o.data->'assigned_to')),',',2)),''),
-    analytics.crm_report_text(o.data->'secondaryAssignee')) AS secondary_assignee,
+  (CASE WHEN o.data->>'primaryAssigneeUserId' = o.data#>>'{primaryAssigneeUser,id}' AND o.data#>>'{primaryAssigneeUser,deletedAt}' IS NULL THEN NULLIF(btrim(concat_ws(' ',o.data#>>'{primaryAssigneeUser,name,firstName}',o.data#>>'{primaryAssigneeUser,name,lastName}')),'') END) AS primary_assignees,
+  (CASE WHEN o.data->>'secondaryAssigneeUserId' = o.data#>>'{secondaryAssigneeUser,id}' AND o.data#>>'{secondaryAssigneeUser,deletedAt}' IS NULL THEN NULLIF(btrim(concat_ws(' ',o.data#>>'{secondaryAssigneeUser,name,firstName}',o.data#>>'{secondaryAssigneeUser,name,lastName}')),'') END) AS secondary_assignee,
   o.assignee_email AS internal_assignee_emails,
   o.owner_id,
   NULLIF(concat_ws(' ',o.data#>>'{owner,name,firstName}',o.data#>>'{owner,name,lastName}'),'') AS owner_name,
@@ -188,9 +185,9 @@ COMMENT ON COLUMN analytics.crm_report.amount IS 'Twenty amountMicros divided by
 -- statement-breakpoint
 COMMENT ON COLUMN analytics.crm_report.budget_numeric IS 'Only plain numeric/comma-separated budget text is parsed; units are not inferred and words/ranges remain NULL';
 -- statement-breakpoint
-COMMENT ON COLUMN analytics.crm_report.primary_assignees IS 'First comma-separated assignee in source order, trimmed; later assignees are excluded from this field';
+COMMENT ON COLUMN analytics.crm_report.primary_assignees IS 'Display name from the primaryAssigneeUser Workspace Member relation';
 -- statement-breakpoint
-COMMENT ON COLUMN analytics.crm_report.secondary_assignee IS 'Second comma-separated primary assignee, trimmed; falls back to the separately synced secondaryAssignee when the second entry is empty or absent; third and later primary assignees are ignored';
+COMMENT ON COLUMN analytics.crm_report.secondary_assignee IS 'Display name from the secondaryAssigneeUser Workspace Member relation';
 -- statement-breakpoint
 COMMENT ON COLUMN analytics.crm_report.observed_stage_change_count IS 'Distinct observed from-stage/to-stage/change-time events; excludes duplicate log rows';
 -- statement-breakpoint

@@ -74,7 +74,7 @@ DECLARE result jsonb; entry record; normalized text; sensitive boolean; text_val
 BEGIN
   normalized := regexp_replace(lower(field_name), '[^a-z0-9]', '', 'g');
   -- These relations describe internal team members, not client contacts.
-  IF normalized IN ('owner','createdby','updatedby','assignee','assignedto','secondaryassignee') THEN RETURN value; END IF;
+  IF normalized IN ('owner','createdby','updatedby','assignee','assignedto','secondaryassignee','primaryassigneeuser','secondaryassigneeuser') THEN RETURN value; END IF;
   -- Preserve phone-country/calling metadata and flags while masking actual numbers.
   IF normalized IN ('primaryphonecountrycode','primaryphonecallingcode','countrycode','callingcode') THEN RETURN value; END IF;
   -- Twenty search vectors contain tokenized contacts, including email fragments.
@@ -121,7 +121,7 @@ SELECT
   o.priority,
   o.city,
   analytics.crm_mask_text(o.company_name) AS company_name,
-  o.assigned_to,
+  CASE WHEN (CASE WHEN o.data->>'primaryAssigneeUserId' = o.data#>>'{primaryAssigneeUser,id}' AND o.data#>>'{primaryAssigneeUser,deletedAt}' IS NULL THEN NULLIF(btrim(concat_ws(' ',o.data#>>'{primaryAssigneeUser,name,firstName}',o.data#>>'{primaryAssigneeUser,name,lastName}')),'') END) IS NOT NULL THEN jsonb_build_array(CASE WHEN o.data->>'primaryAssigneeUserId' = o.data#>>'{primaryAssigneeUser,id}' AND o.data#>>'{primaryAssigneeUser,deletedAt}' IS NULL THEN NULLIF(btrim(concat_ws(' ',o.data#>>'{primaryAssigneeUser,name,firstName}',o.data#>>'{primaryAssigneeUser,name,lastName}')),'') END) ELSE '[]'::jsonb END AS assigned_to,
   o.assignee_email,
   o.owner_id,
   o.last_contacted,
@@ -154,7 +154,7 @@ SELECT
   history.event_count AS observed_stage_change_count,
   COALESCE(linked.notes,'[]'::jsonb) AS notes,
   COALESCE(linked.tasks,'[]'::jsonb) AS tasks,
-  o.data->>'secondaryAssignee' AS secondary_assignee
+  (CASE WHEN o.data->>'secondaryAssigneeUserId' = o.data#>>'{secondaryAssigneeUser,id}' AND o.data#>>'{secondaryAssigneeUser,deletedAt}' IS NULL THEN NULLIF(btrim(concat_ws(' ',o.data#>>'{secondaryAssigneeUser,name,firstName}',o.data#>>'{secondaryAssigneeUser,name,lastName}')),'') END) AS secondary_assignee
 FROM public.opportunities o
 LEFT JOIN LATERAL (
   SELECT jsonb_agg(jsonb_build_object('id',t.id,'fromStage',t.from_stage,'toStage',t.to_stage,
