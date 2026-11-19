@@ -1,6 +1,44 @@
 # Field-review adversarial review
 
-## Current review — 19 November 2026
+## Current review — 19 November 2026 (whole media section)
+
+**Ready for production deployment of the reviewed code. No remaining blocking correctness or authorization defect was found in this pass.** This pass covers the complete field-review workflow on `field-review`, with particular attention to the new whole-media-section implementation. The frontend and backend changes remain local; this review performs no deployment or production-data write.
+
+### Findings and fixes
+
+| Priority | Finding | Correction and evidence |
+| --- | --- | --- |
+| P1 | Review uploads used ordinary overwrite-capable PUT URLs. Reusing the URL while it remained valid could change the object behind the same public URL after an employee submitted it or a reviewer inspected it, without advancing the gallery revision. | Review uploads now sign `If-None-Match: *` and return the required headers to the shared upload control. A real SDK signing test verifies that the condition is bound into the signature; the normal upload contract stays unchanged. Browser storage fixtures enforce the condition and the media flows upload successfully. [Cloudflare documents atomic conditional writes](https://developers.cloudflare.com/r2/api/s3/conditional-operations/). No live object overwrite was attempted. |
+| P2 | An issued URL was treated as proof of a successful upload. Missing, empty, oversized or wrong-type objects could be submitted, and an object removed from storage after submission could still be approved. | Five failing PostgreSQL cases reproduced the problem. Before submission and an applying decision, the service checks server-issued object keys through HEAD for existence, matching MIME metadata and a nonzero size below 50 MB. Missing/invalid uploads cannot advance the flag; outages leave it available for retry. Checks run before warehouse locks, with bounded concurrency and a deadline. Tests cover reassignment and ordinary edits during the check, unauthorized callers, unchanged legacy galleries, and idempotent decision retries. |
+| P2 | Earlier `photos` audit records were omitted from media history; the preview renderer also discarded available legacy values because those records were not complete gallery objects. | Failing backend and component cases reproduced this. Legacy `media`/`photos` records now appear with explicit recorded-field labels and their actual stored values/summaries. Complete tracked snapshots retain gallery previews. No missing historic gallery is fabricated. |
+| P2 | One mobile protected-value retry check failed after a 503: a departing loading icon remained in the button’s accessible name even though the button was visually ready. The trace showed the icon hidden at zero width/opacity, still labeled `loading`. | Dialog confirmation, cancellation, reopening and reveal actions now keep explicit stable accessible names and busy states. A focused component case verifies the reveal control is disabled while pending and recoverable after failure. All six desktop/mobile cancellation and nested-retry scenarios passed after the fix. |
+
+### Scope and complexity
+
+- Only `media` is flaggable; individual image/video/document keys are rejected by both the request schema and service. Missing-image requests work with empty galleries.
+- Corrections remain staged. Deletions, additions, replacements, reordering and change/revert sequences advance one media revision. All three conflict choices, required overwrite confirmation, stale employee/admin comparisons, return/cancel/reopen/reassign and atomic rollback are covered.
+- Fresh account, View, assignment and Reviewer checks remain in place. A View-only assignee can respond and upload for the assigned open flag, while ordinary Edit remains governed by the existing permissions. No ordinary View/Edit permission or workflow lock was added.
+- Storage checks use only object keys recorded by the server for the flag, never arbitrary URLs from a request. Ownership/status/live versions are rechecked in the final write transaction. Storage metadata does not verify file contents or scan for malware; this review does not claim otherwise.
+- No extra table, workflow state, queue, worker or replacement View was introduced. The existing shared upload control and actual All details modal remain in use. Obsolete per-file flagging documentation was removed and cancellation documentation corrected.
+
+### Verification
+
+- **177 backend unit/API/permission/form tests passed.** These include real SDK signature generation, strict schemas, routes, storage validation, error handling and ordinary warehouse authorization.
+- **160 PostgreSQL integration tests passed** against a disposable local database. These cover review state transitions, RLS, conflicts, locks, retries, rollback, metadata-check races and a migration rerun that preserves existing flags, gallery data and history.
+- **171 distinct frontend component/form tests passed**, including the shared uploader, real All details view, ordinary warehouse create/edit payloads, ownership/role changes, legacy history and error recovery. The full component run passed 170 cases; the final focused run passed seven, including the additional busy-state regression.
+- **37 distinct browser scenarios passed across the full runs and focused reruns:** 22 field-review/media workflows at 1280/390 px and 15 ordinary create/review/edit workflows including 320/390/1280 px. The first complete field-review run passed 21/22 and exposed the accessible-name issue above; all six affected dialog cases passed after the fix. The normal-form suite initially stopped before executing because its test-database variable was omitted; with the guarded local URL supplied, all 15 passed.
+- Production frontend build, targeted lint, JavaScript syntax and whitespace checks passed.
+- Read-only checks against the configured R2 endpoint verified object metadata access (a random absent key returned 404) and PUT preflight for the configured dashboard origin with `Content-Type` and `If-None-Match`. Reading the bucket configuration itself returned AccessDenied; the actual preflight succeeded, so no configuration change was needed. No object, bucket setting or production database row was changed.
+
+### Release requirements and limits
+
+1. Apply `node scripts/migrateFieldReview.js --apply` using the normal release process and verify its security result. The current media helper/tracker must be installed before enabling this API/UI; it is not installed on startup.
+2. Deploy the backend, then the frontend. For any additional dashboard origin, verify the same storage preflight headers and metadata-read permission.
+3. Perform the normal deployed upload/response/verification smoke test. Browser tests use real application/API/database code, with sign-in and object storage as fixtures. The review did not perform a live R2 upload or deploy these changes.
+
+There is no production-volume load certification in this pass. Existing queue aggregation/pagination scale limits, manual refresh across browsers and bundle-size warnings remain documented follow-ups. Historical file previews depend on the storage objects remaining available; ordinary media removal detaches references and does not delete objects. These limits are distinct from the reproduced correctness defects fixed above.
+
+## Previous review — 19 November 2026 (before media support)
 
 **Ready for production deployment of the reviewed frontend/backend changes after the fixes below.** No remaining blocking correctness or authorization defect was found in this pass. This is not a production-volume load test or a sign-off on unrelated working-tree changes. Nothing was deployed by this review.
 

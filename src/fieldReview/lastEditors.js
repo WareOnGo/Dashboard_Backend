@@ -13,6 +13,7 @@ const auditKeys = Object.fromEntries(fields.flatMap(({ key }) => {
 async function lastEditors(tx, warehouseId, fieldKeys = fields.map(field => field.key)) {
   const selected = new Set(fieldKeys);
   const selectedAuditKeys = Object.fromEntries(Object.entries(auditKeys).filter(([, key]) => selected.has(key)));
+  if (selected.has('media')) selectedAuditKeys.photos = 'media';
   const rows = await tx.$queryRaw(Prisma.sql`
     WITH keys AS (
       SELECT key AS part, value AS field FROM jsonb_each_text(${JSON.stringify(selectedAuditKeys)}::jsonb)

@@ -50,6 +50,7 @@ class FileUploadService extends BaseService {
                 Bucket: this.bucketName,
                 Key: fileName,
                 ContentType: processedRequest.contentType,
+                ...(options.preventOverwrite ? { IfNoneMatch: '*' } : {}),
                 // Add any additional metadata
                 Metadata: this.buildFileMetadata(processedRequest, options)
             });
@@ -59,7 +60,8 @@ class FileUploadService extends BaseService {
                 const signedUrl = await getSignedUrl(
                     this.s3Client, 
                     command, 
-                    { expiresIn: options.expiresIn || 360 }
+                    { expiresIn: options.expiresIn || 360,
+                      ...(options.preventOverwrite ? { signableHeaders: new Set(['if-none-match']) } : {}) }
                 );
                 
                 // Generate final public URL
@@ -71,6 +73,7 @@ class FileUploadService extends BaseService {
                     imageUrl: finalImageUrl,
                     fileName: fileName,
                     contentType: processedRequest.contentType,
+                    preventOverwrite: options.preventOverwrite === true,
                     expiresAt: new Date(Date.now() + (options.expiresIn || 360) * 1000).toISOString()
                 });
                 
@@ -175,7 +178,7 @@ class FileUploadService extends BaseService {
      * @param {string} fileName - Name of the file
      * @returns {Object} File information
      */
-    async getFileInfo(fileName) {
+    async getFileInfo(fileName, { abortSignal } = {}) {
         return this.executeOperation(async () => {
             try {
                 const { HeadObjectCommand } = require('@aws-sdk/client-s3');
@@ -184,7 +187,7 @@ class FileUploadService extends BaseService {
                     Key: fileName
                 });
                 
-                const response = await this.s3Client.send(command);
+                const response = await this.s3Client.send(command, ...(abortSignal ? [{ abortSignal }] : []));
                 
                 return this.transformFileInfo({
                     fileName,
@@ -365,7 +368,8 @@ class FileUploadService extends BaseService {
             instructions: {
                 method: 'PUT',
                 headers: {
-                    'Content-Type': response.contentType
+                    'Content-Type': response.contentType,
+                    ...(response.preventOverwrite ? { 'If-None-Match': '*' } : {})
                 },
                 note: 'Upload the file directly to the uploadUrl using a PUT request'
             }

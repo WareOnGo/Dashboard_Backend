@@ -55,19 +55,63 @@ CREATE INDEX IF NOT EXISTS "WarehouseFieldEdit_warehouseId_fieldKey_createdAt_id
 -- statement-breakpoint
 ALTER TABLE "WarehouseFieldEdit" ADD COLUMN IF NOT EXISTS "version" INTEGER;
 -- statement-breakpoint
+-- Canonical gallery matches the View's JSON/legacy fallback. Track the whole
+-- section so additions, removals, replacements and reordering share one revision.
+CREATE OR REPLACE FUNCTION field_review_media(row_value JSONB) RETURNS JSONB LANGUAGE plpgsql IMMUTABLE AS $media$
+DECLARE
+ stored JSONB := row_value->'media'; photos JSONB := row_value->'photos';
+ legacy JSONB := '{"images":[],"videos":[],"docs":[]}'::jsonb;
+ result JSONB := legacy; entry JSONB; file_url TEXT; path TEXT; kind TEXT; source JSONB; items JSONB; attempt INTEGER;
+BEGIN
+ FOR attempt IN 1..2 LOOP
+  EXIT WHEN jsonb_typeof(stored) IS DISTINCT FROM 'string';
+  BEGIN stored := (stored #>> '{}')::jsonb; EXCEPTION WHEN invalid_text_representation THEN EXIT; END;
+ END LOOP;
+ FOR attempt IN 1..2 LOOP
+  EXIT WHEN jsonb_typeof(photos) IS DISTINCT FROM 'string';
+  BEGIN photos := (photos #>> '{}')::jsonb; EXCEPTION WHEN invalid_text_representation THEN EXIT; END;
+ END LOOP;
+ IF jsonb_typeof(photos) IS DISTINCT FROM 'array' THEN photos := jsonb_build_array(photos); END IF;
+ FOR entry IN SELECT value FROM jsonb_array_elements(photos) LOOP
+  IF jsonb_typeof(entry) IS DISTINCT FROM 'string' THEN CONTINUE; END IF;
+  FOR file_url IN SELECT btrim(value) FROM regexp_split_to_table(entry #>> '{}', ',\s*(?=https?://)|,\s+(?![^,]*/)','i') value LOOP
+   IF file_url='' THEN CONTINUE; END IF;
+   path := split_part(split_part(file_url,'?',1),'#',1);
+   kind := CASE WHEN path ~* '\.(mp4|mov|avi|mkv|webm)$' THEN 'videos' WHEN path ~* '\.(pdf|docx?|xlsx?)$' THEN 'docs' ELSE 'images' END;
+   legacy := jsonb_set(legacy,ARRAY[kind],(legacy->kind) || jsonb_build_array(file_url));
+  END LOOP;
+ END LOOP;
+ FOREACH kind IN ARRAY ARRAY['images','videos','docs'] LOOP
+  source := CASE WHEN jsonb_typeof(stored->kind)='array' THEN stored->kind ELSE legacy->kind END;
+  items := '[]'::jsonb;
+  FOR entry IN SELECT value FROM jsonb_array_elements(source) LOOP
+   IF jsonb_typeof(entry)='string' AND btrim(entry #>> '{}')<>'' AND NOT items ? (entry #>> '{}') THEN items := items || jsonb_build_array(entry); END IF;
+  END LOOP;
+  result := jsonb_set(result,ARRAY[kind],items);
+ END LOOP;
+ RETURN result;
+END
+$media$;
+-- statement-breakpoint
 CREATE OR REPLACE FUNCTION field_review_track_edit() RETURNS trigger LANGUAGE plpgsql AS $fn$
 DECLARE
  old_row JSONB; new_row JSONB; before_value JSONB; after_value JSONB;
  field_key TEXT; column_key TEXT; warehouse_id INTEGER; field_version INTEGER; tracked TEXT[];
+ old_media JSONB; new_media JSONB;
 BEGIN
  old_row := CASE WHEN TG_OP='INSERT' THEN '{}'::jsonb ELSE to_jsonb(OLD) END;
  new_row := CASE WHEN TG_OP='DELETE' THEN '{}'::jsonb ELSE to_jsonb(NEW) END;
  warehouse_id := COALESCE((new_row->>'warehouseId')::integer,(old_row->>'warehouseId')::integer,
                           (new_row->>'id')::integer,(old_row->>'id')::integer);
  tracked := TG_ARGV[0]::text[];
+ IF TG_TABLE_NAME='Warehouse' AND (old_row->'media' IS DISTINCT FROM new_row->'media' OR old_row->'photos' IS DISTINCT FROM new_row->'photos') THEN
+  old_media := field_review_media(old_row); new_media := field_review_media(new_row);
+ END IF;
  FOREACH column_key IN ARRAY tracked LOOP
   field_key := CASE WHEN TG_TABLE_NAME='WarehouseData' THEN 'warehouseData.' ELSE '' END || column_key;
-  IF column_key='availabilityReview' THEN
+  IF column_key='media' THEN
+   before_value := old_media; after_value := new_media;
+  ELSIF column_key='availabilityReview' THEN
    before_value := jsonb_build_object('availability',old_row->'availability','availabilityLastReviewedOn',old_row->'availabilityLastReviewedOn');
    after_value := jsonb_build_object('availability',new_row->'availability','availabilityLastReviewedOn',new_row->'availabilityLastReviewedOn');
   ELSIF column_key='handover' THEN
@@ -96,7 +140,7 @@ $fn$;
 DROP TRIGGER IF EXISTS field_review_track_edit ON "Warehouse";
 -- statement-breakpoint
 CREATE TRIGGER field_review_track_edit AFTER UPDATE ON "Warehouse"
-FOR EACH ROW EXECUTE FUNCTION field_review_track_edit('{listing_type,warehouseOwnerType,ownerCompanyName,contactPerson,contactNumber,alt_phone_number,ownerAltPoc,isBroker,is_builder,owner_warmnth,owner_of_multiple_sites,availabilityReview,handover,lockInDate,status,address,city,state,postalCode,zone,googleLocation,nearest_transport,distance_from_highway,warehouseType,totalFloors,liftAccess,passengerLiftCount,serviceLiftCount,liftLoadCapacity,totalSpaceSqft,chargeableArea,land_parcel_size,builtup_area,carpet_area,clearHeightFt,centreHeight,plinthHeightFt,numberOfDocks,dockDimension,dockApronLengthFt,dockPlatformType,gateSizeFt,setbackArea,ccRoads,wallAndSecurityRoom,canopyType,otherDockingSpecs,flooringType,floorStrengthPerSqm,ventilationType,ventilationAirChangesPerDay,insulationPresent,insulationType,lightingDetails,washroom_count,waterSupply,suitableFor,otherSpecifications,compliances,fire_exits,fire_compliance_cert_type,ratePerSqft,negotiated_rent,cam,scoutNotes}');
+FOR EACH ROW EXECUTE FUNCTION field_review_track_edit('{listing_type,warehouseOwnerType,ownerCompanyName,contactPerson,contactNumber,alt_phone_number,ownerAltPoc,isBroker,is_builder,owner_warmnth,owner_of_multiple_sites,availabilityReview,handover,lockInDate,status,address,city,state,postalCode,zone,googleLocation,nearest_transport,distance_from_highway,warehouseType,totalFloors,liftAccess,passengerLiftCount,serviceLiftCount,liftLoadCapacity,totalSpaceSqft,chargeableArea,land_parcel_size,builtup_area,carpet_area,clearHeightFt,centreHeight,plinthHeightFt,numberOfDocks,dockDimension,dockApronLengthFt,dockPlatformType,gateSizeFt,setbackArea,ccRoads,wallAndSecurityRoom,canopyType,otherDockingSpecs,flooringType,floorStrengthPerSqm,ventilationType,ventilationAirChangesPerDay,insulationPresent,insulationType,lightingDetails,washroom_count,waterSupply,suitableFor,otherSpecifications,compliances,fire_exits,fire_compliance_cert_type,ratePerSqft,negotiated_rent,cam,scoutNotes,media}');
 -- statement-breakpoint
 
 -- statement-breakpoint

@@ -16,7 +16,7 @@ const {
 const {
   ReviewError
 } = require('../../src/fieldReview/service');
-const methods = ['setup', 'list', 'detail', 'create', 'respond', 'decide', 'returnForChanges', 'reopen', 'cancel', 'reassign', 'history', 'reveal', 'summaries', 'events'];
+const methods = ['setup', 'list', 'detail', 'create', 'respond', 'decide', 'returnForChanges', 'reopen', 'cancel', 'reassign', 'history', 'reveal', 'summaries', 'events', 'upload'];
 const service = Object.fromEntries(methods.map(name => [name, jest.fn().mockResolvedValue({})]));
 const app = express();
 app.use(express.json());
@@ -234,4 +234,15 @@ test('admin creation rejects generated fields and oversized comments', async () 
     fields
   }).expect(400);
   expect(service.create).not.toHaveBeenCalled();
+});
+
+test('assigned review uploads use the view gate and reject unsupported upload payloads', async () => {
+  prisma.verifiedNumber.findFirst.mockResolvedValue(active({ editOwnWarehouseEntries: false, editAllWarehouseEntries: false }));
+  await auth(request(app).post(`${root}/${id}/flags/${flag}/upload`)).send({ contentType: 'image/jpeg' }).expect(200);
+  expect(service.upload).toHaveBeenCalledWith(id, flag, { contentType: 'image/jpeg' }, expect.any(Object));
+  service.upload.mockClear();
+  for (const body of [{ contentType: 'text/html' }, { contentType: 'image/jpeg', warehouseId: 99 }]) {
+    await auth(request(app).post(`${root}/${id}/flags/${flag}/upload`)).send(body).expect(400);
+  }
+  expect(service.upload).not.toHaveBeenCalled();
 });

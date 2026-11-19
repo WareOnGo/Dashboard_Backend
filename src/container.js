@@ -200,7 +200,7 @@ class Container {
      * const controller = container.resolve('warehouseController');
      */
     initialize() {
-        this.registerSingleton('fieldReviewService', container => new FieldReviewService(database.getClient(), container.resolve('microMarketService')));
+        this.registerSingleton('fieldReviewService', container => new FieldReviewService(database.getClient(), container.resolve('microMarketService'), container.resolve('fileUploadService')));
         // Register Models (singletons)
         // Models are stateless and can be safely shared across requests
         this.registerSingleton('warehouseModel', () => {

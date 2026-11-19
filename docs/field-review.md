@@ -4,6 +4,8 @@ Implementation of the approved v0.6 flow. This feature is independent of the sta
 
 Availability and Last reviewed now use one linked review item. The [adversarial review](field-review-adversarial-review.md) records the resolved concurrency failure, verification and remaining limits.
 
+Media review (local implementation, 19 November 2026): reviewers can flag only the complete media section from the existing View. It covers images, videos and documents, including missing files. Individual files cannot be flagged. This supersedes the earlier V1 exclusion of media.
+
 ## User flow
 
 1. A reviewer opens the existing warehouse View and selects **Flag for review**. Editable fields gain checkboxes. Each selected field requires a comment.
@@ -23,6 +25,37 @@ Availability and Last reviewed now use one linked review item. The [adversarial 
 4. A conflict shows the complete pair in **Baseline**, **Proposed** and **Current**, with available history under Current. Each choice applies that complete pair. Replacing Current requires a reason and confirmation; another edit to either value invalidates the displayed comparison, even if it later reverts.
 5. Approval writes both values, closes the flag and records the decision in one transaction. Any failure rolls them all back. Normal View/Edit remains available while the flag is active.
 
+## Media review
+
+### Reviewer raises the flag
+
+1. Open the existing warehouse View and select **Flag for review**. Select the single **Media section** checkbox and enter a comment, such as “Add photos of the loading docks” or “Replace the outdated site photos.” This works when the gallery is empty. Files keep their usual preview controls; there are no individual-file checkboxes.
+2. Select **Review flags**. The summary shows the gallery previews/links, the comment and the assignee dropdown, defaulting to the eligible uploader. Confirm to create one section flag. Creation captures the live gallery at confirmation and does not change it.
+
+### Employee responds
+
+1. Open the assigned warehouse in **Flagged for review**, then its **Media section** item in **Flagged fields**. Use the shared warehouse upload control to add missing files, remove files from the proposed gallery, or replace files by removing and uploading. Even an entirely empty gallery can receive new uploads.
+2. Add the required verification note and submit. **No change needed** is also available with a required explanation. Uploads and edits remain staged until reviewer approval; submission is disabled while uploads run. **All details** shows the real, familiar View and the live gallery; switching tabs retains the response draft.
+3. If someone changes the gallery before submission, the employee must refresh and reconfirm the draft against the latest gallery. Ordinary View/Edit continues to work throughout.
+
+### Reviewer verifies
+
+1. Open the response in the Flag Review Queue. Image thumbnails, video controls and document links show the proposed and current gallery. Approve the correction or verify a no-change response; request changes if needed.
+2. If the live gallery changed after submission, compare **Baseline**, **Proposed** and **Current**. Current has an expandable edit history when available. Choose **Keep current**, **Apply proposed** or **Restore baseline**; each choice applies to the complete gallery shown. Replacing Current requires a reason and explicit confirmation. A later edit invalidates the comparison and requires another review.
+3. Verification atomically writes both `media` and legacy `photos`, closes the flag and records the decision. Image-pipeline registration runs after commit, as with normal media edits. The section can be cancelled or reopened through the existing workflow.
+
+### Edge cases
+
+- **Someone deletes a photo:** the section flag remains open, including if all files are removed. Before submission this makes the employee draft stale; after submission it triggers the three-gallery comparison. The flag never points to a missing individual file. Applying an older proposal or baseline can restore removed references, so the reviewer must inspect the complete chosen gallery and confirm replacement.
+- **The request is to add photos:** flag the section and specify the missing coverage in the comment. No placeholder image or existing file is required.
+- **Files are added, replaced, reordered, or changed and then restored:** every gallery change advances the shared `media` revision. An unrelated data-field edit does not invalidate the media response. Earlier snapshots and the edit history remain available.
+- **Older media history:** earlier `media` and `photos` audit entries are shown as recorded fields, preserving available values or bounded summaries without claiming they are complete gallery snapshots.
+- **Files are removed through approval:** the warehouse references are detached; review decisions do not physically delete storage objects or historical evidence. Historical previews depend on those objects remaining available in storage.
+
+The existing review tables are reused with one fixed key, `media`; individual-file keys are rejected. Proposals accept only current/original files, a previously submitted proposal for the same flag, or uploads issued for that flag and employee, in the proper category. The scoped upload endpoint requires an assigned open media flag and View access; it does not grant ordinary Edit access. Review uploads use a signed create-only PUT: an issued URL cannot overwrite an existing object. The browser sends the signed headers returned by the service. Activity retains the server-issued object key and public URL, never the presigned upload URL. Before submission and before applying a new upload, the service checks its existence, MIME metadata and nonzero size below 50 MB. A missing/invalid object prevents the response or approval; a storage outage returns a retryable error without closing the flag. These reads run outside warehouse write locks, in batches of at most five with a ten-second deadline. Assignment, flag and live revisions are checked again inside the write transaction. Uploaded objects stay unattached until approval; abandoned uploads follow the existing storage retention/cleanup policy.
+
+The media editor permits up to 200 files per proposed gallery and uses the shared upload control's 50 MB limit per file. System metadata, visibility controls and voice notes remain outside this gallery.
+
 ## Deployment
 
 The migration is additive and **is not applied automatically on server startup**. Production installation was applied and verified on 18 November 2026 (IST): all five tables, both tracking triggers, the active-review uniqueness indexes, RLS and backend access were verified, with direct public/API table access revoked.
@@ -38,6 +71,10 @@ node scripts/migrateFieldReview.js --apply
 The first migration command is a dry run. The second explicitly creates five review/history tables, indexes, two edit-tracking triggers and their trigger function. It enables row-level security, revokes direct API/public access, and verifies that the backend database role retains access and can bypass RLS. Security verification happens inside the DDL transaction: a failed verification rolls back that migration's tables, hooks and permission changes. Run it with the intended environment's database configuration and DDL permissions. It uses a transaction and a 5-second lock timeout; retry during a quieter period if an existing warehouse write holds the table lock. Apply this migration before exposing the frontend feature. Prisma schema push alone does not install the partial unique indexes, tracking triggers or database access protections.
 
 Existing warehouses are not rewritten. Versions start when the triggers are installed. Field history combines new snapshots with earlier available warehouse audit summaries, without duplicating summaries of already tracked writes. New snapshots retain their field revision so equal timestamps cannot scramble write order. Old handover and availability summaries are explicitly labeled as individual recorded parts. The UI does not invent missing actors, values or times. Install the current migration before enabling the linked review API so both availability columns use the `availabilityReview` tracker.
+
+For media support, re-run the current `migrateFieldReview.js --apply` before deploying the media UI/API. It adds the `field_review_media` normalization helper and replaces the existing tracking function/trigger to track one complete-gallery revision; it creates no additional table and does not rewrite existing warehouse media. Apply in the intended deployment only through its normal release process. These media changes are local and have not been deployed. Media history starts with installation; earlier gallery changes are not invented.
+
+Release order: apply and verify the migration, deploy the backend, then deploy the frontend. The storage token needs object metadata (HEAD) access, and the bucket must allow `Content-Type` and `If-None-Match` for PUTs from the dashboard origin. Read-only preflight and metadata checks passed against the configured storage endpoint on 19 November 2026; no storage objects or settings were changed. Create-only behavior follows [Cloudflare’s conditional-write contract](https://developers.cloudflare.com/r2/api/s3/conditional-operations/). Run the normal deployed upload/approval smoke test after release.
 
 To roll back the application, deploy the previous application version and leave the additive tables/history in place. Do not delete review history or disable tracking while review writes are still enabled.
 
@@ -84,7 +121,9 @@ All responses use `{ success: true, data }`; failures use `{ success: false, err
 | `POST /:id/flags/:flagId/decision` | Verify with PROPOSED, CURRENT or BASELINE |
 | `POST /:id/flags/:flagId/return` | Request changes with a comment |
 | `POST /:id/flags/:flagId/reopen` | Reopen a completed field |
+| `POST /:id/flags/:flagId/cancel` | Cancel an active flag with a required reason; warehouse data stays unchanged |
 | `GET /:id/flags/:flagId/history` | Latest 100 available edits for that field |
+| `POST /:id/flags/:flagId/upload` | Scoped presigned upload for an assigned open media flag; no live gallery write |
 | `POST /:id/flags/:flagId/reveal` | Audited protected-value reveal |
 
 Mutations carry a UUID `requestId` and expected flag/review revision. Responses also carry the employee's checked `baselineVersion`; decisions carry the reviewer's reviewed `currentVersion`. A 409 requires refreshing the comparison/status. The frontend retains drafts and reuses operation keys for retries after uncertain transport failures.
@@ -98,8 +137,8 @@ The `availabilityReview` field replaces the two individual availability keys in 
 - Drafts survive tab switches and closing/reopening previews within the browser session. A changed live revision clears a saved reviewer choice, reason and confirmation on refresh/reopen; employee input keeps its original baseline and requires explicit reconfirmation. Flag creation setup and summaries reset on identity/role changes, and late results from the old session are ignored. Drafts are not persisted across reloads or devices. Protected drafts are never written to browser storage.
 - Former assignees retain authorship in history but lose access after reassignment. Reviewers retain access.
 - Current field constraints are validated again before applying a proposal or baseline. Legacy values may be verified unchanged. The review API requires actual JSON numbers for numeric fields. Google Maps URL edits follow the current warehouse form's nonempty-text validation and change only that URL; pin resolution is deferred in the existing form as well. Coordinate corrections update derived micro-market tags using polygons fetched before acquiring warehouse locks.
-- Review inputs reuse the current warehouse form's controls and options, including dropdowns, calendars, switches, ordered area inputs, phones, measurements, ventilation and washrooms. String-backed toggles retain their string type; legacy Yes/No values compare consistently with true/false. Compound handover timing is one logical field and follows the form's current required-field policy; an unchosen lead unit stays empty. Handover proposals and decisions apply the selected timing type and its displayed values; saved values for the other type are preserved from the current locked row, including newer ordinary edits. Switching timing types therefore does not count as clearing the inactive values. Final snapshots record the actual result. Media, generated fields and visibility controls cannot be flagged.
-- No bulk approval, external notifications, employee withdrawal or reviewer cancellation of mistaken flags in V1. Queues and markers are the notification surfaces.
+- Review inputs reuse the current warehouse form's controls and options, including dropdowns, calendars, switches, ordered area inputs, phones, measurements, ventilation, washrooms and media uploads. String-backed toggles retain their string type; legacy Yes/No values compare consistently with true/false. Compound handover timing is one logical field and follows the form's current required-field policy; an unchosen lead unit stays empty. Handover proposals and decisions apply the selected timing type and its displayed values; saved values for the other type are preserved from the current locked row, including newer ordinary edits. Switching timing types therefore does not count as clearing the inactive values. Final snapshots record the actual result. Generated fields and visibility controls cannot be flagged.
+- No bulk approval, external notifications or employee withdrawal in V1. Reviewers may cancel a mistaken flag with a reason. Queues and markers are the notification surfaces.
 - Dashboard markers refresh on review actions and page loads. Queue Refresh reloads the server state. Cross-browser live push and automatic polling are not included.
 
 ## Verification

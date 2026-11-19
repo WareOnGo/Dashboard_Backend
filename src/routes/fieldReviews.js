@@ -78,6 +78,7 @@ function createRouter(service, auth = authMiddleware) {
   router.get('/:id', route(r => service.detail(id.parse(r.params.id), r.user)));
   router.patch('/:id/assignee', auth.requireAccess(CAPS.REVIEW), route(r => service.reassign(id.parse(r.params.id), schemas.assign.parse(r.body), r.user)));
   router.get('/:id/flags/:flagId/history', route(r => service.history(id.parse(r.params.id), id.parse(r.params.flagId), r.user)));
+  router.post('/:id/flags/:flagId/upload', route(r => service.upload(id.parse(r.params.id), id.parse(r.params.flagId), schemas.upload.parse(r.body), r.user)));
   router.post('/:id/flags/:flagId/reveal', route(r => service.reveal(id.parse(r.params.id), id.parse(r.params.flagId), schemas.reveal.parse(r.body), r.user)));
   for (const [path, schema, method, reviewer] of [['response', 'response', 'respond', false], ['decision', 'decision', 'decide', true], ['return', 'return', 'returnForChanges', true], ['reopen', 'reopen', 'reopen', true], ['cancel', 'cancel', 'cancel', true]]) {
     router.post('/:id/flags/:flagId/' + path, ...(reviewer ? [auth.requireAccess(CAPS.REVIEW)] : []), route(r => service[method](id.parse(r.params.id), id.parse(r.params.flagId), schemas[schema].parse(r.body), r.user)));

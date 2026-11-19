@@ -22,6 +22,8 @@ const { validateFormChanges } = require('../utils/formChanges');
 const WarehouseModel = require('../models/warehouseModel');
 const WarehouseService = require('../services/warehouseService');
 const { parseIdList } = require('../utils/warehouseSearchRanking');
+const { mimeKind, kinds: mediaKinds, warehouseMedia } = require('./media');
+const { registerWarehouseImages } = require('../models/imagePipelineRepository.cjs');
 const {
   fields,
   byKey,
@@ -96,9 +98,10 @@ function scrubFlag(flag, reveal = false) {
   return copy;
 }
 class FieldReviewService {
-  constructor(db, microMarketService = null) {
+  constructor(db, microMarketService = null, fileUploadService = null) {
     this.db = db;
     this.microMarketService = microMarketService;
+    this.fileUploadService = fileUploadService;
   }
   async actor(tx, user, reviewerOnly = false) {
     const rows = await tx.verifiedNumber.findMany({
@@ -237,7 +240,7 @@ class FieldReviewService {
       },
       take: 100
     });
-    const legacyKeys = new Set(legacy.flatMap(e => (e.metadata?.changes || []).map(c => handoverKeys.includes(c.field) ? 'handover' : availabilityKeys.includes(c.field) ? 'availabilityReview' : c.field)));
+    const legacyKeys = new Set(legacy.flatMap(e => (e.metadata?.changes || []).map(c => handoverKeys.includes(c.field) ? 'handover' : availabilityKeys.includes(c.field) ? 'availabilityReview' : c.field === 'photos' ? 'media' : c.field)));
     const flags = review.flags.map(flag => {
       const currentVersion = versionMap.get(flag.fieldKey) || 0;
       const currentValue = warehouse ? getValue(warehouse, flag.fieldKey) : null;
@@ -457,6 +460,9 @@ class FieldReviewService {
       if (!actor.isReviewer) fail(403, 'FIELD_REVIEW_FORBIDDEN', 'Only reviewers can flag warehouse fields.');
       const keys = body.fields.map(f => f.key);
       if (new Set(keys).size !== keys.length) fail(400, 'DUPLICATE_FIELDS', 'Select each field once.');
+      for (const key of keys) {
+        if (!Object.hasOwn(byKey, key)) fail(400, 'INVALID_FIELD', 'Unknown review field.');
+      }
       const duplicate = await tx.warehouseFieldFlag.findFirst({
         where: {
           warehouseId: warehouse.id,
@@ -547,7 +553,76 @@ class FieldReviewService {
       flagId
     });
   }
-  respond(reviewId, flagId, body, user) {
+  async upload(reviewId, flagId, body, user) {
+    const authorize = async tx => {
+      const actor = await this.actor(tx, user), review = await this.getReview(tx, reviewId, actor);
+      const warehouse = await this.warehouse(tx, review.warehouseId);
+      assertWarehouseAccess(actor, warehouse);
+      const flag = review.flags.find(f => f.id === flagId);
+      if (actor.id !== review.assigneeId || !flag || flag.fieldKey !== 'media') fail(403, 'FIELD_REVIEW_FORBIDDEN', 'Only the assigned employee can upload for this media flag.');
+      if (review.closedAt || !['NEEDS_RESPONSE', 'CHANGES_REQUESTED'].includes(flag.status)) fail(409, 'FLAG_CHANGED', 'This media flag is not accepting a response.');
+      return actor;
+    };
+    const actor = await this.db.$transaction(authorize);
+    if (!this.fileUploadService) fail(503, 'UPLOAD_UNAVAILABLE', 'File uploads are temporarily unavailable.');
+    // Storage signing stays outside warehouse write locks. Uploads do not attach
+    // anything to the live gallery; response/approval authorization is separate.
+    const upload = await this.fileUploadService.generatePresignedUrl(body, {
+      uploadedBy: actor.email, uploadedById: actor.id, preventOverwrite: true, purpose: 'warehouse-field-review'
+    });
+    await this.db.$transaction(async tx => {
+      await authorize(tx);
+      await tx.warehouseFieldReviewEvent.create({ data: { reviewId, flagId, action: 'UPLOAD_PREPARED', actorEmail: actor.email,
+        actorName: actor.name, payload: { url: upload.imageUrl, fileName: upload.fileName, contentType: body.contentType } } });
+    });
+    return upload;
+  }
+  async checkMediaUploads(reviewId, flagId, body, user, deciding = false) {
+    if (deciding ? body.choice === 'CURRENT' : body.resolution !== 'CORRECTION') return;
+    const target = await this.db.warehouseFieldFlag.findFirst({ where: { id: flagId, reviewId }, select: { fieldKey: true } });
+    if (target?.fieldKey !== 'media') return;
+    const uploads = await this.db.$transaction(async tx => {
+      const actor = await this.actor(tx, user, deciding), review = await this.getReview(tx, reviewId, actor);
+      const warehouse = await this.warehouse(tx, review.warehouseId);
+      assertWarehouseAccess(actor, warehouse);
+      const flag = review.flags.find(f => f.id === flagId);
+      if (!deciding && review.assigneeId !== actor.id) fail(403, 'FIELD_REVIEW_FORBIDDEN', 'Only the assigned employee can submit a response.');
+      // Let the locked mutation handle stale requests and idempotent retries.
+      if (!flag || flag.version !== body.version || review.closedAt
+        || !(deciding ? flag.status === 'AWAITING_ADMIN' : ['NEEDS_RESPONSE', 'CHANGES_REQUESTED'].includes(flag.status))) return [];
+      if (await this.version(tx, warehouse.id, 'media') !== (deciding ? body.currentVersion : body.baselineVersion)) return [];
+      const selectedValue = deciding ? body.choice === 'BASELINE' ? flag.baselineValue : flag.proposedValue : body.proposedValue;
+      if (deciding && sameValue(selectedValue, getValue(warehouse, 'media'), 'media')) return [];
+      let media;
+      try { media = parseValue('media', selectedValue); }
+      catch (e) { fail(400, 'INVALID_FIELD_VALUE', e.issues?.[0]?.message || e.message); }
+      const selected = new Set(mediaKinds.flatMap(kind => media[kind]));
+      const issued = await tx.warehouseFieldReviewEvent.findMany({ where: { reviewId, flagId, action: 'UPLOAD_PREPARED' }, select: { payload: true } });
+      return [...new Map(issued.filter(e => selected.has(e.payload?.url)).map(e => [e.payload.url, e.payload])).values()];
+    }, { isolationLevel: 'RepeatableRead' });
+    if (!uploads.length) return;
+    if (!this.fileUploadService?.getFileInfo) fail(503, 'MEDIA_STORAGE_UNAVAILABLE', 'Media could not be checked. Please retry; no values have changed.');
+    // Check only server-issued object keys, never fetch a caller-supplied URL.
+    // Storage I/O precedes warehouse locks; versions/ownership are rechecked at commit.
+    const abortSignal = AbortSignal.timeout(10000);
+    for (let offset = 0; offset < uploads.length; offset += 5) {
+      await Promise.all(uploads.slice(offset, offset + 5).map(async upload => {
+        if (!upload.fileName) fail(400, 'MEDIA_UPLOAD_INVALID', 'A proposed upload needs to be uploaded again before verification.');
+        let file;
+        try { file = await this.fileUploadService.getFileInfo(upload.fileName, { abortSignal }); }
+        catch (e) {
+          if (e.statusCode === 404) fail(400, 'MEDIA_UPLOAD_INVALID', 'A proposed file is missing or incomplete. Upload it again before verification.');
+          fail(503, 'MEDIA_STORAGE_UNAVAILABLE', 'Media could not be checked. Please retry; no values have changed.');
+        }
+        if (!Number.isSafeInteger(file?.size) || file.size <= 0 || file.size >= 50 * 1024 * 1024
+          || file.contentType !== upload.contentType) {
+          fail(400, 'MEDIA_UPLOAD_INVALID', 'A proposed file has an invalid type or size. Upload a supported file smaller than 50 MB.');
+        }
+      }));
+    }
+  }
+  async respond(reviewId, flagId, body, user) {
+    await this.checkMediaUploads(reviewId, flagId, body, user);
     return this.withFlag(reviewId, flagId, user, body, 'SUBMITTED', async (tx, actor, warehouse, review, flag) => {
       // The assignment permits proposals for its open flags without granting
       // ordinary warehouse Edit access. View access was checked by mutate.
@@ -561,6 +636,15 @@ class FieldReviewService {
         proposal = body.resolution === 'NO_CHANGE' ? baseline : parseValue(flag.fieldKey, body.proposedValue);
         if (body.resolution === 'CORRECTION' && flag.fieldKey === 'handover') {
           proposal = preserveInactiveHandover(proposal, baseline);
+        }
+        if (body.resolution === 'CORRECTION' && flag.fieldKey === 'media') {
+          const uploads = await tx.warehouseFieldReviewEvent.findMany({ where: { reviewId, flagId, action: 'UPLOAD_PREPARED', actorEmail: actor.email }, select: { payload: true } });
+          const currentMedia = warehouseMedia(warehouse);
+          for (const kind of mediaKinds) {
+            const allowed = new Set([...currentMedia[kind], ...(flag.originalValue?.[kind] || []), ...(flag.proposedValue?.[kind] || []),
+              ...uploads.filter(e => mimeKind(e.payload?.contentType) === kind).map(e => e.payload?.url)]);
+            if (proposal[kind].some(url => !allowed.has(url))) throw new Error('Add new files of this type using this review’s upload control.');
+          }
         }
         if (body.resolution === 'CORRECTION') await validateFormChanges(warehouse, patchFor(flag.fieldKey, proposal));
       } catch (e) {
@@ -602,10 +686,11 @@ class FieldReviewService {
     });
   }
   async decide(reviewId, flagId, body, user) {
+    await this.checkMediaUploads(reviewId, flagId, body, user, true);
     // Prepare polygon data before taking warehouse locks. Fetching it through a
     // second database connection inside the transaction can exhaust the pool.
     // Coordinates themselves are still read and compared under the write lock.
-    let polygons;
+    let polygons, mediaChanged = false;
     if (this.microMarketService && body.choice !== 'CURRENT') {
       const field = await this.db.warehouseFieldFlag.findFirst({
         where: { id: flagId, reviewId }, select: { fieldKey: true }
@@ -616,7 +701,7 @@ class FieldReviewService {
         catch { fail(503, 'LOCATION_TAGS_UNAVAILABLE', 'Location areas could not be loaded. Retry verification. No values have changed.'); }
       }
     }
-    return this.withFlag(reviewId, flagId, user, body, 'VERIFIED', async (tx, actor, warehouse, review, flag) => {
+    const result = await this.withFlag(reviewId, flagId, user, body, 'VERIFIED', async (tx, actor, warehouse, review, flag) => {
       if (!actor.isReviewer) fail(403, 'FIELD_REVIEW_FORBIDDEN', 'Only a reviewer can verify a response.');
       if (flag.status !== 'AWAITING_ADMIN') fail(409, 'FLAG_CHANGED', 'Only submitted responses can be verified.');
       const currentVersion = await this.version(tx, warehouse.id, flag.fieldKey),
@@ -629,6 +714,7 @@ class FieldReviewService {
       if (!replacing) final = current;
       if (conflict && replacing && (!body.reason?.trim() || body.confirmed !== true)) fail(400, 'CONFIRMATION_REQUIRED', 'Replacing the current value requires a reason and explicit confirmation.');
       if (replacing) {
+        mediaChanged = flag.fieldKey === 'media';
         try {
           final = parseValue(flag.fieldKey, final);
         } catch (e) {
@@ -708,6 +794,11 @@ class FieldReviewService {
         }
       };
     });
+    if (mediaChanged) {
+      // Match ordinary media edits: registration is best-effort after commit.
+      await registerWarehouseImages(this.db, result.warehouseId);
+    }
+    return result;
   }
   returnForChanges(reviewId, flagId, body, user) {
     return this.withFlag(reviewId, flagId, user, body, 'RETURNED', async (tx, actor, warehouse, review, flag) => {
@@ -877,8 +968,8 @@ class FieldReviewService {
     // Once tracking starts, its complete snapshots take precedence over the
     // ordinary audit summary of the same write. Earlier summaries still matter.
     if (rows.length < 100) {
-      const legacyFields = flag.fieldKey === 'handover' ? handoverKeys : flag.fieldKey === 'availabilityReview' ? availabilityKeys : [flag.fieldKey];
-      const partLabels = { handoverType: 'Handover type', handoverDate: 'Handover date', handoverLeadValue: 'Lead time', handoverLeadUnit: 'Lead time unit', availability: 'Availability', availabilityLastReviewedOn: 'Availability last reviewed' };
+      const legacyFields = flag.fieldKey === 'handover' ? handoverKeys : flag.fieldKey === 'availabilityReview' ? availabilityKeys : flag.fieldKey === 'media' ? ['media', 'photos'] : [flag.fieldKey];
+      const partLabels = { handoverType: 'Handover type', handoverDate: 'Handover date', handoverLeadValue: 'Lead time', handoverLeadUnit: 'Lead time unit', availability: 'Availability', availabilityLastReviewedOn: 'Availability last reviewed', media: 'Media', photos: 'Legacy photos' };
       const logs = await tx.auditLog.findMany({
         where: {
           entity: 'warehouse',

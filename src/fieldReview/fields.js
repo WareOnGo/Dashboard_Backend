@@ -2,11 +2,12 @@ const {
   z
 } = require('zod');
 const WarehouseValidator = require('../validators/warehouseValidator');
+const { warehouseMedia, parseMedia, mediaPatch } = require('./media');
 const {
   validateReviewAvailability
 } = require('../utils/availabilityReview');
 
-// Stable keys also drive the View-mode checkboxes. Media, generated metadata,
+// Stable keys also drive the View-mode checkboxes. Generated metadata,
 // access/visibility controls and derived micro-markets are intentionally absent.
 const groups = {
   'Owner Details': {
@@ -123,12 +124,14 @@ const fields = Object.entries(groups).flatMap(([section, items]) => Object.entri
     aliases: ['Offered Area per Floor (sq ft)']
   } : {})
 })));
+fields.push({ key: 'media', label: 'Media section', section: 'Media', type: 'media', sensitive: false });
 const byKey = Object.fromEntries(fields.map(f => [f.key, f]));
 const handoverKeys = ['handoverType', 'handoverDate', 'handoverLeadValue', 'handoverLeadUnit'];
 const availabilityKeys = ['availability', 'availabilityLastReviewedOn'];
 const jsonValue = value => JSON.parse(JSON.stringify(value ?? null));
 const dateValue = value => value == null ? null : (value instanceof Date ? value.toISOString() : String(value)).slice(0, 10);
 const getValue = (warehouse, key) => {
+  if (key === 'media') return warehouseMedia(warehouse);
   if (key === 'availabilityReview') return {
     availability: jsonValue(warehouse.availability),
     availabilityLastReviewedOn: dateValue(warehouse.availabilityLastReviewedOn)
@@ -138,7 +141,7 @@ const getValue = (warehouse, key) => {
   const [parent, child] = key.split('.');
   return jsonValue(child ? warehouse.WarehouseData?.[child] : warehouse[parent]);
 };
-const patchFor = (key, value) => ['handover', 'availabilityReview'].includes(key) ? value : key.startsWith('warehouseData.') ? {
+const patchFor = (key, value) => key === 'media' ? mediaPatch(value) : ['handover', 'availabilityReview'].includes(key) ? value : key.startsWith('warehouseData.') ? {
   warehouseData: {
     [key.split('.')[1]]: value
   }
@@ -147,6 +150,7 @@ const patchFor = (key, value) => ['handover', 'availabilityReview'].includes(key
 };
 function parseValue(key, value) {
   if (!Object.hasOwn(byKey, key)) throw new Error('Unknown review field');
+  if (key === 'media') return parseMedia(value);
   let parsed;
   if (key === 'availabilityReview') {
     // Require both parts explicitly. A missing date must never inherit evidence
@@ -236,7 +240,8 @@ const schemas = {
   }).strict(),
   reveal: z.object({
     reason: z.string().trim().min(3).max(500)
-  }).strict()
+  }).strict(),
+  upload: WarehouseValidator.fileUploadSchema.strict()
 };
 module.exports = {
   fields,

@@ -10,6 +10,7 @@ const numericText = new Set(['ratePerSqft','numberOfDocks','totalFloors','passen
 const decimal = /^(?:\d+(?:\.\d+)?|\.\d+)$/;
 const ungroup = text => /^\d{1,3}(?:,\d{3})+(?:\.\d+)?$/.test(text) ? text.replaceAll(',', '') : text;
 function canonical(value, key) {
+  if (key === 'media') return ['images', 'videos', 'docs'].map(kind => value?.[kind] || []);
   if (value == null || value === '') return null;
   if (['ccRoads', 'insulationPresent', 'warehouseData.vaastuCompliance'].includes(key)
       && /^(true|false|yes|no)$/i.test(String(value))) return /^(true|yes)$/i.test(String(value));

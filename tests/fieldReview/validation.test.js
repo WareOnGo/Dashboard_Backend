@@ -82,3 +82,19 @@ test('availability comparison includes both values and ignores object key order'
   expect(sameValue(value, { ...value, availability: 'No' }, 'availabilityReview')).toBe(false);
   expect(sameValue(value, { ...value, availabilityLastReviewedOn: null }, 'availabilityReview')).toBe(false);
 });
+
+test('media proposals require a complete gallery with unique, safe URLs and a total file limit', () => {
+  const { emptyMedia } = require('../../src/fieldReview/media');
+  const url = 'https://media.example.test/drawing.jpg';
+  const media = { ...emptyMedia(), images: [url] };
+  expect(parseValue('media', media)).toEqual(media);
+  expect(patchFor('media', media)).toEqual({ media, photos: url });
+  expect(sameValue(media, { docs: [], images: [url], videos: [] }, 'media')).toBe(true);
+  expect(sameValue(media, emptyMedia(), 'media')).toBe(false);
+  for (const invalid of [null, { images: [] }, { ...media, extra: [] },
+    { ...media, docs: [url] }, { ...media, images: [url, url] },
+    { ...media, images: ['javascript:alert(1)'] }, { ...media, images: ['https://user:secret@media.example.test/a.jpg'] },
+    { images: Array.from({ length: 150 }, (_, i) => `https://media.example.test/${i}.jpg`),
+      videos: [], docs: Array.from({ length: 51 }, (_, i) => `https://media.example.test/${i}.pdf`) },
+  ]) expect(() => parseValue('media', invalid)).toThrow();
+});

@@ -38,7 +38,7 @@ const db = new PrismaClient({
     }
   }
 });
-const service = new FieldReviewService(db);
+const service = new FieldReviewService(db, null, { getFileInfo: async () => ({ size: 1234, contentType: 'image/jpeg' }) });
 const admin = {
     email: 'admin@wareongo.com'
   },
@@ -903,8 +903,8 @@ test('nested field revisions and dates use the same conflict contract', async ()
   })).powerKva).toBe('120');
   expect((await service.detail(r.id, admin)).flags[0].currentVersion).toBeGreaterThan(0);
 });
-test('unknown/system/media fields and empty no-change reasons are rejected by request validation', () => {
-  for (const key of ['id', 'uploadedBy', 'media', 'visibility', 'scoutVoiceNotes', '__proto__']) expect(schemas.create.safeParse({
+test('unknown/system fields and empty no-change reasons are rejected by request validation', () => {
+  for (const key of ['id', 'uploadedBy', 'photos', 'visibility', 'scoutVoiceNotes', '__proto__']) expect(schemas.create.safeParse({
     requestId: randomUUID(),
     warehouseId: 4821,
     fields: [{
@@ -1757,4 +1757,297 @@ test('migration security failure rolls back its tables, triggers and grants', as
       await root.$executeRawUnsafe('DROP ROLE anon');
     }
   }
+});
+
+describe('whole media section', () => {
+  const { emptyMedia, warehouseMedia } = require('../../src/fieldReview/media');
+  const a = 'https://media.example.test/a.jpg', b = 'https://media.example.test/b.jpg';
+  const doc = 'https://media.example.test/layout.pdf', video = 'https://media.example.test/tour.mp4';
+  const replacement = 'https://media.example.test/replacement.jpg';
+  const gallery = { images: [a, b], videos: [video], docs: [doc] };
+  const seed = async media => db.warehouse.update({ where: { id: 4821 }, data: {
+    media, photos: [...media.images, ...media.videos, ...media.docs].join(',') || null,
+  } });
+  const uploader = new FieldReviewService(db, null, { generatePresignedUrl: jest.fn(async () => ({
+    imageUrl: replacement, uploadUrl: 'https://uploads.example.test/signed', fileName: 'replacement.jpg',
+  })) });
+
+  test('only the complete section is flaggable, even when empty; individual file keys are rejected', async () => {
+    expect((await service.setup(4821, admin)).fields.filter(f => f.type === 'media')).toEqual([
+      expect.objectContaining({ key: 'media', value: emptyMedia() }),
+    ]);
+    await seed(gallery);
+    expect((await service.setup(4821, admin)).fields.filter(f => f.type === 'media')).toEqual([
+      expect.objectContaining({ key: 'media', value: gallery }),
+    ]);
+    for (const kind of ['images', 'videos', 'docs']) {
+      const key = `media.${kind}:` + 'a'.repeat(64);
+      expect(schemas.create.safeParse({ requestId: randomUUID(), warehouseId: 4821, fields: [{ key, comment: 'Check file.' }] }).success).toBe(false);
+      await expect(create([key])).rejects.toMatchObject({ code: 'INVALID_FIELD' });
+    }
+    const r = await create(['media']);
+    expect(r.flags).toHaveLength(1);
+    expect((await service.summaries([4821], admin))[0].activeFields).toEqual([
+      { fieldKey: 'media', comment: 'Confirm this value.' },
+    ]);
+    await expect(create(['media'])).rejects.toMatchObject({ code: 'ALREADY_FLAGGED' });
+  });
+
+  test('a section flag can request new files for an empty gallery; uploads stay staged until approval', async () => {
+    const r = await create(['media']), flag = r.flags[0];
+    await uploader.upload(r.id, flag.id, { contentType: 'image/jpeg' }, employee);
+    const proposal = { ...emptyMedia(), images: [replacement] };
+    const submitted = await submit(r, 0, { proposedValue: proposal });
+    expect(warehouseMedia(await live())).toEqual(emptyMedia());
+    const done = await service.decide(r.id, flag.id, decision(submitted.flags[0]), admin);
+    expect(warehouseMedia(await live())).toEqual(proposal);
+    expect((await live()).photos).toBe(replacement);
+    expect(done.flags[0].finalValue).toEqual(proposal);
+    expect(done.closedAt).not.toBeNull();
+  });
+
+  test.each([
+    ['an addition', { ...gallery, docs: [doc, 'https://media.example.test/new.pdf'] }],
+    ['an image deletion', { ...gallery, images: [b] }],
+    ['reordering', { ...gallery, images: [b, a] }],
+  ])('%s through normal editing invalidates an employee gallery draft without blocking the edit', async (_label, current) => {
+    await seed(gallery);
+    const r = await create(['media']);
+    await seed(current);
+    expect(warehouseMedia(await live())).toEqual(current);
+    await expect(submit(r, 0, { proposedValue: emptyMedia() })).rejects.toMatchObject({ code: 'BASELINE_CHANGED' });
+    const fresh = await service.detail(r.id, employee);
+    expect(fresh.flags[0].currentVersion).toBe(r.flags[0].currentVersion + 1);
+    expect(fresh.flags[0].currentValue).toEqual(current);
+    expect((await service.history(r.id, r.flags[0].id, admin)).items[0]).toMatchObject({ oldValue: gallery, newValue: current });
+  });
+
+  test.each(['CURRENT', 'PROPOSED', 'BASELINE'])('an image deleted during verification offers %s and rejects stale comparisons', async choice => {
+    await seed(gallery);
+    const proposed = { ...gallery, docs: [] }, r = await submit(await create(['media']), 0, { proposedValue: proposed });
+    const current = { ...gallery, images: [b] };
+    await seed(current);
+    const fresh = await service.detail(r.id, admin), flag = fresh.flags[0];
+    expect(flag).toMatchObject({ conflict: true, baselineValue: gallery, proposedValue: proposed, currentValue: current });
+    await expect(service.decide(r.id, flag.id, decision(r.flags[0], { choice, reason: 'Checked gallery.', confirmed: true }), admin)).rejects.toMatchObject({ code: 'CURRENT_CHANGED' });
+    if (choice !== 'CURRENT') {
+      await expect(service.decide(r.id, flag.id, decision(flag, { choice }), admin)).rejects.toMatchObject({ code: 'CONFIRMATION_REQUIRED' });
+    }
+    await service.decide(r.id, flag.id, decision(flag, { choice, reason: 'Checked gallery.', confirmed: true }), admin);
+    expect(warehouseMedia(await live())).toEqual(choice === 'CURRENT' ? current : choice === 'BASELINE' ? gallery : proposed);
+  });
+
+  test('removing and restoring a photo invalidates old drafts; no-change requires a note and reviewer verification', async () => {
+    await seed(gallery);
+    const r = await create(['media']);
+    await seed({ ...gallery, images: [b] });
+    await seed(gallery);
+    await expect(submit(r, 0, { resolution: 'NO_CHANGE' })).rejects.toMatchObject({ code: 'BASELINE_CHANGED' });
+    const fresh = await service.detail(r.id, employee);
+    expect(schemas.response.safeParse({ requestId: randomUUID(), version: fresh.flags[0].version,
+      baselineVersion: fresh.flags[0].currentVersion, resolution: 'NO_CHANGE', explanation: '' }).success).toBe(false);
+    const submitted = await submit(fresh, 0, { resolution: 'NO_CHANGE' });
+    expect(submitted.flags[0].status).toBe('AWAITING_ADMIN');
+    expect(submitted.closedAt).toBeNull();
+    await service.decide(r.id, r.flags[0].id, decision(submitted.flags[0]), admin);
+    expect(warehouseMedia(await live())).toEqual(gallery);
+  });
+
+  test('uploads and proposals reject unassigned users, unrelated fields, external URLs and changed file categories', async () => {
+    await seed(gallery);
+    const r = await create(['media']), flag = r.flags[0];
+    await expect(uploader.upload(r.id, flag.id, { contentType: 'image/jpeg' }, other)).rejects.toBeTruthy();
+    const numeric = await create(['totalSpaceSqft']), area = numeric.flags.find(f => f.fieldKey === 'totalSpaceSqft');
+    await expect(uploader.upload(r.id, area.id, { contentType: 'image/jpeg' }, employee)).rejects.toMatchObject({ code: 'FIELD_REVIEW_FORBIDDEN' });
+    await expect(submit(r, 0, { proposedValue: { ...gallery, images: [replacement] } })).rejects.toMatchObject({ code: 'INVALID_FIELD_VALUE' });
+    await expect(submit(r, 0, { proposedValue: { ...gallery, docs: [a] } })).rejects.toMatchObject({ code: 'INVALID_FIELD_VALUE' });
+    await expect(submit(r, 0, { proposedValue: { ...gallery, images: ['javascript:alert(1)'] } })).rejects.toMatchObject({ code: 'INVALID_FIELD_VALUE' });
+    await uploader.upload(r.id, flag.id, { contentType: 'image/jpeg' }, employee);
+    await expect(submit(r, 0, { proposedValue: { ...gallery, videos: [replacement] } })).rejects.toMatchObject({ code: 'INVALID_FIELD_VALUE' });
+    const submitted = await submit(r, 0, { proposedValue: emptyMedia() });
+    await expect(uploader.upload(r.id, flag.id, { contentType: 'image/jpeg' }, employee)).rejects.toMatchObject({ code: 'FLAG_CHANGED' });
+    expect(submitted.flags.find(f => f.id === flag.id).status).toBe('AWAITING_ADMIN');
+  });
+
+  test('legacy media normalization and gallery tracking agree, including commas inside URLs', async () => {
+    const legacy = 'https://media.example.test/a,b.jpg,https://media.example.test/tour.mp4,https://media.example.test/layout.pdf';
+    await db.warehouse.update({ where: { id: 4821 }, data: { media: Prisma.DbNull, photos: legacy } });
+    const row = await live();
+    const [stored] = await db.$queryRawUnsafe('SELECT field_review_media(to_jsonb(w)) AS media FROM "Warehouse" w WHERE id=4821');
+    expect(stored.media).toEqual(warehouseMedia(row));
+    expect(stored.media.images).toEqual(['https://media.example.test/a,b.jpg']);
+    const r = await create(['media']);
+    await db.warehouse.update({ where: { id: 4821 }, data: { photos: 'https://media.example.test/a,b.jpg' } });
+    const fresh = await service.detail(r.id, admin);
+    expect(fresh.flags[0].currentVersion).toBe(r.flags[0].currentVersion + 1);
+    expect(fresh.flags[0].currentValue).toEqual({ ...emptyMedia(), images: ['https://media.example.test/a,b.jpg'] });
+  });
+
+  test('failed verification rolls back media, legacy photos, gallery revision and closure', async () => {
+    await seed(gallery);
+    const r = await submit(await create(['media']), 0, { proposedValue: emptyMedia() });
+    const before = await live();
+    await db.$executeRawUnsafe(`ALTER TABLE "WarehouseFieldReviewEvent" ADD CONSTRAINT test_media_rollback CHECK (action <> 'VERIFIED')`);
+    try { await expect(service.decide(r.id, r.flags[0].id, decision(r.flags[0]), admin)).rejects.toBeTruthy(); }
+    finally { await db.$executeRawUnsafe('ALTER TABLE "WarehouseFieldReviewEvent" DROP CONSTRAINT test_media_rollback'); }
+    const after = await live();
+    expect(after.media).toEqual(before.media);
+    expect(after.photos).toEqual(before.photos);
+    expect((await service.detail(r.id, admin)).flags[0]).toMatchObject({ status: 'AWAITING_ADMIN', currentVersion: r.flags[0].currentVersion });
+  });
+});
+
+test('reopening an emptied media section into another cycle uses the live gallery; cancellation changes no media', async () => {
+  const { emptyMedia } = require('../../src/fieldReview/media');
+  const url = 'https://media.example.test/retained-plan.pdf';
+  await db.warehouse.update({ where: { id: 4821 }, data: { media: { ...emptyMedia(), docs: [url] }, photos: url } });
+  const submitted = await submit(await create(['media']), 0, { proposedValue: emptyMedia() });
+  const closed = await service.decide(submitted.id, submitted.flags[0].id, decision(submitted.flags[0]), admin);
+  const activeReview = await create(['ratePerSqft']);
+  const reopened = await service.reopen(closed.id, closed.flags[0].id, { requestId: randomUUID(), version: closed.flags[0].version }, admin);
+  expect(reopened.id).toBe(activeReview.id);
+  const flag = reopened.flags.find(f => f.fieldKey === 'media');
+  expect(flag.originalValue).toEqual(emptyMedia());
+  expect(flag.currentValue).toEqual(emptyMedia());
+  expect((await service.summaries([4821], admin))[0].activeFields).toEqual(expect.arrayContaining([expect.objectContaining({ fieldKey: 'media' })]));
+  const cancelled = await service.cancel(reopened.id, flag.id, { requestId: randomUUID(), version: flag.version, reason: 'The obsolete plan was already removed.' }, admin);
+  expect(cancelled.flags.find(f => f.id === flag.id).status).toBe('CANCELLED');
+  expect((await live()).media).toEqual(emptyMedia());
+});
+
+test('media snapshots match View-compatible nested JSON and legacy array encodings', async () => {
+  const { warehouseMedia } = require('../../src/fieldReview/media');
+  const gallery = { images: ['https://media.example.test/photo.jpg'], videos: [], docs: ['https://media.example.test/plan.pdf'] };
+  for (const row of [
+    { media: JSON.stringify(JSON.stringify(gallery)) },
+    { photos: JSON.stringify(JSON.stringify([...gallery.images, ...gallery.docs])) },
+    { media: { images: [] }, photos: [...gallery.images, ...gallery.docs].join(',') },
+  ]) {
+    const [stored] = await db.$queryRaw`SELECT field_review_media(${JSON.stringify(row)}::jsonb) AS media`;
+    expect(stored.media).toEqual(warehouseMedia(row));
+  }
+});
+
+test('a reassigned media response may retain a previously submitted file without uploading it again', async () => {
+  const { emptyMedia } = require('../../src/fieldReview/media');
+  const uploaded = 'https://media.example.test/previous-proposal.jpg';
+  const uploader = new FieldReviewService(db, null, { generatePresignedUrl: async () => ({ imageUrl: uploaded, uploadUrl: 'https://upload.example.test/signed', fileName: 'previous-proposal.jpg' }) });
+  let review = await create(['media']);
+  await uploader.upload(review.id, review.flags[0].id, { contentType: 'image/jpeg' }, employee);
+  review = await submit(review, 0, { proposedValue: { ...emptyMedia(), images: [uploaded] } });
+  review = await service.returnForChanges(review.id, review.flags[0].id, { requestId: randomUUID(), version: review.flags[0].version, comment: 'Please verify the site location.' }, admin);
+  review = await service.reassign(review.id, { requestId: randomUUID(), version: review.version, assigneeId: 3 }, admin);
+  const flag = review.flags[0];
+  const submitted = await service.respond(review.id, flag.id, { requestId: randomUUID(), version: flag.version, baselineVersion: flag.currentVersion,
+    resolution: 'CORRECTION', proposedValue: flag.proposedValue, explanation: 'Confirmed the site location for this submitted photo.' }, other);
+  expect(submitted.flags[0].status).toBe('AWAITING_ADMIN');
+  expect(submitted.flags[0].proposedValue.images).toEqual([uploaded]);
+  expect((await live()).media).toBeNull();
+});
+
+describe('adversarial media uploads', () => {
+  const { emptyMedia } = require('../../src/fieldReview/media');
+  const url = 'https://media.example.test/review-upload.jpg';
+  const proposal = { ...emptyMedia(), images: [url] };
+  const storage = {
+    generatePresignedUrl: jest.fn(async () => ({ imageUrl: url, uploadUrl: 'https://upload.example.test/signed', fileName: 'review-upload.jpg' })),
+    getFileInfo: jest.fn(),
+  };
+  const checked = new FieldReviewService(db, null, storage);
+  const respond = (r, body = {}) => checked.respond(r.id, r.flags[0].id, { requestId: randomUUID(), version: r.flags[0].version,
+    baselineVersion: r.flags[0].currentVersion, resolution: 'CORRECTION', proposedValue: proposal, explanation: 'Checked the new photo.', ...body }, employee);
+  beforeEach(() => storage.getFileInfo.mockReset().mockResolvedValue({ size: 1234, contentType: 'image/jpeg' }));
+
+  test.each([
+    ['missing', null], ['empty', { size: 0, contentType: 'image/jpeg' }],
+    ['oversized', { size: 50 * 1024 * 1024, contentType: 'image/jpeg' }],
+    ['wrong type', { size: 1234, contentType: 'text/html' }],
+  ])('an issued URL for a %s upload cannot be submitted', async (_label, info) => {
+    const r = await create(['media']);
+    await checked.upload(r.id, r.flags[0].id, { contentType: 'image/jpeg' }, employee);
+    if (info) storage.getFileInfo.mockResolvedValue(info);
+    else storage.getFileInfo.mockRejectedValue(Object.assign(new Error('Missing upload'), { statusCode: 404 }));
+    await expect(respond(r)).rejects.toMatchObject({ code: 'MEDIA_UPLOAD_INVALID' });
+    expect((await service.detail(r.id, admin)).flags[0].status).toBe('NEEDS_RESPONSE');
+    expect((await live()).media).toBeNull();
+  });
+
+  test('a file deleted from storage after submission cannot be approved, and storage failure closes nothing', async () => {
+    const r = await create(['media']);
+    await checked.upload(r.id, r.flags[0].id, { contentType: 'image/jpeg' }, employee);
+    const submitted = await respond(r);
+    storage.getFileInfo.mockRejectedValue(Object.assign(new Error('Missing upload'), { statusCode: 404 }));
+    await expect(checked.decide(r.id, r.flags[0].id, decision(submitted.flags[0]), admin)).rejects.toMatchObject({ code: 'MEDIA_UPLOAD_INVALID' });
+    storage.getFileInfo.mockRejectedValue(new Error('Storage unavailable'));
+    await expect(checked.decide(r.id, r.flags[0].id, decision(submitted.flags[0]), admin)).rejects.toMatchObject({ code: 'MEDIA_STORAGE_UNAVAILABLE' });
+    expect((await service.detail(r.id, admin)).flags[0].status).toBe('AWAITING_ADMIN');
+    expect((await live()).media).toBeNull();
+  });
+
+  test.each(['edit', 'reassign'])('storage checks hold no warehouse lock and a concurrent %s invalidates the response', async change => {
+    const r = await create(['media']);
+    await checked.upload(r.id, r.flags[0].id, { contentType: 'image/jpeg' }, employee);
+    let release, entered;
+    const started = new Promise(resolve => { entered = resolve; });
+    storage.getFileInfo.mockImplementation(() => { entered(); return new Promise(resolve => { release = resolve; }); });
+    const pending = respond(r).then(() => null, error => error);
+    await started;
+    try {
+      if (change === 'edit') await db.warehouse.update({ where: { id: 4821 }, data: { media: { ...emptyMedia(), docs: ['https://media.example.test/new-plan.pdf'] } } });
+      else await service.reassign(r.id, { requestId: randomUUID(), version: r.version, assigneeId: 3 }, admin);
+    } finally { release({ size: 1234, contentType: 'image/jpeg' }); }
+    expect(await pending).toMatchObject({ code: change === 'edit' ? 'BASELINE_CHANGED' : 'FIELD_REVIEW_FORBIDDEN' });
+    expect((await service.detail(r.id, admin)).flags[0].status).toBe('NEEDS_RESPONSE');
+  });
+
+  test('unassigned callers cannot trigger storage reads and approval retries remain idempotent', async () => {
+    const r = await create(['media']);
+    await checked.upload(r.id, r.flags[0].id, { contentType: 'image/jpeg' }, employee);
+    await expect(checked.respond(r.id, r.flags[0].id, { requestId: randomUUID(), version: 0, baselineVersion: 0,
+      resolution: 'CORRECTION', proposedValue: proposal, explanation: 'Unassigned attempt.' }, other)).rejects.toMatchObject({ code: 'FIELD_REVIEW_FORBIDDEN' });
+    expect(storage.getFileInfo).not.toHaveBeenCalled();
+    const submitted = await respond(r), body = decision(submitted.flags[0]);
+    await checked.decide(r.id, r.flags[0].id, body, admin);
+    storage.getFileInfo.mockReset().mockRejectedValue(new Error('Storage unavailable after committed decision'));
+    expect((await checked.decide(r.id, r.flags[0].id, body, admin)).flags[0].status).toBe('VERIFIED');
+    expect(storage.getFileInfo).not.toHaveBeenCalled();
+  });
+
+  test('an unchanged legacy gallery over the new-upload limit can still be verified without storage checks', async () => {
+    const gallery = { ...emptyMedia(), images: Array.from({ length: 201 }, (_, i) => `https://media.example.test/existing-${i}.jpg`) };
+    await db.warehouse.update({ where: { id: 4821 }, data: { media: gallery } });
+    const r = await create(['media']), submitted = await respond(r, { resolution: 'NO_CHANGE' });
+    const done = await checked.decide(r.id, r.flags[0].id, decision(submitted.flags[0]), admin);
+    expect(done.flags[0].status).toBe('VERIFIED');
+    expect((await live()).media).toEqual(gallery);
+    expect(storage.getFileInfo).not.toHaveBeenCalled();
+  });
+
+});
+
+test('legacy photos audit records remain available for the media section', async () => {
+  const r = await create(['media']);
+  await db.auditLog.create({ data: { entity: 'warehouse', entityId: '4821', action: 'UPDATE', userEmail: 'earlier@wareongo.com',
+    createdAt: new Date('2026-01-01T00:00:00Z'), metadata: { changes: [
+      { field: 'photos', from: 'https://media.example.test/before.jpg', to: 'https://media.example.test/after.jpg' },
+    ] } } });
+  expect((await service.detail(r.id, admin)).flags[0].hasEditHistory).toBe(true);
+  expect((await service.history(r.id, r.flags[0].id, admin)).items).toEqual([
+    expect.objectContaining({ partLabel: 'Legacy photos', oldValue: 'https://media.example.test/before.jpg', newValue: 'https://media.example.test/after.jpg' }),
+  ]);
+});
+
+test('reapplying the media migration preserves active reviews, gallery data and earlier history', async () => {
+  const r = await submit(await create(['ratePerSqft']));
+  const before = await live();
+  const events = await db.warehouseFieldReviewEvent.findMany({ orderBy: { id: 'asc' } });
+  const edits = await db.warehouseFieldEdit.findMany({ orderBy: { id: 'asc' } });
+  const flag = await db.warehouseFieldFlag.findUnique({ where: { id: r.flags[0].id } });
+  await migrate(db, true);
+  expect(await live()).toEqual(before);
+  expect(await db.warehouseFieldFlag.findUnique({ where: { id: flag.id } })).toEqual(flag);
+  expect(await db.warehouseFieldReviewEvent.findMany({ orderBy: { id: 'asc' } })).toEqual(events);
+  expect(await db.warehouseFieldEdit.findMany({ orderBy: { id: 'asc' } })).toEqual(edits);
+  await db.warehouse.update({ where: { id: 4821 }, data: { media: { images: ['https://media.example.test/new.jpg'], videos: [], docs: [] } } });
+  expect(await db.warehouseFieldVersion.findUnique({ where: { warehouseId_fieldKey: { warehouseId: 4821, fieldKey: 'media' } } })).toMatchObject({ version: 1 });
 });
