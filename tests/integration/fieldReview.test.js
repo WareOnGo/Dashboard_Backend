@@ -204,6 +204,356 @@ describe('PPT form requirements across field-review responses and verification',
 const polygons = [{ id: 'fixture', name: 'Fixture market', geometry: {
   type: 'Polygon', coordinates: [[[72, 18], [74, 18], [74, 20], [72, 20], [72, 18]]],
 } }];
+describe('flag confirmation field editors', () => {
+  const editors = async () => Object.fromEntries((await service.setup(4821, admin)).fields.map(f => [f.key, f.lastEditedBy]));
+  const audit = (data = {}) => db.auditLog.create({ data: {
+    entity: 'warehouse', entityId: '4821', action: 'UPDATE', userEmail: employee.email,
+    metadata: { changes: [{ field: 'contactPerson', from: 'Before', to: 'After' }] }, ...data,
+  } });
+
+  test('untouched fields use the creator, including initially populated warehouse details', async () => {
+    await db.warehouseData.create({ data: { warehouseId: 4821, powerKva: '100' } });
+    expect(new Set(Object.values(await editors()))).toEqual(new Set(['Employee One']));
+  });
+
+  test('uses the latest editor of each field without a warehouse-wide audit limit', async () => {
+    await audit({ createdAt: new Date('2026-01-01T00:00:00Z') });
+    await audit({ userEmail: other.email, createdAt: new Date('2026-02-01T00:00:00Z') });
+    await db.auditLog.createMany({ data: Array.from({ length: 105 }, () => ({
+      entity: 'warehouse', entityId: '4821', action: 'UPDATE', userEmail: admin.email,
+      metadata: { changes: [{ field: 'city', from: 'Old city', to: 'New city' }] },
+    })) });
+    await audit({ entityId: '4822', userEmail: 'unrelated@wareongo.com' });
+    await audit({ entity: 'staged_warehouse', userEmail: 'unrelated@wareongo.com' });
+    await audit({ action: 'READ', userEmail: 'reader@wareongo.com' });
+    await audit({ metadata: { changes: [] }, userEmail: 'no-change@wareongo.com' });
+    expect(await editors()).toMatchObject({ contactPerson: other.email, city: admin.email, ratePerSqft: 'Employee One' });
+  });
+
+  test('maps nested and compound audit fields and tolerates old or malformed metadata', async () => {
+    await audit({ metadata: { changes: [
+      { field: 'warehouseData.powerKva', from: '100', to: '200' },
+      { field: 'handoverDate', from: null, to: '2026-12-01' },
+      { field: 'availability', from: 'Yes', to: 'No' },
+    ] }, createdAt: new Date('2026-01-01T00:00:00Z') });
+    await audit({ userEmail: other.email, metadata: { changes: [
+      { field: 'handoverLeadUnit', from: null, to: 'MONTHS' },
+      { field: 'availabilityLastReviewedOn', from: null, to: '2026-11-19' },
+    ] } });
+    await audit({ metadata: { updatedFields: ['contactPerson'] } });
+    for (const metadata of [Prisma.JsonNull, { changes: {} }, { changes: [null, 42, {}] }, { updatedFields: {} }]) {
+      await audit({ metadata, userEmail: 'malformed@wareongo.com' });
+    }
+    expect(await editors()).toMatchObject({ 'warehouseData.powerKva': employee.email,
+      handover: other.email, availabilityReview: other.email, contactPerson: employee.email });
+  });
+
+  test('tracked user edits use revision order, including before asynchronous audits arrive', async () => {
+    await db.$transaction(async tx => {
+      await tx.$queryRaw`SELECT set_config('wareongo.actor_email', ${employee.email}, true)`;
+      await tx.warehouse.update({ where: { id: 4821 }, data: { contactPerson: 'First editor' } });
+      await tx.$queryRaw`SELECT set_config('wareongo.actor_email', ${other.email}, true)`;
+      await tx.warehouse.update({ where: { id: 4821 }, data: { contactPerson: 'Second editor' } });
+      await tx.warehouseData.create({ data: { warehouseId: 4821, powerKva: '200' } });
+    });
+    await db.warehouseFieldEdit.updateMany({ data: { createdAt: new Date('2026-11-19T12:00:00Z') } });
+    // A delayed audit of the earlier write must not replace the newer revision.
+    await audit();
+    expect(await editors()).toMatchObject({ contactPerson: other.email, 'warehouseData.powerKva': other.email,
+      ratePerSqft: 'Employee One' });
+  });
+
+  test('review responses and no-change verification do not count as edits; applied corrections do', async () => {
+    let review = await submit(await create(['ratePerSqft']), 0, { proposedValue: '24' });
+    expect((await editors()).ratePerSqft).toBe('Employee One');
+    await service.decide(review.id, review.flags[0].id, decision(review.flags[0]), admin);
+    expect((await editors()).ratePerSqft).toBe(admin.email);
+    review = await submit(await create(['contactPerson']), 0, { resolution: 'NO_CHANGE' });
+    await service.decide(review.id, review.flags[0].id, decision(review.flags[0]), admin);
+    expect((await editors()).contactPerson).toBe('Employee One');
+  });
+
+  test('keeps missing audit actors unknown and never returns raw audit values', async () => {
+    await audit({ userEmail: ' ', userName: null });
+    await audit({ metadata: { changes: [{ field: 'contactNumber', from: 'private-before', to: 'private-after' }] } });
+    const setup = await service.setup(4821, admin);
+    expect(setup.fields.find(f => f.key === 'contactPerson').lastEditedBy).toBeNull();
+    expect(setup.fields.find(f => f.key === 'contactNumber').lastEditedBy).toBe(employee.email);
+    expect(JSON.stringify(setup)).not.toMatch(/private-before|private-after|\+919999999999/);
+  });
+
+  test('an unattributed later edit does not restore the creator or an earlier known editor', async () => {
+    await db.$transaction(async tx => {
+      await tx.$queryRaw`SELECT set_config('wareongo.actor_email', ${employee.email}, true)`;
+      await tx.warehouse.update({ where: { id: 4821 }, data: { contactPerson: 'First editor' } });
+      await tx.warehouseData.create({ data: { warehouseId: 4821, powerKva: '100' } });
+    });
+    await db.warehouse.update({ where: { id: 4821 }, data: { contactPerson: 'Unattributed edit' } });
+    await db.warehouseData.update({ where: { warehouseId: 4821 }, data: { powerKva: '200' } });
+    await audit();
+    expect(await editors()).toMatchObject({ contactPerson: null, 'warehouseData.powerKva': null });
+  });
+});
+describe('recorded review baseline editors', () => {
+  const updateAs = (email, data) => db.$transaction(async tx => {
+    await tx.$queryRaw`SELECT set_config('wareongo.actor_email', ${email}, true)`;
+    return tx.warehouse.update({ where: { id: 4821 }, data });
+  });
+  const event = requestId => db.warehouseFieldReviewEvent.findUnique({ where: { requestId } });
+
+  test('freezes each flagged field at creation, independently of previews, retries and later history deletion', async () => {
+    await db.warehouseData.create({ data: { warehouseId: 4821, powerKva: '100' } });
+    await updateAs(employee.email, { contactPerson: 'First editor', handoverType: 'VARIABLE', handoverLeadValue: 2, handoverLeadUnit: 'MONTHS' });
+    const preview = await service.setup(4821, admin);
+    expect(preview.fields.find(f => f.key === 'contactPerson').lastEditedBy).toBe(employee.email);
+    await updateAs(other.email, { contactPerson: 'Second editor' });
+    const body = { requestId: randomUUID(), warehouseId: 4821,
+      fields: ['contactPerson', 'ratePerSqft', 'warehouseData.powerKva', 'handover'].map(key => ({ key, comment: 'Check this field.' })) };
+    const review = await service.create(body, admin);
+    const original = await event(body.requestId);
+    const snapshots = original.payload.fieldSnapshots;
+    const byField = Object.fromEntries(snapshots.map(snapshot => [snapshot.fieldKey, snapshot]));
+    expect(snapshots).toHaveLength(4);
+    expect(byField).toMatchObject({
+      contactPerson: { originalValue: 'Second editor', originalVersion: 2, originalLastEditedBy: other.email },
+      ratePerSqft: { originalValue: '22', originalVersion: 0, originalLastEditedBy: 'Employee One' },
+      'warehouseData.powerKva': { originalValue: '100', originalVersion: 1, originalLastEditedBy: 'Employee One' },
+      handover: { originalValue: { handoverType: 'VARIABLE', handoverLeadValue: 2, handoverLeadUnit: 'MONTHS' }, originalLastEditedBy: employee.email },
+    });
+    for (const item of review.flags) expect(byField[item.fieldKey]).toMatchObject({ flagId: item.id, labelSnapshot: item.field.label });
+    await updateAs(admin.email, { contactPerson: 'Later value', uploadedBy: 'Later uploader' });
+    await service.create(body, admin);
+    expect((await event(body.requestId)).payload).toEqual(original.payload);
+    expect(await db.warehouseFieldReviewEvent.count({ where: { requestId: body.requestId } })).toBe(1);
+    // Attribution must be readable from the saved review even if its sources go away.
+    await db.warehouseFieldEdit.deleteMany();
+    await db.auditLog.deleteMany();
+    await db.verifiedNumber.update({ where: { id: 3 }, data: { name: 'Renamed account', email: 'renamed@wareongo.com' } });
+    await db.warehouse.delete({ where: { id: 4821 } });
+    const deleted = await service.detail(review.id, admin);
+    expect(deleted.deleted).toBe(true);
+    expect(deleted.events.find(item => item.id === original.id).payload.fieldSnapshots).toEqual(snapshots);
+  });
+
+  test('each submitted baseline keeps its own editor through return, resubmission and verification', async () => {
+    let review = await create(['ratePerSqft']);
+    await updateAs(employee.email, { ratePerSqft: '23' });
+    review = await service.detail(review.id, admin);
+    review = await submit(review, 0, { proposedValue: '24' });
+    const first = review.events.find(item => item.action === 'SUBMITTED');
+    expect(first.payload).toMatchObject({ baselineValue: '23', baselineVersion: 1, baselineLastEditedBy: employee.email });
+    review = await service.returnForChanges(review.id, review.flags[0].id, {
+      requestId: randomUUID(), version: review.flags[0].version, comment: 'Reconfirm the new quote.'
+    }, admin);
+    await updateAs(other.email, { ratePerSqft: '25' });
+    review = await service.detail(review.id, admin);
+    review = await submit(review, 0, { proposedValue: '26' });
+    review = await service.decide(review.id, review.flags[0].id, decision(review.flags[0]), admin);
+    const responses = review.events.filter(item => item.action === 'SUBMITTED').sort((a, b) => a.payload.baselineVersion - b.payload.baselineVersion);
+    expect(responses.map(item => item.payload)).toMatchObject([
+      { baselineValue: '23', baselineVersion: 1, baselineLastEditedBy: employee.email },
+      { baselineValue: '25', baselineVersion: 2, baselineLastEditedBy: other.email },
+    ]);
+    expect(review.events.find(item => item.action === 'CREATED').payload.fieldSnapshots[0].originalLastEditedBy).toBe('Employee One');
+    expect((await service.setup(4821, admin)).fields.find(f => f.key === 'ratePerSqft').lastEditedBy).toBe(admin.email);
+  });
+
+  test.each([false, true])('reopening records a fresh baseline and preserves earlier snapshots (move to another review=%s)', async move => {
+    let review = await submit(await create(), 0, { proposedValue: [48000] });
+    review = await service.decide(review.id, review.flags[0].id, decision(review.flags[0]), admin);
+    const previous = review;
+    const current = move ? await create(['ratePerSqft']) : review;
+    await updateAs(other.email, { totalSpaceSqft: [49000] });
+    const requestId = randomUUID();
+    review = await service.reopen(previous.id, previous.flags[0].id, { requestId, version: previous.flags[0].version }, admin);
+    expect(review.id).toBe(current.id);
+    const reopened = await event(requestId);
+    expect(reopened.payload).toMatchObject({ fieldKey: 'totalSpaceSqft', originalValue: [49000], originalVersion: 2, originalLastEditedBy: other.email });
+    if (move) {
+      expect(reopened.flagId).not.toBe(previous.flags[0].id);
+      expect(reopened.payload).toMatchObject({ previousFlagId: previous.flags[0].id, previousReviewId: previous.id });
+    }
+    await updateAs(admin.email, { totalSpaceSqft: [53000] });
+    expect((await event(requestId)).payload).toEqual(reopened.payload);
+    expect((await service.events(previous.id, admin)).events.find(item => item.action === 'CREATED').payload.fieldSnapshots[0])
+      .toMatchObject({ originalValue: [50000], originalVersion: 0, originalLastEditedBy: 'Employee One' });
+  });
+
+  test('unknown identities stay null and legacy events are never filled with a current editor', async () => {
+    await db.warehouse.update({ where: { id: 4821 }, data: { contactPerson: 'Unattributed edit' } });
+    let review = await create(['contactPerson', 'status']);
+    const created = review.events.find(item => item.action === 'CREATED');
+    expect(created.payload.fieldSnapshots.find(snapshot => snapshot.fieldKey === 'contactPerson').originalLastEditedBy).toBeNull();
+    expect(created.payload.fieldSnapshots.find(snapshot => snapshot.fieldKey === 'status')).toMatchObject({ originalValue: null, originalLastEditedBy: 'Employee One' });
+    review = await submit(review, review.flags.findIndex(f => f.fieldKey === 'contactPerson'), { resolution: 'NO_CHANGE' });
+    expect(review.events.find(item => item.action === 'SUBMITTED').payload.baselineLastEditedBy).toBeNull();
+    await db.warehouseFieldReviewEvent.update({ where: { id: created.id }, data: { payload: { fields: ['contactPerson', 'status'], assigneeId: 2 } } });
+    await updateAs(admin.email, { contactPerson: 'Known current editor' });
+    expect((await service.events(review.id, admin)).events.find(item => item.id === created.id).payload).not.toHaveProperty('fieldSnapshots');
+  });
+
+  test('saved snapshots survive event pagination and protected values remain masked on every read', async () => {
+    const review = await create(['contactNumber', 'contactPerson']);
+    const created = review.events.find(item => item.action === 'CREATED');
+    const raw = await db.warehouseFieldReviewEvent.findUnique({ where: { id: created.id } });
+    expect(raw.payload.fieldSnapshots.find(snapshot => snapshot.fieldKey === 'contactNumber').originalValue).toBe('+919999999999');
+    await db.warehouseFieldReviewEvent.createMany({ data: Array.from({ length: 55 }, () => ({
+      reviewId: review.id, action: 'REASSIGNED', actorEmail: admin.email, actorName: 'Admin',
+      payload: { assigneeId: 2 }, createdAt: new Date(Date.now() + 1000),
+    })) });
+    for (const actor of [admin, employee]) {
+      const first = await service.events(review.id, actor);
+      expect(first.nextEventCursor).not.toBeNull();
+      const later = await service.events(review.id, actor, first.nextEventCursor);
+      const snapshot = later.events.find(item => item.id === created.id).payload.fieldSnapshots.find(item => item.fieldKey === 'contactNumber');
+      expect(snapshot).toMatchObject({ originalLastEditedBy: 'Employee One', originalValue: expect.stringContaining('9999') });
+      expect(JSON.stringify(later)).not.toContain('+919999999999');
+    }
+    await expect(service.events(review.id, other)).rejects.toMatchObject({ status: 403 });
+  });
+
+  test('a failed response rolls back its baseline attribution and a retry captures fresh history', async () => {
+    const review = await create(['ratePerSqft']);
+    const requestId = randomUUID();
+    const original = service.detailTx.bind(service);
+    const failure = jest.spyOn(service, 'detailTx').mockImplementationOnce(async (...args) => {
+      await original(...args);
+      throw new Error('Response snapshot failed');
+    });
+    try { await expect(submit(review, 0, { requestId, proposedValue: '24' })).rejects.toThrow('Response snapshot failed'); }
+    finally { failure.mockRestore(); }
+    expect(await event(requestId)).toBeNull();
+    expect(await db.warehouseFieldFlag.findUnique({ where: { id: review.flags[0].id } })).toMatchObject({ status: 'NEEDS_RESPONSE', baselineValue: null });
+    await updateAs(other.email, { ratePerSqft: '23' });
+    await submit(await service.detail(review.id, admin), 0, { requestId, proposedValue: '24' });
+    expect((await event(requestId)).payload).toMatchObject({ baselineValue: '23', baselineLastEditedBy: other.email });
+  });
+});
+describe('per-field cancellation', () => {
+  const cancel = (review, key, user = admin, extra = {}) => {
+    const flag = review.flags.find(f => f.fieldKey === key);
+    return service.cancel(review.id, flag.id, { requestId: randomUUID(), version: flag.version, reason: 'Raised against an old photo.', ...extra }, user);
+  };
+  test.each(['NEEDS_RESPONSE', 'AWAITING_ADMIN', 'CHANGES_REQUESTED'])('reviewers can cancel one %s field without Edit access or changing warehouse data', async status => {
+    await db.verifiedNumber.update({ where: { id: 3 }, data: { reviewerAccess: true, editOwnWarehouseEntries: false, editAllWarehouseEntries: false } });
+    let review = await create(['ratePerSqft', 'contactPerson']);
+    const index = review.flags.findIndex(f => f.fieldKey === 'ratePerSqft');
+    if (status !== 'NEEDS_RESPONSE') review = await submit(review, index, { proposedValue: '24' });
+    if (status === 'CHANGES_REQUESTED') review = await service.returnForChanges(review.id, review.flags[index].id, { requestId: randomUUID(), version: review.flags[index].version, comment: 'Please reconfirm.' }, admin);
+    const before = await live();
+    const revisions = await db.warehouseFieldVersion.findMany();
+    const edits = await db.warehouseFieldEdit.count();
+    review = await cancel(review, 'ratePerSqft', other);
+    const cancelled = review.flags[index];
+    expect(cancelled).toMatchObject({ status: 'CANCELLED', decision: 'CANCELLED', decisionReason: 'Raised against an old photo.', decidedBy: other.email, finalValue: null });
+    expect(cancelled.decidedAt).toBeInstanceOf(Date);
+    expect(review.closedAt).toBeNull();
+    expect(review.flags.find(f => f.fieldKey === 'contactPerson').status).toBe('NEEDS_RESPONSE');
+    expect(await live()).toEqual(before);
+    expect(await db.warehouseFieldVersion.findMany()).toEqual(revisions);
+    expect(await db.warehouseFieldEdit.count()).toBe(edits);
+    expect(review.events.find(e => e.action === 'CANCELLED')).toMatchObject({ actorEmail: other.email, flagId: cancelled.id, payload: { reason: 'Raised against an old photo.', previousStatus: status, currentValue: '22', currentVersion: 0 } });
+    if (status !== 'NEEDS_RESPONSE') expect(cancelled.proposedValue).toBe('24');
+    expect((await service.summaries([4821], employee))[0]).toMatchObject({ activeCount: 1, activeFieldKeys: ['contactPerson'] });
+    expect((await service.setup(4821, admin)).activeFields.map(f => f.key)).toEqual(['contactPerson']);
+    const queue = await service.list(admin, { view: 'current', page: 1, limit: 12 });
+    expect(queue.data[0]).toMatchObject({ activeCount: 1, awaitingCount: 0 });
+    expect(queue.counts.verify).toBe(0);
+    await expect(service.respond(review.id, cancelled.id, { requestId: randomUUID(), version: cancelled.version, baselineVersion: cancelled.currentVersion, resolution: 'NO_CHANGE', explanation: 'A late response.' }, employee)).rejects.toMatchObject({ status: 409 });
+  });
+  test('cancelling the final field closes the review, ends response access and leaves reasons available after reopening', async () => {
+    await db.verifiedNumber.update({ where: { id: 2 }, data: { editOwnWarehouseEntries: false, editAllWarehouseEntries: false } });
+    let review = await cancel(await create(['ratePerSqft']), 'ratePerSqft');
+    expect(review.closedAt).toBeInstanceOf(Date);
+    expect((await service.detail(review.id, employee)).canRespond).toBe(false);
+    expect(await service.summaries([4821], employee)).toEqual([]);
+    expect((await service.list(admin, { view: 'previous', page: 1, limit: 12 })).counts).toMatchObject({ current: 0, previous: 1, verify: 0 });
+    await expect(service.decide(review.id, review.flags[0].id, decision(review.flags[0]), admin)).rejects.toMatchObject({ status: 409 });
+    await expect(cancel(review, 'ratePerSqft')).rejects.toMatchObject({ status: 409 });
+    review = await service.reopen(review.id, review.flags[0].id, { requestId: randomUUID(), version: review.flags[0].version }, admin);
+    expect(review.flags[0]).toMatchObject({ status: 'NEEDS_RESPONSE', decision: null, decisionReason: null, decidedBy: null });
+    expect(review.closedAt).toBeNull();
+    expect(review.events.find(e => e.action === 'CANCELLED').payload.reason).toBe('Raised against an old photo.');
+    expect((await submit(review, 0, { resolution: 'NO_CHANGE' })).flags[0].status).toBe('AWAITING_ADMIN');
+    expect(await db.verifiedNumber.findUnique({ where: { id: 2 } })).toMatchObject({ editOwnWarehouseEntries: false, editAllWarehouseEntries: false });
+  });
+  test('a cancelled field can be flagged again while another field stays active', async () => {
+    let review = await cancel(await create(['ratePerSqft', 'contactPerson']), 'ratePerSqft');
+    const old = review.flags.find(f => f.fieldKey === 'ratePerSqft');
+    const fresh = await create(['ratePerSqft']);
+    expect(fresh.id).toBe(review.id);
+    expect(fresh.flags.filter(f => f.fieldKey === 'ratePerSqft').map(f => f.status).sort()).toEqual(['CANCELLED', 'NEEDS_RESPONSE']);
+    expect(fresh.flags.find(f => f.fieldKey === 'ratePerSqft' && f.status === 'NEEDS_RESPONSE').id).not.toBe(old.id);
+    await expect(service.reopen(review.id, old.id, { requestId: randomUUID(), version: old.version }, admin)).rejects.toMatchObject({ code: 'ALREADY_FLAGGED' });
+  });
+  test.each([{ reviewerAccess: false }, { is_active: false }, { dashboardAccess: false }, { viewAllWarehouseEntries: false }])('cancellation rechecks reviewer eligibility and warehouse visibility: %j', async revoked => {
+    await db.verifiedNumber.update({ where: { id: 3 }, data: { reviewerAccess: true } });
+    const review = await create(['ratePerSqft']);
+    await db.verifiedNumber.update({ where: { id: 3 }, data: revoked });
+    const forbidden = revoked.viewAllWarehouseEntries === false
+      ? { name: 'ForbiddenError', statusCode: 403 } : { status: 403 };
+    await expect(cancel(review, 'ratePerSqft', { ...other, isReviewer: true, capabilities: { REVIEW: true } })).rejects.toMatchObject(forbidden);
+    expect(await db.warehouseFieldReviewEvent.count({ where: { action: 'CANCELLED' } })).toBe(0);
+    expect((await service.detail(review.id, admin)).flags[0].status).toBe('NEEDS_RESPONSE');
+  });
+  test('an assignee cannot cancel, and a missing reason cannot close a field', async () => {
+    const review = await create(['ratePerSqft']);
+    await expect(cancel(review, 'ratePerSqft', employee)).rejects.toMatchObject({ status: 403 });
+    await expect(cancel(review, 'ratePerSqft', admin, { reason: '  ' })).rejects.toMatchObject({ status: 400 });
+    expect((await service.detail(review.id, admin)).flags[0].status).toBe('NEEDS_RESPONSE');
+  });
+  test('stale cancellation cannot discard a newer response, and an identical retry adds no duplicate history', async () => {
+    const initial = await create(['ratePerSqft']);
+    let review = await submit(initial);
+    await expect(cancel(initial, 'ratePerSqft')).rejects.toMatchObject({ code: 'FLAG_CHANGED' });
+    const body = { requestId: randomUUID(), version: review.flags[0].version, reason: 'An outdated photo was used.' };
+    review = await service.cancel(review.id, review.flags[0].id, body, admin);
+    const repeated = await service.cancel(review.id, review.flags[0].id, body, admin);
+    expect(repeated.version).toBe(review.version);
+    expect(await db.warehouseFieldReviewEvent.count({ where: { requestId: body.requestId } })).toBe(1);
+    expect(repeated.flags[0]).toMatchObject({ status: 'CANCELLED', proposedValue: '24' });
+  });
+  test.each(['response', 'verification'])('concurrent cancellation and %s cannot both win', async competing => {
+    let review = await create(['ratePerSqft']);
+    if (competing === 'verification') review = await submit(review);
+    const results = await Promise.allSettled([
+      cancel(review, 'ratePerSqft'),
+      competing === 'response' ? submit(review) : service.decide(review.id, review.flags[0].id, decision(review.flags[0]), admin)
+    ]);
+    expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1);
+    expect(results.find(r => r.status === 'rejected').reason).toMatchObject({ status: 409 });
+    const fresh = await service.detail(review.id, admin);
+    expect((await live()).ratePerSqft).toBe(fresh.flags[0].status === 'VERIFIED' ? '24' : '22');
+  });
+  test('audit failure rolls cancellation back and protected current values are masked in its event', async () => {
+    const review = await create(['contactNumber']);
+    await db.$executeRawUnsafe('ALTER TABLE "WarehouseFieldReviewEvent" ADD CONSTRAINT test_fail_cancel CHECK (action <> \'CANCELLED\')');
+    try { await expect(cancel(review, 'contactNumber')).rejects.toThrow(); }
+    finally { await db.$executeRawUnsafe('ALTER TABLE "WarehouseFieldReviewEvent" DROP CONSTRAINT test_fail_cancel'); }
+    expect((await service.detail(review.id, admin)).flags[0]).toMatchObject({ status: 'NEEDS_RESPONSE', version: 0, decisionReason: null });
+    const done = await cancel(review, 'contactNumber');
+    expect(done.events.find(e => e.action === 'CANCELLED').payload.currentValue).not.toBe('+919999999999');
+    expect(JSON.stringify(await service.events(review.id, employee))).not.toContain('+919999999999');
+  });
+  test('the cancellation migration upgrades existing data once and preserves active-field uniqueness', async () => {
+    const migrateCancellation = require('../../scripts/migrateFieldReviewCancellation').migrate;
+    const review = await create(['ratePerSqft', 'contactPerson']);
+    await db.$executeRawUnsafe('ALTER TABLE "WarehouseFieldFlag" DROP CONSTRAINT "WarehouseFieldFlag_status_check"');
+    await db.$executeRawUnsafe("ALTER TABLE \"WarehouseFieldFlag\" ADD CONSTRAINT \"WarehouseFieldFlag_status_check\" CHECK (status IN ('NEEDS_RESPONSE','AWAITING_ADMIN','CHANGES_REQUESTED','VERIFIED'))");
+    await db.$executeRawUnsafe('DROP INDEX field_review_one_active_field');
+    await db.$executeRawUnsafe("CREATE UNIQUE INDEX field_review_one_active_field ON \"WarehouseFieldFlag\" (\"warehouseId\",\"fieldKey\") WHERE status <> 'VERIFIED'");
+    const before = await db.warehouseFieldFlag.findMany({ orderBy: { id: 'asc' } });
+    expect(await migrateCancellation(db)).toMatchObject({ mode: 'dry-run', status_ready: false, index_ready: false });
+    expect(await migrateCancellation(db, true)).toMatchObject({ changed: true, status_ready: true, index_ready: true });
+    const [index] = await db.$queryRaw`SELECT to_regclass('field_review_one_active_field')::oid::text AS oid`;
+    expect(await migrateCancellation(db, true)).toMatchObject({ changed: false });
+    expect(await db.$queryRaw`SELECT to_regclass('field_review_one_active_field')::oid::text AS oid`).toEqual([index]);
+    expect(await db.warehouseFieldFlag.findMany({ orderBy: { id: 'asc' } })).toEqual(before);
+    await cancel(review, 'ratePerSqft');
+    const fresh = await create(['ratePerSqft']);
+    await expect(db.warehouseFieldFlag.create({ data: { reviewId: fresh.id, warehouseId: 4821, fieldKey: 'ratePerSqft', comment: 'Duplicate', originalValue: '22' } })).rejects.toMatchObject({ code: 'P2002' });
+  });
+});
 test('uploader default, ambiguous identities, eligibility and explicit assignment', async () => {
   expect((await service.setup(4821, admin)).defaultAssigneeId).toBe(2);
   const review = await create();

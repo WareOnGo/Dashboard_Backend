@@ -17,14 +17,14 @@ CREATE TABLE IF NOT EXISTS "WarehouseFieldFlag" (
  "id" TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text, "reviewId" TEXT NOT NULL REFERENCES "WarehouseFieldReview"("id") ON DELETE RESTRICT,
  "warehouseId" INTEGER NOT NULL, "fieldKey" TEXT NOT NULL, "labelSnapshot" TEXT NOT NULL DEFAULT '', "comment" TEXT NOT NULL,
  "originalValue" JSONB NOT NULL, "status" TEXT NOT NULL DEFAULT 'NEEDS_RESPONSE'
- CHECK ("status" IN ('NEEDS_RESPONSE','AWAITING_ADMIN','CHANGES_REQUESTED','VERIFIED')),
+ CHECK ("status" IN ('NEEDS_RESPONSE','AWAITING_ADMIN','CHANGES_REQUESTED','VERIFIED','CANCELLED')),
  "version" INTEGER NOT NULL DEFAULT 0, "baselineValue" JSONB, "baselineVersion" INTEGER, "proposedValue" JSONB,
  "resolution" TEXT, "explanation" TEXT, "respondedBy" TEXT, "respondedAt" TIMESTAMP(3),
  "returnComment" TEXT, "decision" TEXT, "decisionReason" TEXT, "finalValue" JSONB, "decidedBy" TEXT, "decidedAt" TIMESTAMP(3),
  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 -- statement-breakpoint
-CREATE UNIQUE INDEX IF NOT EXISTS "field_review_one_active_field" ON "WarehouseFieldFlag" ("warehouseId","fieldKey") WHERE "status" <> 'VERIFIED';
+CREATE UNIQUE INDEX IF NOT EXISTS "field_review_one_active_field" ON "WarehouseFieldFlag" ("warehouseId","fieldKey") WHERE "status" NOT IN ('VERIFIED','CANCELLED');
 -- statement-breakpoint
 CREATE INDEX IF NOT EXISTS "WarehouseFieldFlag_reviewId_status_idx" ON "WarehouseFieldFlag" ("reviewId","status");
 -- statement-breakpoint

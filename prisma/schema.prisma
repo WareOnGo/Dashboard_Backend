@@ -1183,6 +1183,7 @@ model WarehouseFieldFlag {
   respondedBy      String?
   respondedAt      DateTime?
   returnComment    String?
+  /// Closing choice: CURRENT, PROPOSED, BASELINE, or CANCELLED.
   decision         String?
   decisionReason   String?
   finalValue       Json?

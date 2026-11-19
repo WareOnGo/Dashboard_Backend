@@ -20,7 +20,8 @@ async function migrate(prisma, apply = false) {
   if (!existing.has('Warehouse') || !existing.has('WarehouseData')) throw new Error('Warehouse and WarehouseData must exist');
   let access;
   if (apply) {
-    const statements = fs.readFileSync(path.join(__dirname, 'sql/fieldReview.sql'), 'utf8').split('-- statement-breakpoint').filter(s => s.trim());
+    const statements = ['fieldReview.sql', 'fieldReviewCancellation.sql'].flatMap(file =>
+      fs.readFileSync(path.join(__dirname, 'sql', file), 'utf8').split('-- statement-breakpoint').filter(s => s.trim()));
     access = await prisma.$transaction(async tx => {
       await tx.$executeRawUnsafe("SET LOCAL lock_timeout='5s'");
       await tx.$executeRawUnsafe("SET LOCAL statement_timeout='30s'");

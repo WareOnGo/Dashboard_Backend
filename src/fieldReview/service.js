@@ -3,7 +3,8 @@ const { CAPS, CAP_COLUMN } = require('../utils/access');
 const { effectiveWarehousePermissions, WAREHOUSE_PERMISSION_COLUMNS } = require('../utils/warehousePermissions');
 const { warehouseScope, assertWarehouseAccess, canAccessWarehouse } = require('../utils/warehouseAccess');
 const {
-  createHash
+  createHash,
+  randomUUID
 } = require('node:crypto');
 const {
   Prisma
@@ -16,6 +17,7 @@ const {
 } = require('../utils/auditDiff');
 const { resolveTags } = require('../utils/microMarketGeometry');
 const { editorIdentity } = require('../utils/editorIdentity');
+const { lastEditors } = require('./lastEditors');
 const { validateFormChanges } = require('../utils/formChanges');
 const WarehouseModel = require('../models/warehouseModel');
 const WarehouseService = require('../services/warehouseService');
@@ -43,11 +45,12 @@ const fail = (status, code, message) => {
   throw new ReviewError(status, code, message);
 };
 const J = value => value == null ? Prisma.JsonNull : jsonValue(value);
+const fieldEditor = (editors, warehouse, key) => editors.has(key) ? editors.get(key) : warehouse.uploadedBy;
 const preserveInactiveHandover = (value, current) => value.handoverType === 'VARIABLE'
   ? { ...value, handoverDate: current.handoverDate }
   : { ...value, handoverLeadValue: current.handoverLeadValue, handoverLeadUnit: current.handoverLeadUnit };
 const active = {
-  not: 'VERIFIED'
+  in: ['NEEDS_RESPONSE', 'AWAITING_ADMIN', 'CHANGES_REQUESTED']
 };
 const rosterSelect = {
   id: true,
@@ -318,6 +321,8 @@ class FieldReviewService {
           ...e.payload
         };
         if (sensitive) for (const k of ['originalValue', 'baselineValue', 'proposedValue', 'currentValue', 'finalValue']) if (k in payload) payload[k] = maskValue(payload[k]);
+        if (Array.isArray(payload.fieldSnapshots)) payload.fieldSnapshots = payload.fieldSnapshots.map(snapshot =>
+          byKey[snapshot.fieldKey]?.sensitive ? { ...snapshot, originalValue: maskValue(snapshot.originalValue) } : snapshot);
         return {
           ...e,
           payload,
@@ -367,11 +372,13 @@ class FieldReviewService {
           warehouseId
         }
       });
+      const editors = await lastEditors(tx, warehouseId);
       return {
         fields: fields.map(f => ({
           ...f,
           value: f.sensitive ? maskValue(getValue(warehouse, f.key)) : getValue(warehouse, f.key),
-          version: versions.find(v => v.fieldKey === f.key)?.version || 0
+          version: versions.find(v => v.fieldKey === f.key)?.version || 0,
+          lastEditedBy: fieldEditor(editors, warehouse, f.key)
         })),
         assignees: people.map(publicPerson),
         defaultAssigneeId: current?.assigneeId ?? uploader.assigneeId,
@@ -479,21 +486,36 @@ class FieldReviewService {
           createdBy: actor.email
         }
       });
+      // Freeze values, revisions and editor identities under the same warehouse
+      // locks as flag creation. Preview data from the browser is never trusted.
+      const editors = await lastEditors(tx, warehouse.id, keys);
+      const versions = await tx.warehouseFieldVersion.findMany({ where: { warehouseId: warehouse.id, fieldKey: { in: keys } } });
+      const versionMap = new Map(versions.map(row => [row.fieldKey, row.version]));
+      const fieldSnapshots = body.fields.map(f => ({
+        flagId: randomUUID(),
+        fieldKey: f.key,
+        labelSnapshot: byKey[f.key].label,
+        originalValue: getValue(warehouse, f.key),
+        originalVersion: versionMap.get(f.key) || 0,
+        originalLastEditedBy: fieldEditor(editors, warehouse, f.key)
+      }));
       await tx.warehouseFieldFlag.createMany({
-        data: body.fields.map(f => ({
+        data: fieldSnapshots.map((snapshot, index) => ({
+          id: snapshot.flagId,
           reviewId: review.id,
           warehouseId: warehouse.id,
-          fieldKey: f.key,
-          labelSnapshot: byKey[f.key].label,
-          comment: f.comment,
+          fieldKey: snapshot.fieldKey,
+          labelSnapshot: snapshot.labelSnapshot,
+          comment: body.fields[index].comment,
           createdBy: actor.email,
-          originalValue: J(getValue(warehouse, f.key))
+          originalValue: J(snapshot.originalValue)
         }))
       });
       return {
         reviewId: review.id,
         payload: {
           fields: keys,
+          fieldSnapshots,
           assigneeId
         }
       };
@@ -545,6 +567,7 @@ class FieldReviewService {
         fail(400, 'INVALID_FIELD_VALUE', e.issues?.[0]?.message || e.message);
       }
       if (body.resolution === 'CORRECTION' && sameValue(proposal, baseline, flag.fieldKey)) fail(400, 'NO_CHANGE_REQUIRED', 'Choose No change needed and explain how you verified the existing value.');
+      const editors = await lastEditors(tx, warehouse.id, [flag.fieldKey]);
       const data = {
         baselineValue: J(baseline),
         baselineVersion: currentVersion,
@@ -567,8 +590,10 @@ class FieldReviewService {
       return {
         payload: {
           fieldKey: flag.fieldKey,
+          labelSnapshot: flag.labelSnapshot || byKey[flag.fieldKey].label,
           baselineValue: baseline,
           baselineVersion: currentVersion,
+          baselineLastEditedBy: fieldEditor(editors, warehouse, flag.fieldKey),
           proposedValue: proposal,
           resolution: body.resolution,
           explanation: body.explanation
@@ -708,10 +733,31 @@ class FieldReviewService {
       };
     });
   }
+  cancel(reviewId, flagId, body, user) {
+    return this.withFlag(reviewId, flagId, user, body, 'CANCELLED', async (tx, actor, warehouse, review, flag) => {
+      if (!actor.isReviewer) fail(403, 'FIELD_REVIEW_FORBIDDEN', 'Only reviewers can cancel flags.');
+      if (review.closedAt || !active.in.includes(flag.status)) fail(409, 'FLAG_CHANGED', 'Only open flags can be cancelled.');
+      const reason = typeof body.reason === 'string' ? body.reason.trim() : '';
+      if (!reason || reason.length > 500) fail(400, 'CANCELLATION_REASON_REQUIRED', 'Add a cancellation reason of 1–500 characters.');
+      await tx.warehouseFieldFlag.update({
+        where: { id: flag.id },
+        data: {
+          status: 'CANCELLED', decision: 'CANCELLED', decisionReason: reason,
+          decidedBy: actor.email, decidedAt: new Date(), finalValue: Prisma.DbNull,
+          version: { increment: 1 }
+        }
+      });
+      return { payload: {
+        fieldKey: flag.fieldKey, labelSnapshot: flag.labelSnapshot || byKey[flag.fieldKey].label,
+        reason, previousStatus: flag.status, currentValue: getValue(warehouse, flag.fieldKey),
+        currentVersion: await this.version(tx, warehouse.id, flag.fieldKey)
+      } };
+    });
+  }
   reopen(reviewId, flagId, body, user) {
     return this.withFlag(reviewId, flagId, user, body, 'REOPENED', async (tx, actor, warehouse, review, flag) => {
-      if (!actor.isReviewer) fail(403, 'FIELD_REVIEW_FORBIDDEN', 'Only reviewers can reopen verified flags.');
-      if (flag.status !== 'VERIFIED') fail(409, 'FLAG_CHANGED', 'This field is already active.');
+      if (!actor.isReviewer) fail(403, 'FIELD_REVIEW_FORBIDDEN', 'Only reviewers can reopen closed flags.');
+      if (!['VERIFIED', 'CANCELLED'].includes(flag.status)) fail(409, 'FLAG_CHANGED', 'This field is already active.');
       const duplicate = await tx.warehouseFieldFlag.findFirst({
         where: {
           warehouseId: warehouse.id,
@@ -720,6 +766,14 @@ class FieldReviewService {
         }
       });
       if (duplicate) fail(409, 'ALREADY_FLAGGED', 'A newer active flag already exists for this field. Open the current review.');
+      const editors = await lastEditors(tx, warehouse.id, [flag.fieldKey]);
+      const snapshot = {
+        fieldKey: flag.fieldKey,
+        labelSnapshot: byKey[flag.fieldKey].label,
+        originalValue: getValue(warehouse, flag.fieldKey),
+        originalVersion: await this.version(tx, warehouse.id, flag.fieldKey),
+        originalLastEditedBy: fieldEditor(editors, warehouse, flag.fieldKey)
+      };
       const current = await tx.warehouseFieldReview.findFirst({
         where: {
           warehouseId: warehouse.id,
@@ -735,14 +789,14 @@ class FieldReviewService {
             labelSnapshot: byKey[flag.fieldKey].label,
             comment: flag.comment,
             createdBy: actor.email,
-            originalValue: J(getValue(warehouse, flag.fieldKey))
+            originalValue: J(snapshot.originalValue)
           }
         });
         return {
           reviewId: current.id,
           flagId: fresh.id,
           payload: {
-            fieldKey: flag.fieldKey,
+            ...snapshot,
             previousFlagId: flag.id,
             previousReviewId: review.id
           }
@@ -774,8 +828,7 @@ class FieldReviewService {
       });
       return {
         payload: {
-          fieldKey: flag.fieldKey,
-          originalValue: getValue(warehouse, flag.fieldKey)
+          ...snapshot
         }
       };
     });
@@ -1038,7 +1091,7 @@ class FieldReviewService {
           ...r,
           warehouse: plainWarehouse(warehouses.find(w => w.id === r.warehouseId)),
           assignee: publicPerson(people.find(p => p.id === r.assigneeId)),
-          activeCount: r.flags.filter(f => f.status !== 'VERIFIED').length,
+          activeCount: r.flags.filter(f => active.in.includes(f.status)).length,
           awaitingCount: r.flags.filter(f => f.status === 'AWAITING_ADMIN').length
         })),
         counts,

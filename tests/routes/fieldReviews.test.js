@@ -16,7 +16,7 @@ const {
 const {
   ReviewError
 } = require('../../src/fieldReview/service');
-const methods = ['setup', 'list', 'detail', 'create', 'respond', 'decide', 'returnForChanges', 'reopen', 'reassign', 'history', 'reveal', 'summaries', 'events'];
+const methods = ['setup', 'list', 'detail', 'create', 'respond', 'decide', 'returnForChanges', 'reopen', 'cancel', 'reassign', 'history', 'reveal', 'summaries', 'events'];
 const service = Object.fromEntries(methods.map(name => [name, jest.fn().mockResolvedValue({})]));
 const app = express();
 app.use(express.json());
@@ -74,20 +74,20 @@ test.each([
   await auth(request(app).get(root)).query(query).expect(400);
   expect(service.list).not.toHaveBeenCalled();
 });
-test('employees cannot create, decide, return, reopen or reassign', async () => {
+test('employees cannot create, decide, return, reopen, cancel or reassign', async () => {
   await auth(request(app).get(root + '/setup/4821')).expect(403);
-  for (const path of ['', '/' + id + '/flags/' + flag + '/decision', '/' + id + '/flags/' + flag + '/return', '/' + id + '/flags/' + flag + '/reopen']) await auth(request(app).post(root + path)).send(body()).expect(403);
+  for (const path of ['', '/' + id + '/flags/' + flag + '/decision', '/' + id + '/flags/' + flag + '/return', '/' + id + '/flags/' + flag + '/reopen', '/' + id + '/flags/' + flag + '/cancel']) await auth(request(app).post(root + path)).send(body()).expect(403);
   await auth(request(app).patch(root + '/' + id + '/assignee')).send({
     assigneeId: 8
   }).expect(403);
-  for (const method of ['setup', 'create', 'decide', 'returnForChanges', 'reopen', 'reassign']) {
+  for (const method of ['setup', 'create', 'decide', 'returnForChanges', 'reopen', 'cancel', 'reassign']) {
     expect(service[method]).not.toHaveBeenCalled();
   }
 });
 test.each([
   ['reviewer', { reviewerAccess: true }],
   ['admin', { adminAccess: true }]
-])('%s can flag, verify, return, reopen and reassign', async (_role, permissions) => {
+])('%s can flag, verify, return, reopen, cancel and reassign', async (_role, permissions) => {
   prisma.verifiedNumber.findFirst.mockResolvedValue(active(permissions));
   await auth(request(app).get(root + '/setup/4821')).expect(200);
   await auth(request(app).post(root)).send({
@@ -103,15 +103,29 @@ test.each([
   await auth(request(app).post(root + '/' + id + '/flags/' + flag + '/reopen')).send({
     requestId: randomUUID(), version: 0
   }).expect(200);
+  await auth(request(app).post(root + '/' + id + '/flags/' + flag + '/cancel')).send({
+    requestId: randomUUID(), version: 0, reason: 'This flag was raised against an old photo.'
+  }).expect(200);
   await auth(request(app).patch(root + '/' + id + '/assignee')).send({
     requestId: randomUUID(), version: 0, assigneeId: 8
   }).expect(200);
-  for (const method of ['setup', 'create', 'decide', 'returnForChanges', 'reopen', 'reassign']) {
+  for (const method of ['setup', 'create', 'decide', 'returnForChanges', 'reopen', 'cancel', 'reassign']) {
     expect(service[method]).toHaveBeenCalledTimes(1);
     expect(service[method].mock.calls[0].at(-1)).toMatchObject({
       email: 'user@wareongo.com', isReviewer: true, isAdmin: !!permissions.adminAccess
     });
   }
+});
+test.each([{}, { reason: '' }, { reason: '   ' }, { reason: 'x'.repeat(501) }, { reason: 'Wrong field', version: -1 }, { reason: 'Wrong field', decidedBy: 'forged@wareongo.com' }])('invalid cancellation cannot reach the service: %j', async overrides => {
+  prisma.verifiedNumber.findFirst.mockResolvedValue(active({ reviewerAccess: true }));
+  await auth(request(app).post(root + '/' + id + '/flags/' + flag + '/cancel')).send({ requestId: randomUUID(), version: 0, ...overrides }).expect(400);
+  expect(service.cancel).not.toHaveBeenCalled();
+});
+test('cancellation uses the authenticated reviewer and trims the required reason', async () => {
+  prisma.verifiedNumber.findFirst.mockResolvedValue(active({ reviewerAccess: true }));
+  const requestId = randomUUID();
+  await auth(request(app).post(root + '/' + id + '/flags/' + flag + '/cancel')).send({ requestId, version: 2, reason: '  Raised against an old photo.  ' }).expect(200);
+  expect(service.cancel).toHaveBeenCalledWith(id, flag, { requestId, version: 2, reason: 'Raised against an old photo.' }, expect.objectContaining({ email: 'user@wareongo.com', isReviewer: true }));
 });
 test('revoking reviewer access blocks the next management request', async () => {
   prisma.verifiedNumber.findFirst.mockResolvedValue(active({ reviewerAccess: true }));

@@ -224,6 +224,11 @@ const schemas = {
     requestId,
     version
   }).strict(),
+  cancel: z.object({
+    requestId,
+    version,
+    reason: text
+  }).strict(),
   assign: z.object({
     requestId,
     version,
