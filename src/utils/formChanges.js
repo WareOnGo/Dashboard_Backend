@@ -1,5 +1,7 @@
 const { z } = require('zod');
 const { PPT_FORM_FIELDS, HANDOVER_FIELDS, flatFormValues, pptFormIssues, sameFormAnswer } = require('./pptFormPolicy');
+const AVAILABILITY_DETAIL_FIELDS = [{ key: 'status' }, { key: 'lockInDate' }];
+const sameAnswer = (key, a, b) => sameFormAnswer(key === 'lockInDate' ? 'handoverDate' : key, a, b);
 const formValidationError = issues => Object.assign(new Error(issues[0].message), {
     name: 'ValidationError', statusCode: 400, issues,
 });
@@ -12,13 +14,18 @@ const expectedFormValuesSchema = z.object({
     handoverDate: z.union([z.string(), z.date()]).nullable(),
     handoverLeadValue: z.number().int().nullable(),
     handoverLeadUnit: z.enum(['DAYS', 'WEEKS', 'MONTHS']).nullable(),
+    // Optional for older Dashboard/Scout clients. Updated forms include these
+    // originals so two intentional edits cannot silently overwrite each other.
+    status: z.string().nullable().optional(),
+    lockInDate: z.union([z.string(), z.date()]).nullable().optional(),
 }).strict();
 
 // Drop values the user did not edit, and compare intentional edits against the
 // browser's original answers. The later UPDATE guard still closes the DB race.
 function prepareFormUpdate(original, edits, expected, { staged = false } = {}) {
     const read = flatFormValues(original), patch = flatFormValues(edits);
-    const touched = PPT_FORM_FIELDS.filter(field => Object.hasOwn(patch, field.key));
+    const guardedDetails = AVAILABILITY_DETAIL_FIELDS.filter(field => expected != null && Object.hasOwn(expected, field.key));
+    const touched = [...PPT_FORM_FIELDS, ...guardedDetails].filter(field => Object.hasOwn(patch, field.key));
     const timingTouched = HANDOVER_FIELDS.some(key => Object.hasOwn(patch, key));
     if (!touched.length && !timingTouched) return;
     if (expected == null) {
@@ -33,8 +40,8 @@ function prepareFormUpdate(original, edits, expected, { staged = false } = {}) {
     };
     for (const field of touched) {
         const key = field.key;
-        if (sameFormAnswer(key, patch[key], expected[key]) || sameFormAnswer(key, patch[key], read[key])) remove(field);
-        else if (!sameFormAnswer(key, read[key], expected[key])) throw formConflict();
+        if (sameAnswer(key, patch[key], expected[key]) || sameAnswer(key, patch[key], read[key])) remove(field);
+        else if (!sameAnswer(key, read[key], expected[key])) throw formConflict();
     }
     if (timingTouched) {
         const intended = { ...expected, ...Object.fromEntries(HANDOVER_FIELDS.filter(key => Object.hasOwn(patch, key)).map(key => [key, patch[key]])) };
@@ -59,7 +66,7 @@ async function validateFormChanges(original, edits) {
 function formUpdateGuard(original, edits, { staged = false } = {}) {
     const before = flatFormValues(original), patch = flatFormValues(edits);
     const root = {}, nested = {};
-    for (const field of PPT_FORM_FIELDS) {
+    for (const field of [...PPT_FORM_FIELDS, ...AVAILABILITY_DETAIL_FIELDS]) {
         if (!Object.hasOwn(patch, field.key)) continue;
         const value = before[field.key] ?? null;
         (field.nested && !staged ? nested : root)[field.key] = Array.isArray(value) ? { equals: value } : value;

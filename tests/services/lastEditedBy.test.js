@@ -1,6 +1,8 @@
 const WarehouseService = require('../../src/services/warehouseService');
 const StagingService = require('../../src/services/stagingService');
 const { pptFormSnapshot } = require('../../src/utils/pptFormPolicy');
+const capabilities = { DASHBOARD: true, WAREHOUSE_VIEW_OWN: true, WAREHOUSE_VIEW_ALL: true,
+    WAREHOUSE_EDIT_OWN: true, WAREHOUSE_EDIT_ALL: true };
 
 const submission = {
     warehouseType: 'Industrial', address: '1 Test Rd', city: 'Bengaluru', state: 'Karnataka',
@@ -33,7 +35,7 @@ test.each([
         expectedFormValues: pptFormSnapshot(submission),
         warehouseData: { powerKva: '750' },
         lastEditedBy: 'spoofed@example.test', updatedByEmail: 'spoofed@example.test', updatedBy: 'spoofed-id',
-    }, user);
+    }, { ...user, capabilities });
     expect(warehouse.lastEditedBy).toBe(expected);
     expect(warehouse.uploadedBy).toBe(submission.uploadedBy);
     expect(model.update).toHaveBeenCalledWith(123, expect.objectContaining({ lastEditedBy: expected }), undefined,
@@ -43,7 +45,7 @@ test.each([
 
 test('an unchanged save or an internal write without a user preserves the last editor', async () => {
     const { service, model } = warehouseFixture();
-    expect((await service.updateWarehouse(123, { city: submission.city }, { email: 'other@example.test' })).warehouse.lastEditedBy)
+    expect((await service.updateWarehouse(123, { city: submission.city }, { email: 'other@example.test', capabilities })).warehouse.lastEditedBy)
         .toBe('previous@example.test');
     expect(model.update).not.toHaveBeenCalled();
     expect((await service.updateWarehouse(123, { city: 'Pune', lastEditedBy: 'spoofed@example.test' })).warehouse.lastEditedBy)

@@ -187,7 +187,7 @@ router.post('/scout',
 router.put('/:id', 
     authMiddleware.authenticateJWT,
     authMiddleware.requireAccess(CAPS.WAREHOUSE_EDIT_OWN),
-    requireWarehouseEntry('edit'),
+    requireWarehouseEntry('update'),
     validationMiddleware.validateWarehouseUpdate,
     warehouseController.updateWarehouse
 );

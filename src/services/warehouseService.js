@@ -342,6 +342,7 @@ class WarehouseService extends BaseService {
             }
             
             // Preserve attribution and independently validate only changed form fields.
+            if (user) require('../utils/warehouseAccess').assertWarehouseUpdateAccess(user, existing, updateData);
             delete validatedData.uploadedBy;
             const { validateFormChanges, formUpdateGuard, prepareFormUpdate } = require('../utils/formChanges');
             prepareFormUpdate(existing, validatedData, expectedFormValues);

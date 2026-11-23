@@ -3,6 +3,13 @@ const insensitiveExact = require('./insensitiveExact');
 
 const forbidden = () => Object.assign(new Error('You do not have access to this warehouse action.'), { name: 'ForbiddenError', statusCode: 403 });
 const emailOf = user => typeof user?.email === 'string' ? user.email.trim().toLowerCase() : '';
+// Only the Availability section is shared with employees who can edit their own
+// entries. Request-only concurrency snapshots are allowed, never persisted.
+const AVAILABILITY_FIELDS = Object.freeze([
+    'availability', 'availabilityLastReviewedOn', 'handoverType', 'handoverDate',
+    'handoverLeadValue', 'handoverLeadUnit', 'lockInDate', 'status',
+]);
+const availabilityUpdateKeys = new Set([...AVAILABILITY_FIELDS, 'expectedAvailability', 'expectedFormValues']);
 
 function warehouseScope(user, action = 'view') {
     const caps = user?.capabilities;
@@ -26,4 +33,12 @@ function canAccessWarehouse(user, warehouse, action = 'view') {
     catch (error) { if (error.statusCode === 403) return false; throw error; }
 }
 
-module.exports = { warehouseScope, assertWarehouseAccess, canAccessWarehouse };
+function assertWarehouseUpdateAccess(user, warehouse, edits) {
+    if (canAccessWarehouse(user, warehouse, 'edit')) return;
+    // The exception changes writable fields, never the employee's view scope.
+    warehouseScope(user, 'edit');
+    assertWarehouseAccess(user, warehouse, 'view');
+    if (Object.keys(edits || {}).some(key => !availabilityUpdateKeys.has(key))) throw forbidden();
+}
+
+module.exports = { warehouseScope, assertWarehouseAccess, canAccessWarehouse, assertWarehouseUpdateAccess, AVAILABILITY_FIELDS };

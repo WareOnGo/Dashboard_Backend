@@ -13,7 +13,9 @@ function fixture() {
     const controller = new WarehouseController(new WarehouseService(model), {});
     const app = express();
     app.use(express.json());
-    app.use((req, _res, next) => { req.user = { id: 1, email: 'fixture@example.test' }; next(); });
+    app.use((req, _res, next) => { req.user = { id: 1, email: 'fixture@example.test', capabilities: {
+        DASHBOARD: true, WAREHOUSE_VIEW_OWN: true, WAREHOUSE_VIEW_ALL: true, WAREHOUSE_EDIT_OWN: true,
+    } }; next(); });
     app.use(createAuditMiddleware({ log: async entry => captured.push(entry) }));
     app.put('/warehouses/:id', Validation.validateWarehouseUpdate, controller.updateWarehouse);
     app.use(ErrorHandler.handle);

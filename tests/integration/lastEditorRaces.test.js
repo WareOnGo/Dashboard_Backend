@@ -7,6 +7,8 @@ const WarehouseModel = require('../../src/models/warehouseModel');
 const WarehouseService = require('../../src/services/warehouseService');
 const StagedWarehouseModel = require('../../src/models/stagedWarehouseModel');
 const StagingService = require('../../src/services/stagingService');
+const { pptFormSnapshot } = require('../../src/utils/pptFormPolicy');
+const { formUpdateGuard } = require('../../src/utils/formChanges');
 const schema = 'behavior_qa_' + randomBytes(8).toString('hex');
 const base = testDatabaseUrl(process.env.TEST_DATABASE_URL);
 const url = new URL(base); url.searchParams.set('schema', schema);
@@ -22,7 +24,10 @@ const submission = {
     compliances: 'CLU', ratePerSqft: '25', uploadedBy: 'creator@example.test',
     warehouseData: { latitude: 12, longitude: 77 },
 };
-const reviewer = { email: 'reviewer@example.test' };
+const reviewer = { email: 'reviewer@example.test', capabilities: {
+    DASHBOARD: true, WAREHOUSE_VIEW_OWN: true, WAREHOUSE_VIEW_ALL: true,
+    WAREHOUSE_EDIT_OWN: true, WAREHOUSE_EDIT_ALL: true,
+} };
 let created = false;
 beforeAll(async () => {
     await root.$executeRawUnsafe(`CREATE SCHEMA "${schema}"`); created = true;
@@ -50,6 +55,36 @@ test('an unchanged save cannot overwrite a concurrent edit while retaining the o
     });
     await warehouseService.updateWarehouse(row.id, { city: submission.city }, reviewer);
     expect(await warehouseModel.findById(row.id)).toMatchObject({ city: 'Mumbai', lastEditedBy: 'other@example.test' });
+});
+
+describe.each([
+    ['status', ['Under construction', 'Ready to move']],
+    ['lockInDate', [new Date('2027-01-01T00:00:00Z'), new Date('2027-02-01T00:00:00Z')]],
+])('shared Availability database races: %s', (key, answers) => {
+    test('rejects a competing write after authorization and the original row were read', async () => {
+        const row = await warehouseModel.create(submission);
+        jest.spyOn(warehouseService, 'applyMicroMarketTags').mockImplementationOnce(async () => {
+            await warehouseModel.update(row.id, { [key]: answers[0], lastEditedBy: 'other@example.test' });
+        });
+        const editor = { ...reviewer, capabilities: { ...reviewer.capabilities, WAREHOUSE_EDIT_ALL: false } };
+        await expect(warehouseService.updateWarehouse(row.id, {
+            expectedFormValues: { ...pptFormSnapshot(row), status: null, lockInDate: null }, [key]: answers[1],
+        }, editor)).rejects.toMatchObject({ statusCode: 409, code: 'FORM_FIELDS_CHANGED' });
+        expect(await warehouseModel.findById(row.id)).toMatchObject({
+            [key]: answers[0], lastEditedBy: 'other@example.test', uploadedBy: submission.uploadedBy,
+        });
+    });
+
+    test('two simultaneous guarded writes have exactly one winner', async () => {
+        const row = await warehouseModel.create(submission);
+        const results = await Promise.allSettled(answers.map(answer => {
+            const patch = { [key]: answer };
+            return warehouseModel.update(row.id, patch, undefined, undefined, formUpdateGuard(row, patch));
+        }));
+        expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+        expect(results.find(result => result.status === 'rejected').reason).toMatchObject({ statusCode: 409 });
+        expect(answers).toContainEqual((await warehouseModel.findById(row.id))[key]);
+    });
 });
 
 test('approval rejects a submission edited after its content and editor were read', async () => {

@@ -26,7 +26,9 @@ function mount(register) {
     app.use(express.json());
     app.use(createAuditMiddleware({ log: async (entry) => { captured.push(entry); } }));
     app.use((req, _res, next) => {
-        req.user = { id: 7, email: 'ops@wareongo.com', name: 'Ops' };
+        req.user = { id: 7, email: 'ops@wareongo.com', name: 'Ops', capabilities: {
+            DASHBOARD: true, WAREHOUSE_VIEW_OWN: true, WAREHOUSE_EDIT_OWN: true,
+        } };
         next();
     });
     register(app);
