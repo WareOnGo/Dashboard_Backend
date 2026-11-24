@@ -41,6 +41,7 @@ test.each([
 test.each([
     { visibility: true }, { city: 'Pune' }, { contactNumber: '123' }, { uploadedBy: 'user@wareongo.com' },
     { warehouseData: { powerKva: '500' } }, { WarehouseData: { powerKva: '500' } },
+    { floorStrengthPerSqm: 'To be confirmed' }, { toBeConfirmed: true },
     { media: { images: [] } }, { photos: '' }, { scoutVoiceNotes: [] }, { wogVerified: true },
     { lastEditedBy: 'someone@wareongo.com' }, { unknownField: 'value' },
 ])('rejects a mixed payload before any write or schema stripping: %j', async forbidden => {

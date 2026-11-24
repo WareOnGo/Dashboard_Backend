@@ -45,6 +45,7 @@ function fieldAnswerError(field, value) {
     if (field.kind === 'count') return /^\d+$/.test(text) && Number.isSafeInteger(Number(text)) ? null : 'Enter a whole number of zero or more.';
     if (['length', 'load', 'power'].includes(field.kind)) {
         if (field.kind === 'power' && /^as\s+per\s+requirement$/i.test(text)) return null;
+        if (field.kind === 'load' && /^to\s+be\s+confirmed$/i.test(text)) return null;
         const match = /^(\d+(?:\.\d+)?|\.\d+)\s*(.*?)$/.exec(text);
         const units = { length: ['', 'feet', 'ft', 'metres', 'm'], load: ['', 'tonnes/sq m'], power: ['', 'kva', 'hp'] };
         return match && Number.isFinite(Number(match[1])) && (field.zero ? Number(match[1]) >= 0 : Number(match[1]) > 0)

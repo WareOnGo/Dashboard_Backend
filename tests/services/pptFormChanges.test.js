@@ -16,6 +16,14 @@ function setup(staged, row = completePptForm()) {
     } };
 }
 describe.each([false, true])('PPT save validation staged=%s', staged => {
+    test('persists an unconfirmed floor load and accepts a later measured answer', async () => {
+        const first = setup(staged);
+        await first.update({ floorStrengthPerSqm: 'To be confirmed' });
+        expect(first.write.mock.calls[0][1]).toMatchObject({ floorStrengthPerSqm: 'To be confirmed' });
+        const second = setup(staged, { ...completePptForm(), floorStrengthPerSqm: 'To be confirmed' });
+        await second.update({ floorStrengthPerSqm: '8 tonnes/sq m' });
+        expect(second.write.mock.calls[0][1]).toMatchObject({ floorStrengthPerSqm: '8 tonnes/sq m' });
+    });
     test.each(requiredPaths.filter(p => !['warehouseType', 'address', 'totalSpaceSqft', 'ratePerSqft'].includes(p)))('rejects clearing %s before a write', async path => {
         const { write, update } = setup(staged);
         await expect(update(patchForPath(path, null))).rejects.toHaveProperty('issues');

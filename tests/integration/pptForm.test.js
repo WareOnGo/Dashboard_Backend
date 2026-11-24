@@ -114,6 +114,24 @@ test.each([false, true])('saved washroom components and inactive handover values
     }
     await edit(row.id, { washroom_count: 'Male: 0; Female: 2' }, row);
 });
+test.each([false, true])('unconfirmed floor loads preserve newer answers and reject stale replacements (staged=%s)', async pending => {
+    const data = { ...input(), floorStrengthPerSqm: 'To be confirmed' };
+    const row = pending ? await staged(data) : await model.create(data);
+    const edit = pending ? editStaged : editMaster;
+    const read = pending ? stagedModel.findByStagedId.bind(stagedModel) : model.findById.bind(model);
+    await edit(row.id, { floorStrengthPerSqm: '6 tonnes/sq m' }, row);
+    await edit(row.id, { address: 'Address edited in stale browser', floorStrengthPerSqm: 'To be confirmed' }, row);
+    expect((await read(row.id)).floorStrengthPerSqm).toBe('6 tonnes/sq m');
+    await expect(edit(row.id, { floorStrengthPerSqm: '7 tonnes/sq m' }, row))
+        .rejects.toMatchObject({ statusCode: 409, code: 'FORM_FIELDS_CHANGED' });
+    const current = await read(row.id);
+    await expect(edit(row.id, { floorStrengthPerSqm: null }, current)).rejects.toMatchObject({ statusCode: 400 });
+    await edit(row.id, { floorStrengthPerSqm: 'To be confirmed' }, current);
+    const saved = await read(row.id);
+    expect(saved.floorStrengthPerSqm).toBe('To be confirmed');
+    await edit(row.id, { floorStrengthPerSqm: 'To be confirmed' }, current);
+    expect(await read(row.id)).toEqual(saved);
+});
 test('an old warehouse without WarehouseData can save unrelated edits and fill its missing answers', async () => {
     const row = await model.create(input());
     await db.warehouseData.deleteMany({ where: { warehouseId: row.id } });

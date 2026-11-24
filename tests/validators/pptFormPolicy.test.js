@@ -4,6 +4,20 @@ const { completePptForm, requiredPaths, patchForPath } = require('../fixtures/pp
 test('complete answers include zero counts, No, None and power as per requirement', () => {
     expect(pptFormIssues(null, completePptForm())).toEqual([]);
 });
+test('floor load can be explicitly unconfirmed, later filled, and cannot be silently cleared', () => {
+    const pending = { ...completePptForm(), floorStrengthPerSqm: 'To be confirmed' };
+    expect(pptFormIssues(null, pending)).toEqual([]);
+    expect(pptFormIssues(completePptForm(), { floorStrengthPerSqm: pending.floorStrengthPerSqm })).toEqual([]);
+    expect(pptFormIssues(pending, { floorStrengthPerSqm: '5 tonnes/sq m' })).toEqual([]);
+    expect(pptFormIssues(pending, { floorStrengthPerSqm: null })).toEqual([
+        expect.objectContaining({ path: ['floorStrengthPerSqm'], message: expect.stringContaining('cannot be cleared') }),
+    ]);
+});
+test.each(['clearHeightFt', 'warehouseData.powerKva'])('To be confirmed does not bypass numeric validation for %s', path => {
+    expect(pptFormIssues(completePptForm(), patchForPath(path, 'To be confirmed'))).toEqual([
+        expect.objectContaining({ path: path.split('.') }),
+    ]);
+});
 test.each(requiredPaths)('creation requires %s; filled edits cannot clear it', path => {
     for (const value of [undefined, null, '', ' ', 'N/A']) {
         const original = completePptForm(), patch = patchForPath(path, value);

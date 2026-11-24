@@ -30,6 +30,14 @@ const readWorkbook = async (buffer) => {
 beforeEach(() => jest.clearAllMocks());
 
 describe('Last Mile database mapping', () => {
+    it('exports an unconfirmed floor load as text in the generated workbook', async () => {
+        const workbook = await readWorkbook(await createLastMileBuffer([{ ...warehouse(), floorStrengthPerSqm: 'To be confirmed' }]));
+        const sheet = workbook.worksheets[0];
+        let floorRow;
+        sheet.eachRow(row => { if (row.getCell(1).text === 'Floor Loading (in tonnes/meters square)') floorRow = row; });
+        expect(floorRow).toBeDefined();
+        expect(floorRow.getCell(2).value).toBe('To be confirmed');
+    });
     it('maps every directly available field and preserves existing units', () => {
         expect(values(warehouse())).toMatchObject({
             '': '', 'Property Address': 'Property 1, Indore', Location: 'Property 1, Indore',

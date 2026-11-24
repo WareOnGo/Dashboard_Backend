@@ -19,6 +19,9 @@ test('V3 displays captured answers including zero, No and None rather than defau
 test.each([null, '', 'N/A'])('missing legacy washrooms %p are unconfirmed in V3', async washroom_count => {
     expect((await capture({ washroom_count })).Toilets).toBe('Unconfirmed');
 });
+test('V3 preserves an explicitly unconfirmed floor load without appending a unit', async () => {
+    expect((await capture({ floorStrengthPerSqm: 'To be confirmed' }))['Floor Load Capacity']).toBe('To be confirmed');
+});
 test('V3 still excludes insulation and stability certification; TCI remains unchanged', async () => {
     const fields = await capture();
     expect(fields).not.toHaveProperty('Insulation details');
