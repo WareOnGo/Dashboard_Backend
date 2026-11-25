@@ -288,7 +288,8 @@ test.each([
   );
 });
 
-test('an existing review keeps its assignee and comments while new approved fields join it', async () => {
+test('a manual review created after evaluation keeps its assignee and comments during QA handoff', async () => {
+  const { run, review } = await evaluated();
   const manual = await fieldReviews.create(
     {
       requestId: randomUUID(),
@@ -298,7 +299,6 @@ test('an existing review keeps its assignee and comments while new approved fiel
     },
     admin
   );
-  const { run, review } = await evaluated();
   const saved = await confirm(run, approval(review));
   expect(saved.handoff.review_id).toBe(manual.id);
   const joined = await fieldReviews.detail(manual.id, admin);
@@ -307,6 +307,59 @@ test('an existing review keeps its assignee and comments while new approved fiel
     'Existing manual note.'
   );
   expect(joined.flags.find((flag) => flag.fieldKey === power).origin).toBe('AI');
+});
+
+test('an open manual review rejects a new QA batch without changing its notes or assignee', async () => {
+  const manual = await fieldReviews.create(
+    {
+      requestId: randomUUID(),
+      warehouseId: whid,
+      assigneeId: 2,
+      fields: [{ key: 'clearHeightFt', comment: 'Keep this manual review.' }]
+    },
+    admin
+  );
+  const before = await fieldReviews.detail(manual.id, admin);
+  await expect(evaluated()).rejects.toMatchObject({ code: 'QA_WAREHOUSE_IN_PIPELINE' });
+  expect(await fieldReviews.detail(manual.id, admin)).toEqual(before);
+  expect(await db.$queryRaw`SELECT count(*)::int AS count FROM "WarehouseQaRun"`).toEqual([{ count: 0 }]);
+});
+
+test('an assigned review blocks resubmission until the employee review is closed', async () => {
+  const { run, review } = await evaluated();
+  const saved = await confirm(run, approval(review));
+  const assigned = await fieldReviews.detail(saved.handoff.review_id, employee);
+  await expect(evaluated()).rejects.toMatchObject({ code: 'QA_WAREHOUSE_IN_PIPELINE' });
+  const flag = assigned.flags.find((item) => item.fieldKey === power);
+  const submitted = await fieldReviews.respond(
+    assigned.id,
+    flag.id,
+    {
+      requestId: randomUUID(),
+      version: flag.version,
+      baselineVersion: flag.currentVersion,
+      resolution: 'CORRECTION',
+      proposedValue: '250 kVA',
+      explanation: 'Confirmed with the owner.'
+    },
+    employee
+  );
+  await expect(evaluated()).rejects.toMatchObject({ code: 'QA_WAREHOUSE_IN_PIPELINE' });
+  const awaiting = submitted.flags.find((item) => item.id === flag.id);
+  await fieldReviews.decide(
+    assigned.id,
+    flag.id,
+    {
+      requestId: randomUUID(),
+      version: awaiting.version,
+      currentVersion: awaiting.currentVersion,
+      choice: 'PROPOSED'
+    },
+    admin
+  );
+  expect((await db.warehouseFieldReview.findUnique({ where: { id: assigned.id } })).closedAt).not.toBeNull();
+  await expect(evaluated()).resolves.toHaveProperty('run');
+  expect((await repository.item(run.id, whid)).result).toEqual(saved);
 });
 
 test('failure to write the QA audit rolls back real task creation and all employee audit writes', async () => {

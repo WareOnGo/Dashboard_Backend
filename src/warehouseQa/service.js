@@ -249,7 +249,38 @@ class QaService {
     };
   }
 
-  async enqueue(repo, body, actor, rows, { forward = false, window = null, hasMore = false } = {}) {
+  async admitSubmission(repo, rows, { skipDuplicates = false } = {}) {
+    const ids = [...new Set(rows.filter((row) => !exclusion(row)).map((row) => row.warehouse_id))].sort(
+      (a, b) => a - b
+    );
+    // Every external entry point takes the same locks, in numeric order. A
+    // second request reads committed admissions after the first one finishes.
+    for (const id of ids) await repo.lock('qa-admission:' + id);
+    const active = await repo.activeItems(ids, executionHash, {
+      nativeHandoff: this.handoffMode === 'field-review'
+    });
+    if (active.length && !skipDuplicates) {
+      const labels = active.map((item) => 'WH' + item.warehouseId).join(', ');
+      fail(
+        409,
+        'QA_WAREHOUSE_IN_PIPELINE',
+        `${labels} ${active.length === 1 ? 'is' : 'are'} already in the QA/review pipeline. Open the existing review or remove ${active.length === 1 ? 'this ID' : 'these IDs'} and try again. No new batch was created.`
+      );
+    }
+    const duplicateIds = new Set(active.map((item) => item.warehouseId));
+    return {
+      rows: rows.filter((row) => !duplicateIds.has(row.warehouse_id)),
+      duplicateIds: [...duplicateIds]
+    };
+  }
+
+  async enqueue(
+    repo,
+    body,
+    actor,
+    rows,
+    { forward = false, window = null, hasMore = false, duplicateIds = [] } = {}
+  ) {
     const requestHash = hash({ body, actor });
     const metadata = {
       model: MODEL,
@@ -264,7 +295,8 @@ class QaService {
       executedBy: actor,
       warehouse_writes: 0,
       forward_window: window,
-      forward_has_more: hasMore
+      forward_has_more: hasMore,
+      duplicate_warehouse_ids: duplicateIds
     };
     await repo.insertRun(body.request_id, requestHash, actor, metadata);
     let queued = 0,
@@ -307,6 +339,7 @@ class QaService {
         return { id: prior.id, status: 'QUEUED', replayed: true };
       }
       const rows = await this.source.load(body.warehouse_ids, body.mode);
+      await this.admitSubmission(repo, rows);
       return this.enqueue(repo, body, actor, rows);
     });
     void this.worker.drain();
@@ -379,7 +412,13 @@ class QaService {
         : [];
       const last = selected.at(-1);
       const hasMore = selected.length === body.limit;
-      const run = await this.enqueue(repo, body, actor, rows, { forward: true, window, hasMore });
+      const admitted = await this.admitSubmission(repo, rows, { skipDuplicates: true });
+      const run = await this.enqueue(repo, body, actor, admitted.rows, {
+        forward: true,
+        window,
+        hasMore,
+        duplicateIds: admitted.duplicateIds
+      });
       await repo.setCursor(key, {
         initial_start: new Date(start).toISOString(),
         completed_until: hasMore ? cursor?.completed_until || null : window.end,

@@ -3,6 +3,7 @@ const request = require('supertest');
 const { randomUUID } = require('node:crypto');
 const { prisma, reset, tokenFor, active } = require('../helpers/app');
 const { createRouter } = require('../../src/routes/warehouseQa');
+const { QaError } = require('../../src/warehouseQa/common');
 const methods = [
   'config',
   'summary',
@@ -90,6 +91,15 @@ test('a valid batch passes only the authenticated actor and validated data', asy
     expect.objectContaining({ request_id: id, mode: 'BACKFILL', model: 'gpt-6.2-sol' }),
     expect.objectContaining({ email: 'user@wareongo.com', isAdmin: true })
   );
+});
+
+test('duplicate warehouse admission returns a readable conflict through the existing error contract', async () => {
+  const message = 'WH603 is already in the QA/review pipeline. No new batch was created.';
+  service.create.mockRejectedValue(new QaError(409, 'QA_WAREHOUSE_IN_PIPELINE', message));
+  const response = await auth(request(app).post(root + '/runs'))
+    .send({ request_id: randomUUID(), warehouse_ids: [603, 1065] })
+    .expect(409);
+  expect(response.body).toEqual({ success: false, error: { code: 'QA_WAREHOUSE_IN_PIPELINE', message } });
 });
 
 test('manual processing requires fresh admin access, accepts no extra input and cannot enqueue work', async () => {

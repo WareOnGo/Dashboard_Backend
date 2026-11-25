@@ -54,6 +54,12 @@ async function seedCompleted() {
   await repository.finish(item, { result: result(item.snapshot) });
   return run;
 }
+async function seedLegacyDuplicate() {
+  // Older releases admitted duplicate batches. Keep exercising their retained
+  // evidence without bypassing the new admission rule through the public API.
+  const body = batch();
+  return repository.transaction((repo) => service.enqueue(repo, body, actor, [row(1)]));
+}
 
 test('batch retries and concurrent callers enqueue exactly once', async () => {
   const body = batch([1, 2]);
@@ -63,6 +69,99 @@ test('batch retries and concurrent callers enqueue exactly once', async () => {
   await expect(service.create({ ...body, warehouse_ids: [3] }, actor)).rejects.toMatchObject({
     code: 'QA_IDEMPOTENCY_CONFLICT'
   });
+});
+
+test('a new request containing an already queued WHID rejects the whole batch without writing', async () => {
+  const first = await service.create(batch([1]), actor);
+  const body = batch([2, 1]);
+  const events = await repository.events(first.id, 1);
+  const drainCalls = idleWorker.drain.mock.calls.length;
+  await expect(service.create(body, actor)).rejects.toMatchObject({
+    status: 409,
+    code: 'QA_WAREHOUSE_IN_PIPELINE',
+    message: expect.stringContaining('WH1 is already')
+  });
+  expect(await repository.run(body.request_id)).toBeUndefined();
+  expect(await repository.items(body.request_id)).toEqual([]);
+  expect(await repository.events(first.id, 1)).toEqual(events);
+  expect(idleWorker.drain).toHaveBeenCalledTimes(drainCalls);
+});
+
+test('different request IDs with overlapping WHIDs admit only one concurrent batch', async () => {
+  const requests = [batch([2, 1]), batch([1, 2])];
+  const results = await Promise.allSettled(requests.map((body) => service.create(body, actor)));
+  expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+  expect(results.find((result) => result.status === 'rejected').reason).toMatchObject({
+    code: 'QA_WAREHOUSE_IN_PIPELINE'
+  });
+  expect(await db.$queryRaw`SELECT count(*)::int AS count FROM "WarehouseQaRun"`).toEqual([{ count: 1 }]);
+  expect(await db.$queryRaw`SELECT count(*)::int AS count FROM "WarehouseQaItem"`).toEqual([{ count: 2 }]);
+  expect(await db.$queryRaw`SELECT count(*)::int AS count FROM "WarehouseQaEvent"`).toEqual([{ count: 2 }]);
+});
+
+test.each(['BACKFILL', 'NEW_SUBMISSION', 'RECHECK'])(
+  'a new %s request cannot duplicate a reviewed warehouse or overwrite saved admin work',
+  async (mode) => {
+    const first = await seedCompleted();
+    const original = await repository.item(first.id, 1);
+    await service.mutate(
+      first.id,
+      1,
+      'decision',
+      {
+        request_id: randomUUID(),
+        expected_version: 0,
+        field_key: original.result.candidates[0].field_key,
+        decision: 'APPROVED',
+        note: 'Preserve this admin decision.'
+      },
+      actor
+    );
+    const saved = await repository.item(first.id, 1);
+    await expect(service.create({ ...batch(), mode }, actor)).rejects.toMatchObject({
+      code: 'QA_WAREHOUSE_IN_PIPELINE'
+    });
+    expect(await repository.item(first.id, 1)).toEqual(saved);
+    expect((await service.list('inbox')).warehouses).toHaveLength(1);
+  }
+);
+
+test.each(['RUNNING', 'FAILED', 'ASSIGNED_LOCAL'])(
+  '%s work blocks resubmission while the original request remains replayable',
+  async (state) => {
+    const body = batch();
+    const first = await service.create(body, actor);
+    const claimed = await repository.claim();
+    if (state !== 'RUNNING') {
+      const evaluated = result(claimed.snapshot);
+      if (state === 'ASSIGNED_LOCAL') evaluated.stage = state;
+      await repository.finish(claimed, {
+        result: evaluated,
+        error: state === 'FAILED' ? 'QA_OPENAI_HTTP_401' : null
+      });
+    }
+    await expect(service.create(batch(), actor)).rejects.toMatchObject({ code: 'QA_WAREHOUSE_IN_PIPELINE' });
+    await expect(service.create(body, actor)).resolves.toMatchObject({ id: first.id, replayed: true });
+    expect(await db.$queryRaw`SELECT count(*)::int AS count FROM "WarehouseQaItem"`).toEqual([{ count: 1 }]);
+  }
+);
+
+test.each(['DISMISSED', 'STALE', 'SUPERSEDED'])(
+  '%s history without another active item permits a new manual evaluation',
+  async (stage) => {
+    const first = await seedCompleted();
+    const saved = await repository.item(first.id, 1);
+    await repository.saveResult(first.id, 1, { ...saved.result, stage });
+    await expect(service.create(batch(), actor)).resolves.toMatchObject({ queued: 1 });
+    expect((await repository.item(first.id, 1)).result.stage).toBe(stage);
+  }
+);
+
+test('a changed execution contract can be evaluated again, but cannot admit two replacements', async () => {
+  const first = await seedCompleted();
+  await db.$executeRaw`UPDATE "WarehouseQaRun" SET metadata=jsonb_set(metadata,'{execution_hash}','"previous-engine"'::jsonb) WHERE id=${first.id}`;
+  await expect(service.create(batch(), actor)).resolves.toMatchObject({ queued: 1 });
+  await expect(service.create(batch(), actor)).rejects.toMatchObject({ code: 'QA_WAREHOUSE_IN_PIPELINE' });
 });
 
 test('manual requests resume persisted batches without a background timer or a cron token', async () => {
@@ -105,11 +204,11 @@ test('warehouse-source transactions enforce read-only access in PostgreSQL', asy
 });
 
 test.each(['older-first', 'newer-first', 'concurrent'])(
-  'replacement reviews keep one untouched evaluation active with %s completion',
+  'legacy duplicate reviews keep one untouched evaluation active with %s completion',
   async (order) => {
     const first = await service.create(batch(), actor);
     const older = await repository.claim();
-    const second = await service.create(batch(), actor);
+    const second = await seedLegacyDuplicate();
     const newer = await repository.claim();
     const worker = new QaWorker({
       repository,
@@ -152,10 +251,10 @@ test.each(['older-first', 'newer-first', 'concurrent'])(
   }
 );
 
-test('a failed replacement leaves the older review available, and a successful one preserves saved admin work', async () => {
+test('legacy replacement failures retain the older review and saved admin work survives later completion', async () => {
   const first = await seedCompleted();
   const original = await repository.item(first.id, 1);
-  const failedRun = await service.create(batch(), actor);
+  const failedRun = await seedLegacyDuplicate();
   const failedWorker = new QaWorker({
     repository,
     inference: {
@@ -179,7 +278,7 @@ test('a failed replacement leaves the older review available, and a successful o
     },
     actor
   );
-  const replacement = await service.create(batch(), actor);
+  const replacement = await seedLegacyDuplicate();
   const worker = new QaWorker({
     repository,
     inference: { evaluate: async (snapshot) => ({ result: result(snapshot) }) }
@@ -563,6 +662,33 @@ test('forward scan persists tuple pagination and deduplicates overlapping window
   expect((await repository.inbox()).length).toBe(0); // no worker has evaluated yet
   const counts = await db.$queryRaw`SELECT count(*)::int AS count FROM "WarehouseQaItem"`;
   expect(counts[0].count).toBe(3);
+});
+
+test('forward scans skip open manual QA without stalling the scan cursor', async () => {
+  await service.create(batch([1]), actor);
+  source.mode = 'warehouse';
+  source.scan.mockResolvedValue([1, 2].map((id) => ({ id, createdAt: new Date('2026-11-23T12:00:00Z') })));
+  const run = await service.cron({ request_id: randomUUID(), since: '2026-11-23T00:00:00Z', limit: 100 });
+  expect(run).toMatchObject({ warehouse_count: 1, duplicate_warehouse_ids: [1], has_more: false });
+  expect((await repository.items(run.id)).map((item) => item.warehouseId)).toEqual([2]);
+  expect(
+    (await repository.cursor('forward:' + require('../../src/warehouseQa/engine').profileHash)).window
+  ).toBeNull();
+});
+
+test('manual and forward submissions share admission locks', async () => {
+  source.mode = 'warehouse';
+  source.scan.mockResolvedValue([{ id: 1, createdAt: new Date('2026-11-23T12:00:00Z') }]);
+  const outcomes = await Promise.allSettled([
+    service.create(batch(), actor),
+    service.cron({ request_id: randomUUID(), since: '2026-11-23T00:00:00Z', limit: 100 })
+  ]);
+  for (const outcome of outcomes) {
+    if (outcome.status === 'rejected') expect(outcome.reason.code).toBe('QA_WAREHOUSE_IN_PIPELINE');
+  }
+  expect(
+    await db.$queryRaw`SELECT count(*)::int AS count FROM "WarehouseQaItem" WHERE "warehouseId"=1`
+  ).toEqual([{ count: 1 }]);
 });
 
 test('retrying a failed evaluation preserves its audit trail and increments review versions', async () => {

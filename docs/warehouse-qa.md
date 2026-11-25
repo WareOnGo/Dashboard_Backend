@@ -64,7 +64,7 @@ All responses use the existing `{ success, data }` / `{ success: false, error: {
 | `GET /health` | Admin-only queue health and configuration readiness |
 | `GET /summary` | Pending warehouse and column counts across batches |
 | `GET /runs` | Pending inbox and recent batches |
-| `POST /runs` | Queue 1–100 unique WHIDs; return immediately with a run ID |
+| `POST /runs` | Queue 1–100 unique WHIDs; reject the whole batch with 409 if an eligible WHID already has open QA/review work |
 | `GET /runs/:id/status` | Durable queued/running/completed/failed/skipped counts |
 | `POST /runs/:id/process` | Admin-only bounded processing of existing queued work, with body `{}`; returns run status and never creates another batch |
 | `GET /runs/:id/warehouses` | Paginated reviews; `inbox` includes pending reviews across runs |
@@ -87,6 +87,16 @@ Admin batch body:
 ```
 
 `mode` can also be `NEW_SUBMISSION` or `RECHECK`. Recheck formatting uses explicit provenance where available; unknown provenance retains the SOP's legacy leniency. No magnitude-based kVA inference or bare highway-unit inference is permitted.
+
+### Repeat warehouse submissions
+
+Duplicate IDs inside one request are rejected with 400. Replaying the same request ID and unchanged body returns the existing run. A new request ID does not bypass warehouse admission: queued/running evaluations, pending AI decisions under the current execution contract, staged assignments and open native employee/manual reviews block another batch for that WHID. The API returns `409 QA_WAREHOUSE_IN_PIPELINE` with the conflicting IDs; the entire manual batch is rejected before creating a run, audit event or model request. The dashboard keeps the entered IDs and displays the explanation so the admin can open the existing review or remove the conflicting IDs.
+
+Admission takes transaction-scoped locks in WHID order and reads committed state after acquiring them. Concurrent requests, including requests to different backend instances, therefore cannot both admit the same warehouse. Failed evaluations are retried through their existing review. A client-supplied `RECHECK` mode does not bypass the guard. Source-freshness rechecks created by the backend remain part of the existing workflow and preserve its history.
+
+Closed/dismissed reviews permit a later evaluation. A changed SOP/engine execution contract also permits replacement of an old, non-actionable AI evaluation; queued work and open employee assignments still block admission. Historical results and saved notes are preserved. Existing legacy duplicates retain their original supersession/history behavior; this guard does not bulk-delete or reject historical reviews.
+
+Future forward scans share the admission locks and skip open WHIDs, recording `duplicate_warehouse_ids` in run metadata while continuing the scan cursor. They do not create duplicate review cards or stall an entire scan page. Scheduling remains disabled for the current manual release.
 
 Review writes require a new `request_id` and the currently displayed `expected_version`. The same request ID replays a lost response; reusing it for a different operation returns 409. A successful mutation and its WHID-scoped audit event commit together. Stale edits return 409. The event includes the authenticated actor and `runBy` metadata.
 

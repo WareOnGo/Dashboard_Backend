@@ -16,6 +16,7 @@ class QaRepository {
   }
   transaction(fn) {
     return this.db.$transaction((tx) => fn(new QaRepository(tx, { maxConcurrency: this.maxConcurrency })), {
+      isolationLevel: 'ReadCommitted',
       timeout: 20000
     });
   }
@@ -36,6 +37,35 @@ class QaRepository {
   }
   async items(runId) {
     return this.db.$queryRaw`SELECT * FROM "WarehouseQaItem" WHERE "runId"=${runId} ORDER BY "warehouseId"`;
+  }
+  async activeItems(warehouseIds, executionHash, { nativeHandoff = false } = {}) {
+    if (!warehouseIds.length) return [];
+    // An assigned QA item remains history after its ordinary employee review
+    // closes. Missing handoff records fail closed rather than admitting a copy.
+    const assignmentOpen = nativeHandoff
+      ? Prisma.sql`NOT EXISTS (SELECT 1 FROM "WarehouseFieldReview" review
+          WHERE review.id=i.result->'handoff'->>'review_id' AND review."closedAt" IS NOT NULL)`
+      : Prisma.sql`TRUE`;
+    const queued = await this.db.$queryRaw(Prisma.sql`SELECT DISTINCT ON (i."warehouseId")
+      i."warehouseId",i."runId",i.status,i.result->>'stage' AS stage
+      FROM "WarehouseQaItem" i JOIN "WarehouseQaRun" r ON r.id=i."runId"
+      WHERE i."warehouseId" IN (${Prisma.join(warehouseIds)}) AND (
+        i.status IN ('QUEUED','RUNNING') OR
+        (${eligibleSnapshot(Prisma.sql`i.snapshot`)} AND (
+          (i.result->>'stage'='AI_REVIEW' AND r.metadata->>'execution_hash'=${executionHash}) OR
+          i.result->>'stage'='ASSIGNED_LOCAL' OR
+          (i.result->>'stage'='ASSIGNED' AND ${assignmentOpen})
+        ))
+      ) ORDER BY i."warehouseId",i."createdAt" DESC,i."runId" DESC`);
+    const reviews = nativeHandoff
+      ? await this.db.warehouseFieldReview.findMany({
+          where: { warehouseId: { in: warehouseIds }, closedAt: null },
+          select: { warehouseId: true }
+        })
+      : [];
+    return [...new Map([...reviews, ...queued].map((item) => [item.warehouseId, item])).values()].sort(
+      (a, b) => a.warehouseId - b.warehouseId
+    );
   }
   async inbox() {
     // Keep unresolved adjudications visible across batches. The run ID remains
