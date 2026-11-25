@@ -7,6 +7,68 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// Versioned QA snapshots are separate from source warehouse data. Install with
+// migrateWarehouseQa.js so RLS and backend-only access are verified together.
+model WarehouseQaRun {
+  id          String   @id
+  requestHash String
+  actor       Json
+  metadata    Json
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+  items       WarehouseQaItem[]
+  events      WarehouseQaEvent[]
+}
+
+model WarehouseQaItem {
+  runId       String
+  warehouseId Int
+  status      String
+  snapshot    Json
+  result      Json?
+  artifact    Json?
+  attempts    Int      @default(0)
+  availableAt DateTime @default(now()) @db.Timestamptz(6)
+  leaseToken  String?
+  leaseUntil  DateTime? @db.Timestamptz(6)
+  dedupKey    String?  @unique
+  error       String?
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime @default(now()) @db.Timestamptz(6)
+  run         WarehouseQaRun @relation(fields: [runId], references: [id])
+
+  @@id([runId, warehouseId])
+  @@index([status, availableAt, leaseUntil], map: "WarehouseQaItem_queue")
+  @@index([warehouseId, createdAt(sort: Desc)], map: "WarehouseQaItem_warehouse")
+}
+
+model WarehouseQaEvent {
+  id          String   @id
+  runId       String
+  warehouseId Int?
+  actor       Json
+  action      String
+  requestId   String?  @unique
+  requestHash String?
+  payload     Json
+  response    Json?
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+  run         WarehouseQaRun @relation(fields: [runId], references: [id])
+
+  @@index([runId, warehouseId, createdAt(sort: Desc)], map: "WarehouseQaEvent_item")
+}
+
+model WarehouseQaCache {
+  key       String   @id
+  data      Json
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+}
+
+model WarehouseQaCursor {
+  id        String   @id
+  data      Json
+  updatedAt DateTime @default(now()) @db.Timestamptz(6)
+}
+
 model MicroMarket {
   id            String   @id @default(uuid())
   name          String   @default("")

@@ -241,11 +241,17 @@ class FieldReviewService {
       take: 100
     });
     const legacyKeys = new Set(legacy.flatMap(e => (e.metadata?.changes || []).map(c => handoverKeys.includes(c.field) ? 'handover' : availabilityKeys.includes(c.field) ? 'availabilityReview' : c.field === 'photos' ? 'media' : c.field)));
+    const creations = await tx.warehouseFieldReviewEvent.findMany({
+      where: { reviewId: id, action: 'CREATED' }, select: { payload: true }
+    });
+    const origins = new Map(creations.flatMap(event => (event.payload?.fieldSnapshots || [])
+      .filter(snapshot => snapshot.qa).map(snapshot => [snapshot.flagId, { origin: snapshot.origin, qa: snapshot.qa }])));
     const flags = review.flags.map(flag => {
       const currentVersion = versionMap.get(flag.fieldKey) || 0;
       const currentValue = warehouse ? getValue(warehouse, flag.fieldKey) : null;
       return scrubFlag({
         ...flag,
+        ...(origins.get(flag.id) || {}),
         field: {
           ...byKey[flag.fieldKey],
           label: flag.labelSnapshot || byKey[flag.fieldKey].label
@@ -350,182 +356,194 @@ class FieldReviewService {
     });
   }
   setup(warehouseId, user) {
-    return this.db.$transaction(async tx => {
-      const actor = await this.actor(tx, user, true),
-        warehouse = await this.warehouse(tx, warehouseId);
-      if (!warehouse) fail(404, 'WAREHOUSE_NOT_FOUND', 'Warehouse not found.');
-      assertWarehouseAccess(actor, warehouse);
-      const people = await this.roster(tx, warehouse);
-      const uploader = await this.uploader(tx, warehouse.uploadedBy, people);
-      const current = await tx.warehouseFieldReview.findFirst({
-        where: {
-          warehouseId,
-          closedAt: null
-        },
-        include: {
-          flags: {
-            where: {
-              status: active
-            }
-          }
-        }
-      });
-      const versions = await tx.warehouseFieldVersion.findMany({
-        where: {
-          warehouseId
-        }
-      });
-      const editors = await lastEditors(tx, warehouseId);
-      return {
-        fields: fields.map(f => ({
-          ...f,
-          value: f.sensitive ? maskValue(getValue(warehouse, f.key)) : getValue(warehouse, f.key),
-          version: versions.find(v => v.fieldKey === f.key)?.version || 0,
-          lastEditedBy: fieldEditor(editors, warehouse, f.key)
-        })),
-        assignees: people.map(publicPerson),
-        defaultAssigneeId: current?.assigneeId ?? uploader.assigneeId,
-        uploader: warehouse.uploadedBy,
-        existingReviewId: current?.id || null,
-        activeFields: current?.flags.map(f => ({
-          id: f.id,
-          key: f.fieldKey,
-          reviewId: current.id
-        })) || [],
-        actorId: actor.id
-      };
-    }, {
+    return this.db.$transaction(tx => this.setupTx(tx, warehouseId, user), {
       isolationLevel: 'RepeatableRead'
     });
   }
-  async mutate(warehouseId, user, body, action, run, target = {}) {
+  async setupTx(tx, warehouseId, user) {
+    const actor = await this.actor(tx, user, true),
+      warehouse = await this.warehouse(tx, warehouseId);
+    if (!warehouse) fail(404, 'WAREHOUSE_NOT_FOUND', 'Warehouse not found.');
+    assertWarehouseAccess(actor, warehouse);
+    const people = await this.roster(tx, warehouse);
+    const uploader = await this.uploader(tx, warehouse.uploadedBy, people);
+    const current = await tx.warehouseFieldReview.findFirst({
+      where: {
+        warehouseId,
+        closedAt: null
+      },
+      include: {
+        flags: {
+          where: {
+            status: active
+          }
+        }
+      }
+    });
+    const versions = await tx.warehouseFieldVersion.findMany({
+      where: {
+        warehouseId
+      }
+    });
+    const editors = await lastEditors(tx, warehouseId);
+    return {
+      fields: fields.map(f => ({
+        ...f,
+        value: f.sensitive ? maskValue(getValue(warehouse, f.key)) : getValue(warehouse, f.key),
+        version: versions.find(v => v.fieldKey === f.key)?.version || 0,
+        lastEditedBy: fieldEditor(editors, warehouse, f.key)
+      })),
+      assignees: people.map(publicPerson),
+      defaultAssigneeId: current?.assigneeId ?? uploader.assigneeId,
+      uploader: warehouse.uploadedBy,
+      existingReviewId: current?.id || null,
+      activeFields: current?.flags.map(f => ({
+        id: f.id,
+        key: f.fieldKey,
+        reviewId: current.id
+      })) || [],
+      actorId: actor.id
+    };
+  }
+  mutate(warehouseId, user, body, action, run, target = {}) {
+    return this.db.$transaction(tx => this.mutateTx(tx, warehouseId, user, body, action, run, target), {
+      timeout: 15000
+    });
+  }
+  async mutateTx(tx, warehouseId, user, body, action, run, target = {}) {
     const hash = createHash('sha256').update(JSON.stringify({
       warehouseId,
       action,
       body,
       target
     })).digest('hex');
-    return this.db.$transaction(async tx => {
-      const warehouse = await this.warehouse(tx, warehouseId, true);
-      const actor = await this.actor(tx, user);
-      assertWarehouseAccess(actor, warehouse);
-      const previous = await tx.warehouseFieldReviewEvent.findUnique({
-        where: {
-          requestId: body.requestId
-        }
-      });
-      if (previous) {
-        if (previous.actorEmail !== actor.email || previous.requestHash !== hash) fail(409, 'REQUEST_REUSED', 'This request ID was already used for a different action.');
-        return this.detailTx(tx, previous.reviewId, actor);
+    const warehouse = await this.warehouse(tx, warehouseId, true);
+    const actor = await this.actor(tx, user);
+    assertWarehouseAccess(actor, warehouse);
+    const previous = await tx.warehouseFieldReviewEvent.findUnique({
+      where: {
+        requestId: body.requestId
       }
-      const result = await run(tx, actor, warehouse);
-      await tx.warehouseFieldReviewEvent.create({
-        data: {
-          reviewId: result.reviewId,
-          flagId: result.flagId,
-          action,
-          actorEmail: actor.email,
-          actorName: actor.name,
-          payload: J(result.payload || {}),
-          requestId: body.requestId,
-          requestHash: hash
-        }
-      });
-      const open = await tx.warehouseFieldFlag.count({
-        where: {
-          reviewId: result.reviewId,
-          status: active
-        }
-      });
-      await tx.warehouseFieldReview.update({
-        where: {
-          id: result.reviewId
-        },
-        data: {
-          closedAt: open ? null : new Date(),
-          version: {
-            increment: 1
-          }
-        }
-      });
-      // Prepare the response before committing. A failed snapshot read must
-      // roll back the write instead of reporting an error after it succeeded.
-      return this.detailTx(tx, result.reviewId, actor);
-    }, {
-      timeout: 15000
     });
+    if (previous) {
+      if (previous.actorEmail !== actor.email || previous.requestHash !== hash) fail(409, 'REQUEST_REUSED', 'This request ID was already used for a different action.');
+      return this.detailTx(tx, previous.reviewId, actor);
+    }
+    const result = await run(tx, actor, warehouse);
+    await tx.warehouseFieldReviewEvent.create({
+      data: {
+        reviewId: result.reviewId,
+        flagId: result.flagId,
+        action,
+        actorEmail: actor.email,
+        actorName: actor.name,
+        payload: J(result.payload || {}),
+        requestId: body.requestId,
+        requestHash: hash
+      }
+    });
+    const open = await tx.warehouseFieldFlag.count({
+      where: {
+        reviewId: result.reviewId,
+        status: active
+      }
+    });
+    await tx.warehouseFieldReview.update({
+      where: {
+        id: result.reviewId
+      },
+      data: {
+        closedAt: open ? null : new Date(),
+        version: {
+          increment: 1
+        }
+      }
+    });
+    // Prepare the response before committing. A failed snapshot read must
+    // roll back the write instead of reporting an error after it succeeded.
+    return this.detailTx(tx, result.reviewId, actor);
   }
   create(body, user) {
-    return this.mutate(body.warehouseId, user, body, 'CREATED', async (tx, actor, warehouse) => {
-      if (!actor.isReviewer) fail(403, 'FIELD_REVIEW_FORBIDDEN', 'Only reviewers can flag warehouse fields.');
-      const keys = body.fields.map(f => f.key);
-      if (new Set(keys).size !== keys.length) fail(400, 'DUPLICATE_FIELDS', 'Select each field once.');
-      for (const key of keys) {
-        if (!Object.hasOwn(byKey, key)) fail(400, 'INVALID_FIELD', 'Unknown review field.');
+    return this.mutate(body.warehouseId, user, body, 'CREATED',
+      (tx, actor, warehouse) => this.createFieldsTx(tx, actor, warehouse, body));
+  }
+  // Internal composition point: QA owns the outer transaction and evidence check.
+  // The HTTP create contract cannot supply provenance or a transaction client.
+  createInTransaction(tx, body, user, provenance) {
+    return this.mutateTx(tx, body.warehouseId, user, body, 'CREATED',
+      (client, actor, warehouse) => this.createFieldsTx(client, actor, warehouse, body, provenance));
+  }
+  async createFieldsTx(tx, actor, warehouse, body, provenance = null) {
+    if (!actor.isReviewer) fail(403, 'FIELD_REVIEW_FORBIDDEN', 'Only reviewers can flag warehouse fields.');
+    const keys = body.fields.map(f => f.key);
+    if (new Set(keys).size !== keys.length) fail(400, 'DUPLICATE_FIELDS', 'Select each field once.');
+    for (const key of keys) {
+      if (!Object.hasOwn(byKey, key)) fail(400, 'INVALID_FIELD', 'Unknown review field.');
+    }
+    const duplicate = await tx.warehouseFieldFlag.findFirst({
+      where: {
+        warehouseId: warehouse.id,
+        fieldKey: {
+          in: keys
+        },
+        status: active
       }
-      const duplicate = await tx.warehouseFieldFlag.findFirst({
-        where: {
-          warehouseId: warehouse.id,
-          fieldKey: {
-            in: keys
-          },
-          status: active
-        }
-      });
-      if (duplicate) fail(409, 'ALREADY_FLAGGED', 'A selected field is already under review. Open the existing review.');
-      let review = await tx.warehouseFieldReview.findFirst({
-        where: {
-          warehouseId: warehouse.id,
-          closedAt: null
-        }
-      });
-      const roster = await this.roster(tx, warehouse);
-      const uploader = await this.uploader(tx, warehouse.uploadedBy, roster);
-      const assigneeId = body.assigneeId ?? review?.assigneeId ?? uploader.assigneeId;
-      if (!roster.some(r => r.id === assigneeId)) fail(400, 'ASSIGNEE_REQUIRED', 'Select an active employee who can view this warehouse.');
-      if (review && review.assigneeId !== assigneeId) fail(409, 'ASSIGNEE_CHANGED', 'This warehouse already has an assignee. Reassign its active review before adding fields.');
-      if (!review) review = await tx.warehouseFieldReview.create({
-        data: {
-          warehouseId: warehouse.id,
-          assigneeId,
-          uploaderId: uploader.id,
-          createdBy: actor.email
-        }
-      });
-      // Freeze values, revisions and editor identities under the same warehouse
-      // locks as flag creation. Preview data from the browser is never trusted.
-      const editors = await lastEditors(tx, warehouse.id, keys);
-      const versions = await tx.warehouseFieldVersion.findMany({ where: { warehouseId: warehouse.id, fieldKey: { in: keys } } });
-      const versionMap = new Map(versions.map(row => [row.fieldKey, row.version]));
-      const fieldSnapshots = body.fields.map(f => ({
-        flagId: randomUUID(),
-        fieldKey: f.key,
-        labelSnapshot: byKey[f.key].label,
-        originalValue: getValue(warehouse, f.key),
-        originalVersion: versionMap.get(f.key) || 0,
-        originalLastEditedBy: fieldEditor(editors, warehouse, f.key)
-      }));
-      await tx.warehouseFieldFlag.createMany({
-        data: fieldSnapshots.map((snapshot, index) => ({
-          id: snapshot.flagId,
-          reviewId: review.id,
-          warehouseId: warehouse.id,
-          fieldKey: snapshot.fieldKey,
-          labelSnapshot: snapshot.labelSnapshot,
-          comment: body.fields[index].comment,
-          createdBy: actor.email,
-          originalValue: J(snapshot.originalValue)
-        }))
-      });
-      return {
-        reviewId: review.id,
-        payload: {
-          fields: keys,
-          fieldSnapshots,
-          assigneeId
-        }
-      };
     });
+    if (duplicate) fail(409, 'ALREADY_FLAGGED', 'A selected field is already under review. Open the existing review.');
+    let review = await tx.warehouseFieldReview.findFirst({
+      where: {
+        warehouseId: warehouse.id,
+        closedAt: null
+      }
+    });
+    const roster = await this.roster(tx, warehouse);
+    const uploader = await this.uploader(tx, warehouse.uploadedBy, roster);
+    const assigneeId = body.assigneeId ?? review?.assigneeId ?? uploader.assigneeId;
+    if (!roster.some(r => r.id === assigneeId)) fail(400, 'ASSIGNEE_REQUIRED', 'Select an active employee who can view this warehouse.');
+    if (review && review.assigneeId !== assigneeId) fail(409, 'ASSIGNEE_CHANGED', 'This warehouse already has an assignee. Reassign its active review before adding fields.');
+    if (!review) review = await tx.warehouseFieldReview.create({
+      data: {
+        warehouseId: warehouse.id,
+        assigneeId,
+        uploaderId: uploader.id,
+        createdBy: actor.email
+      }
+    });
+    // Freeze values, revisions and editor identities under the same warehouse
+    // locks as flag creation. Preview data from the browser is never trusted.
+    const editors = await lastEditors(tx, warehouse.id, keys);
+    const versions = await tx.warehouseFieldVersion.findMany({ where: { warehouseId: warehouse.id, fieldKey: { in: keys } } });
+    const versionMap = new Map(versions.map(row => [row.fieldKey, row.version]));
+    const fieldSnapshots = body.fields.map(f => ({
+      flagId: randomUUID(),
+      fieldKey: f.key,
+      labelSnapshot: byKey[f.key].label,
+      originalValue: getValue(warehouse, f.key),
+      originalVersion: versionMap.get(f.key) || 0,
+      originalLastEditedBy: fieldEditor(editors, warehouse, f.key),
+      ...(provenance ? { origin: provenance.sources[f.key], qa: provenance.evaluation } : {})
+    }));
+    await tx.warehouseFieldFlag.createMany({
+      data: fieldSnapshots.map((snapshot, index) => ({
+        id: snapshot.flagId,
+        reviewId: review.id,
+        warehouseId: warehouse.id,
+        fieldKey: snapshot.fieldKey,
+        labelSnapshot: snapshot.labelSnapshot,
+        comment: body.fields[index].comment,
+        createdBy: actor.email,
+        originalValue: J(snapshot.originalValue)
+      }))
+    });
+    return {
+      reviewId: review.id,
+      payload: {
+        fields: keys,
+        fieldSnapshots,
+        assigneeId,
+        ...(provenance ? { qa: provenance.evaluation } : {})
+      }
+    };
   }
   async withFlag(reviewId, flagId, user, body, action, run) {
     const parent = await this.db.warehouseFieldReview.findUnique({

@@ -1,0 +1,491 @@
+[
+  {
+    "key": "listing_type",
+    "label": "Listing Type",
+    "section": "Owner Details",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "warehouseOwnerType",
+    "label": "Warehouse Owner Type",
+    "section": "Owner Details",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "isBroker",
+    "label": "Is Broker",
+    "section": "Owner Details",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "is_builder",
+    "label": "Is Builder",
+    "section": "Owner Details",
+    "sensitive": false,
+    "type": "boolean"
+  },
+  {
+    "key": "owner_warmnth",
+    "label": "Owner Warmth",
+    "section": "Owner Details",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "owner_of_multiple_sites",
+    "label": "Owner of Multiple Sites",
+    "section": "Owner Details",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "availabilityReview",
+    "label": "Availability & last reviewed",
+    "section": "Availability",
+    "sensitive": false,
+    "type": "availabilityReview"
+  },
+  {
+    "key": "handover",
+    "label": "Handover",
+    "section": "Availability",
+    "sensitive": false,
+    "type": "handover"
+  },
+  {
+    "key": "lockInDate",
+    "label": "Lock-in Date",
+    "section": "Availability",
+    "sensitive": false,
+    "type": "date"
+  },
+  {
+    "key": "status",
+    "label": "Status",
+    "section": "Availability",
+    "sensitive": false,
+    "type": "select",
+    "options": [
+      "Under construction",
+      "Build to suit",
+      "Ready to move"
+    ]
+  },
+  {
+    "key": "city",
+    "label": "City",
+    "section": "Location Details",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "state",
+    "label": "State",
+    "section": "Location Details",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "postalCode",
+    "label": "Postal Code",
+    "section": "Location Details",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "zone",
+    "label": "Zone",
+    "section": "Location Details",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "nearest_transport",
+    "label": "Nearest Bus Transport",
+    "section": "Location Details",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "distance_from_highway",
+    "label": "Distance from Highway",
+    "section": "Location Details",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "warehouseData.approachRoadWidth",
+    "label": "Approach Road Width",
+    "section": "Location Details",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "warehouseData.landType",
+    "label": "Land Type",
+    "section": "Location Details",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "warehouseData.pollutionZone",
+    "label": "Pollution Zone",
+    "section": "Location Details",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "warehouseType",
+    "label": "Warehouse Type",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "totalFloors",
+    "label": "Total Number of Floors",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "liftAccess",
+    "label": "Lift Access",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "boolean"
+  },
+  {
+    "key": "passengerLiftCount",
+    "label": "Number of Passenger Lifts",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "serviceLiftCount",
+    "label": "Number of Service Lifts",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "liftLoadCapacity",
+    "label": "Lift Load Capacity",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "totalSpaceSqft",
+    "label": "Offered Area (sq ft)",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "integerList",
+    "aliases": [
+      "Offered Area per Floor (sq ft)"
+    ]
+  },
+  {
+    "key": "chargeableArea",
+    "label": "Chargeable Area (sq ft)",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "number"
+  },
+  {
+    "key": "land_parcel_size",
+    "label": "Land Parcel Size",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "builtup_area",
+    "label": "Built-up Area",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "carpet_area",
+    "label": "Carpet Area",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "warehouseData.dimensions",
+    "label": "Dimensions",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "clearHeightFt",
+    "label": "Clear Height",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "centreHeight",
+    "label": "Centre Height",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "plinthHeightFt",
+    "label": "Plinth Height",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "numberOfDocks",
+    "label": "Number of Docks",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "dockDimension",
+    "label": "Dock Dimension",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "dockApronLengthFt",
+    "label": "Dock Apron Length",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "dockPlatformType",
+    "label": "Dock Platform Type",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "gateSizeFt",
+    "label": "Compound Gate Width",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "setbackArea",
+    "label": "Setback Area",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "ccRoads",
+    "label": "Paved Roads inside Warehouse?",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "wallAndSecurityRoom",
+    "label": "Security Features",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "canopyType",
+    "label": "Canopy Type",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "otherDockingSpecs",
+    "label": "Other Docking Specs",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "textarea"
+  },
+  {
+    "key": "flooringType",
+    "label": "Flooring Type",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "floorStrengthPerSqm",
+    "label": "Floor Strength",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "ventilationType",
+    "label": "Ventilation Type",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "ventilationAirChangesPerDay",
+    "label": "Ventilation Air Changes/Day",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "insulationPresent",
+    "label": "Insulation Present",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "insulationType",
+    "label": "Insulation Type",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "lightingDetails",
+    "label": "Lighting",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "washroom_count",
+    "label": "Washroom Count",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "warehouseData.parkingDockingSpace",
+    "label": "Parking Space Availability",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "textarea"
+  },
+  {
+    "key": "warehouseData.powerKva",
+    "label": "Power",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "waterSupply",
+    "label": "Water Supply",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "select",
+    "options": [
+      "NONE",
+      "BOREWELL",
+      "PIPELINE",
+      "TANKER",
+      "OTHERS"
+    ]
+  },
+  {
+    "key": "suitableFor",
+    "label": "Suitable For",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "multiSelect",
+    "options": [
+      "PHARMA",
+      "FMCG",
+      "FNB",
+      "RETAIL",
+      "ECOMMERCE",
+      "LOGISTICS",
+      "TRANSSHIPMENT_COURIER",
+      "FACTORY_INDUSTRIAL",
+      "KITCHEN",
+      "DARK_STORE"
+    ]
+  },
+  {
+    "key": "otherSpecifications",
+    "label": "Other Specifications",
+    "section": "Warehouse Technical Specifications",
+    "sensitive": false,
+    "type": "textarea"
+  },
+  {
+    "key": "compliances",
+    "label": "Compliances",
+    "section": "Compliances",
+    "sensitive": false,
+    "type": "textarea"
+  },
+  {
+    "key": "fire_exits",
+    "label": "Fire Exits",
+    "section": "Compliances",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "warehouseData.fireNocAvailable",
+    "label": "Fire NOC Available",
+    "section": "Compliances",
+    "sensitive": false,
+    "type": "boolean"
+  },
+  {
+    "key": "warehouseData.fireSafetyMeasures",
+    "label": "Fire Safety Measures",
+    "section": "Compliances",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "fire_compliance_cert_type",
+    "label": "Fire Compliance Certification Type",
+    "section": "Compliances",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "warehouseData.vaastuCompliance",
+    "label": "Vaastu Compliance",
+    "section": "Compliances",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "ratePerSqft",
+    "label": "Rate per sq ft",
+    "section": "Commercials",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "negotiated_rent",
+    "label": "Negotiated Rent",
+    "section": "Commercials",
+    "sensitive": false,
+    "type": "text"
+  },
+  {
+    "key": "cam",
+    "label": "CAM",
+    "section": "Commercials",
+    "sensitive": false,
+    "type": "text"
+  }
+]

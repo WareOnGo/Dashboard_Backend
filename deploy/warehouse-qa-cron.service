@@ -1,0 +1,21 @@
+[Unit]
+Description=Warehouse QA hourly scan and queue drain
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=wareongo
+Group=wareongo
+WorkingDirectory=/opt/wareongo/backend
+EnvironmentFile=/etc/wareongo/warehouse-qa-cron.env
+StateDirectory=warehouse-qa
+RuntimeDirectory=warehouse-qa
+Environment=AI_QA_CRON_STATE_FILE=/var/lib/warehouse-qa/checkpoint.json
+ExecStart=/usr/bin/flock -n /run/warehouse-qa/cron.lock /usr/bin/node scripts/runWarehouseQaCron.js
+TimeoutStartSec=57min
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+UMask=0077

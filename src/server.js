@@ -2,7 +2,9 @@
 // or connecting to a database as an import side effect.
 const app = require('./app');
 const database = require('./utils/database');
+const warehouseQa = require('./warehouseQa/runtime');
 const PORT = process.env.PORT || 3001;
+let shuttingDown = false;
 
 // --- Database Connection ---
 
@@ -26,9 +28,15 @@ database.connect().catch(error => {
  * @returns {Promise<void>}
  */
 const gracefulShutdown = async (signal) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     console.log(`\n${signal} received. Shutting down gracefully...`);
 
     try {
+        const requestsDrained = new Promise(resolve => server.close(resolve));
+        await Promise.all([requestsDrained, warehouseQa.stopWorkers()]);
+        // HTTP transactions must finish before the optional QA pool is closed.
+        await warehouseQa.stop();
         // Close database connections
         await database.disconnect();
         console.log('Database connections closed.');
@@ -76,7 +84,8 @@ process.on('unhandledRejection', (reason, promise) => {
  *
  * @type {http.Server}
  */
-const server = app.listen(PORT, () => {
+const server = app.listen(PORT, process.env.HOST || '0.0.0.0', () => {
+    warehouseQa.start(() => require('./container').resolve('warehouseQaService'));
     console.log(`🚀 Warehouse API Server started successfully!`);
     console.log(`📍 Server listening on http://localhost:${PORT}`);
     console.log(`🏗️  Architecture: MVC Pattern`);

@@ -1,0 +1,10 @@
+[Unit]
+Description=Run warehouse QA every hour
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+Unit=warehouse-qa-cron.service
+
+[Install]
+WantedBy=timers.target

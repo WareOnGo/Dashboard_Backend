@@ -135,6 +135,9 @@ app.use('/api/auth', authRoutes);
  */
 app.use('/api/warehouses', require('./routes/warehouse'));
 app.use('/api/field-reviews', require('./routes/fieldReviews').createRouter(container.resolve('fieldReviewService')));
+app.use('/api/ai-qa', require('./routes/warehouseQa').createRouter({
+    getService: () => container.resolve('warehouseQaService')
+}));
 
 /**
  * Staging / validation layer routes (admin-only)
