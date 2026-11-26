@@ -1410,6 +1410,122 @@ test('dashboard filters, counts and suggestions cover only the assigned queue ac
   ]);
 });
 
+describe('admin queue filter', () => {
+  beforeEach(async () => {
+    await db.verifiedNumber.update({ where: { id: 3 }, data: { reviewerAccess: true } });
+  });
+
+  test('matches current flaggers, actual closers, and historical actors only in All', async () => {
+    let review = await create(['ratePerSqft']);
+    const list = (email, view = 'all') => service.list(admin, {
+      view, reviewerEmail: email
+    });
+    expect((await list(other.email)).pagination.total).toBe(0);
+    expect((await list(admin.email.toUpperCase(), 'employee')).data.map(r => r.id)).toEqual([review.id]);
+    review = await submit(review);
+    expect((await list(admin.email, 'verify')).data.map(r => r.id)).toEqual([review.id]);
+    expect((await list(employee.email)).data).toEqual([]);
+
+    review = await service.decide(review.id, review.flags[0].id, decision(review.flags[0]), other);
+    expect((await list(other.email, 'previous')).counts).toMatchObject({ previous: 1, current: 0 });
+    expect((await list(admin.email, 'previous')).data).toEqual([]);
+    expect((await list(admin.email)).data.map(r => r.id)).toEqual([review.id]);
+    review = await service.reopen(review.id, review.flags[0].id, { requestId: randomUUID(), version: review.flags[0].version }, admin);
+    expect(review.flags[0].decidedBy).toBeNull();
+    expect((await list(other.email, 'employee')).data).toEqual([]);
+    expect((await list(other.email)).data.map(r => r.id)).toEqual([review.id]);
+    expect((await list(admin.email, 'employee')).data.map(r => r.id)).toEqual([review.id]);
+    expect((await list(other.email, 'previous')).data).toEqual([]);
+
+    // Adding fields to someone else's review also counts as reviewer activity.
+    await db.verifiedNumber.update({ where: { id: 2 }, data: { reviewerAccess: true } });
+    expect((await list(employee.email)).data).toEqual([]);
+    review = await service.create({ requestId: randomUUID(), warehouseId: 4821,
+      fields: [{ key: 'totalSpaceSqft', comment: 'Confirm the area too.' }] }, employee);
+    expect(review.createdBy).toBe(admin.email);
+    expect((await list(employee.email, 'employee')).data.map(r => r.id)).toEqual([review.id]);
+  });
+
+  test('correlates the creator with the field in the selected stage and supports legacy flags', async () => {
+    let review = await create(['ratePerSqft']);
+    review = await submit(review);
+    review = await service.create({ requestId: randomUUID(), warehouseId: 4821,
+      fields: [{ key: 'totalSpaceSqft', comment: 'Check the area.' }] }, other);
+    const list = email => service.list(admin, { view: 'verify', reviewerEmail: email });
+    expect((await list(admin.email)).pagination.total).toBe(1);
+    expect((await list(other.email)).pagination.total).toBe(0);
+    expect((await list(other.email)).counts).toMatchObject({ verify: 0, current: 1, all: 1 });
+    // Fields created before per-field attribution use the original review creator.
+    await db.warehouseFieldFlag.update({ where: { id: review.flags.find(f => f.fieldKey === 'ratePerSqft').id }, data: { createdBy: null } });
+    expect((await list(admin.email)).pagination.total).toBe(1);
+    expect((await list(other.email)).pagination.total).toBe(0);
+  });
+
+  test('closed reviews use the cancelling reviewer, not the original flagger', async () => {
+    const review = await create(['ratePerSqft']);
+    await service.cancel(review.id, review.flags[0].id, { requestId: randomUUID(), version: review.flags[0].version, reason: 'Raised in error.' }, other);
+    expect((await service.list(admin, { view: 'previous', reviewerEmail: other.email })).pagination.total).toBe(1);
+    expect((await service.list(admin, { view: 'previous', reviewerEmail: admin.email })).pagination.total).toBe(0);
+  });
+
+  test('filters before pagination and counts, combines warehouse and assignee filters, and retains historical people', async () => {
+    await create(['ratePerSqft']);
+    const template = await live();
+    for (const [id, actor, city, assigneeId] of [
+      [4822, other, 'Ahmedabad', 2], [4823, other, 'Bhiwandi', 2], [4824, admin, 'Ahmedabad', 3]
+    ]) {
+      await db.warehouse.create({ data: { ...template, id, city } });
+      await service.create({ requestId: randomUUID(), warehouseId: id, assigneeId,
+        fields: [{ key: 'ratePerSqft', comment: 'Confirm rent.' }] }, actor);
+    }
+    // The audit identity must remain available even if the reviewer leaves.
+    await db.verifiedNumber.update({ where: { id: 3 }, data: { is_active: false } });
+    const query = { view: 'employee', reviewerEmail: other.email, limit: 1 };
+    const first = await service.list(admin, query);
+    const second = await service.list(admin, { ...query, page: 2 });
+    expect(first.pagination).toMatchObject({ total: 2, totalPages: 2 });
+    expect(first.counts).toEqual({ current: 2, previous: 0, verify: 0, employee: 2, all: 2 });
+    expect(new Set([...first.data, ...second.data].map(r => r.warehouseId))).toEqual(new Set([4822, 4823]));
+    expect(first.reviewers).toBeUndefined();
+    const people = await service.reviewers(admin);
+    expect(people).toEqual([{ email: admin.email, name: 'Admin' }, { email: other.email, name: 'Other Employee' }]);
+    const filtered = await service.list(admin, { ...query, city: 'Ahmedabad', assigneeId: 2 });
+    expect(filtered.data.map(r => r.warehouseId)).toEqual([4822]);
+    expect(filtered.counts.all).toBe(1);
+    expect(await service.reviewers(admin, { assigneeId: 2 })).toEqual(people);
+    const empty = await service.list(admin, { ...query, search: '4821' });
+    expect(empty.pagination.total).toBe(0);
+    expect((await service.list(admin, { ...query, assigneeId: 3 })).data).toEqual([]);
+    expect(await service.reviewers(admin, { assigneeId: 3 })).toEqual([{ email: admin.email, name: 'Admin' }]);
+  });
+
+  test('scopes actor suggestions to accessible reviews and hides the filters from employees', async () => {
+    await create(['ratePerSqft']);
+    await db.warehouse.create({ data: { ...await live(), id: 4822, uploadedBy: other.email } });
+    const own = await service.create({ requestId: randomUUID(), warehouseId: 4822, assigneeId: 3,
+      fields: [{ key: 'ratePerSqft', comment: 'Check my listing.' }] }, other);
+    await db.verifiedNumber.update({ where: { id: 3 }, data: { viewAllWarehouseEntries: false, editAllWarehouseEntries: false } });
+    const scoped = await service.list(other, { view: 'all' });
+    expect(await service.reviewers(other)).toEqual([{ email: other.email, name: 'Other Employee' }]);
+    expect(scoped.data.map(r => r.id)).toEqual([own.id]);
+    const excluded = await service.list(other, { view: 'all', reviewerEmail: admin.email });
+    expect(excluded.data).toEqual([]);
+    expect(excluded.counts.all).toBe(0);
+    expect((await service.list(employee)).reviewers).toBeUndefined();
+    await expect(service.list(employee, { reviewerEmail: admin.email })).rejects.toMatchObject({ status: 403 });
+    await expect(service.reviewers(employee)).rejects.toMatchObject({ status: 403 });
+    await db.verifiedNumber.update({ where: { id: 3 }, data: { reviewerAccess: false } });
+    await expect(service.reviewers(other)).rejects.toMatchObject({ status: 403 });
+  });
+
+  test('deduplicates historical identities case-insensitively and uses their latest name', async () => {
+    const review = await create(['ratePerSqft']);
+    await db.warehouseFieldReviewEvent.create({ data: { reviewId: review.id, action: 'REASSIGNED',
+      actorEmail: admin.email.toUpperCase(), actorName: 'Updated name', payload: {}, createdAt: new Date(Date.now() + 1000) } });
+    expect(await service.reviewers(admin)).toEqual([{ email: admin.email, name: 'Updated name' }]);
+  });
+});
+
 test('warehouse view permissions also constrain assigned review detail, history, summaries and queue counts', async () => {
   const review = await create();
   await db.verifiedNumber.update({ where: { id: 2 }, data: { viewAllWarehouseEntries: false, editAllWarehouseEntries: false } });

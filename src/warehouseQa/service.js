@@ -102,8 +102,8 @@ class QaService {
     ];
   }
 
-  async summary() {
-    const stats = await this.repository.reviewStats();
+  async summary(filters = {}) {
+    const stats = await this.repository.reviewStats(filters);
     return {
       run_id: 'inbox',
       pending_warehouses: stats.warehouses,
@@ -166,6 +166,12 @@ class QaService {
       return this.status(id);
     }
     return current;
+  }
+
+  async reviewers(id) {
+    if (id !== 'inbox' && !(await this.repository.run(id)))
+      fail(404, 'QA_RUN_NOT_FOUND', 'QA run not found.');
+    return this.repository.reviewers({ runId: id });
   }
 
   async list(id, query = {}) {

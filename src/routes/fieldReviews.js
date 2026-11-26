@@ -23,7 +23,8 @@ const query = WarehouseValidator.warehouseQuerySchema.omit({
   view: z.enum(['current', 'previous', 'verify', 'employee', 'all']).default('current'),
   page: number.default(1),
   limit: number.max(100).default(12),
-  assigneeId: number.optional()
+  assigneeId: number.optional(),
+  reviewerEmail: z.string().trim().email().max(254).optional()
 });
 function createRouter(service, auth = authMiddleware) {
   const router = express.Router();
@@ -67,6 +68,8 @@ function createRouter(service, auth = authMiddleware) {
     }
   };
   router.get('/setup/:warehouseId', auth.requireAccess(CAPS.REVIEW, { fresh: true }), route(r => service.setup(number.parse(r.params.warehouseId), r.user)));
+  router.get('/reviewers', auth.requireAccess(CAPS.REVIEW, { fresh: true }), route(r => service.reviewers(r.user,
+    z.object({ assigneeId: number.optional() }).strict().parse(r.query))));
   router.get('/summaries', route(r => {
     const ids = z.string().regex(/^\d+(,\d+)*$/).parse(r.query.ids).split(',').map(Number);
     if (ids.length > 100 || ids.some(n => !Number.isSafeInteger(n) || n <= 0 || n > 2147483647)) throw new ReviewError(400, 'INVALID_IDS', 'Supply at most 100 valid warehouse IDs.');

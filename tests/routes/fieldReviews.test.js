@@ -16,7 +16,7 @@ const {
 const {
   ReviewError
 } = require('../../src/fieldReview/service');
-const methods = ['setup', 'list', 'detail', 'create', 'respond', 'decide', 'returnForChanges', 'reopen', 'cancel', 'reassign', 'history', 'reveal', 'summaries', 'events', 'upload'];
+const methods = ['setup', 'list', 'reviewers', 'detail', 'create', 'respond', 'decide', 'returnForChanges', 'reopen', 'cancel', 'reassign', 'history', 'reveal', 'summaries', 'events', 'upload'];
 const service = Object.fromEntries(methods.map(name => [name, jest.fn().mockResolvedValue({})]));
 const app = express();
 app.use(express.json());
@@ -66,9 +66,31 @@ test('queue filters use the dashboard vocabulary and bounded pagination', async 
     visibility: 'visible', fireNoc: 'available', landType: 'CLU'
   });
 });
+test('queue accepts reviewer identity alongside stage and assignee filters', async () => {
+  prisma.verifiedNumber.findFirst.mockResolvedValue(active({ adminAccess: true }));
+  await auth(request(app).get(root)).query({
+    view: 'all', assigneeId: '2', reviewerEmail: '  admin@wareongo.com  '
+  }).expect(200);
+  expect(service.list).toHaveBeenCalledWith(expect.any(Object), {
+    view: 'all', page: 1, limit: 12, assigneeId: 2, reviewerEmail: 'admin@wareongo.com'
+  });
+});
+test('admin suggestions require fresh reviewer access and accept only an optional assignee scope', async () => {
+  await request(app).get(root + '/reviewers').expect(401);
+  await auth(request(app).get(root + '/reviewers')).expect(403);
+  prisma.verifiedNumber.findFirst.mockResolvedValue(active({ reviewerAccess: true }));
+  await auth(request(app).get(root + '/reviewers')).query({ assigneeId: '2' }).expect(200);
+  expect(service.reviewers).toHaveBeenCalledWith(expect.any(Object), { assigneeId: 2 });
+  await auth(request(app).get(root + '/reviewers')).query({ assigneeId: '-1' }).expect(400);
+  await auth(request(app).get(root + '/reviewers')).query({ reviewerEmail: 'a@wareongo.com' }).expect(400);
+  prisma.verifiedNumber.findFirst.mockResolvedValue(active({ reviewerAccess: false }));
+  await auth(request(app).get(root + '/reviewers')).expect(403);
+  expect(service.reviewers).toHaveBeenCalledTimes(1);
+});
 test.each([
   { minArea: '-1' }, { maxRate: 'not a number' }, { limit: '101' },
   { visibility: 'all' }, { fireNoc: 'Yes' },
+  { reviewerEmail: 'not an email' }, { reviewerEmail: ['a@wareongo.com', 'b@wareongo.com'] },
   { search: Array.from({ length: 501 }, (_, i) => i + 1).join(',') }
 ])('invalid queue filters cannot reach the service: %j', async query => {
   await auth(request(app).get(root)).query(query).expect(400);

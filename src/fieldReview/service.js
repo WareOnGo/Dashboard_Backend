@@ -54,6 +54,7 @@ const preserveInactiveHandover = (value, current) => value.handoverType === 'VAR
 const active = {
   in: ['NEEDS_RESPONSE', 'AWAITING_ADMIN', 'CHANGES_REQUESTED']
 };
+const REVIEW_ACTIONS = ['CREATED', 'VERIFIED', 'RETURNED', 'REOPENED', 'CANCELLED', 'REASSIGNED'];
 const rosterSelect = {
   id: true,
   name: true,
@@ -1062,16 +1063,41 @@ class FieldReviewService {
       isolationLevel: 'RepeatableRead'
     });
   }
+  reviewers(user, { assigneeId } = {}) {
+    return this.db.$transaction(async tx => {
+      const actor = await this.actor(tx, user, true);
+      const access = warehouseScope(actor);
+      // Deduplicate in PostgreSQL. Only identities leave the database, even
+      // when a reviewer has thousands of historical actions.
+      return tx.$queryRaw(Prisma.sql`
+        SELECT email, name FROM (
+          SELECT DISTINCT ON (lower(btrim(e."actorEmail")))
+            lower(btrim(e."actorEmail")) AS email,
+            coalesce(nullif(e."actorName", ''), e."actorEmail") AS name
+          FROM "WarehouseFieldReviewEvent" e
+          JOIN "WarehouseFieldReview" r ON r.id = e."reviewId"
+          WHERE e.action IN (${Prisma.join(REVIEW_ACTIONS)}) AND btrim(e."actorEmail") <> ''
+            ${assigneeId ? Prisma.sql`AND r."assigneeId" = ${assigneeId}` : Prisma.empty}
+            ${access.uploadedBy ? Prisma.sql`AND EXISTS (
+              SELECT 1 FROM "Warehouse" w WHERE w.id = r."warehouseId"
+                AND lower(w."uploadedBy") = ${actor.email.trim().toLowerCase()}
+            )` : Prisma.empty}
+          ORDER BY lower(btrim(e."actorEmail")), e."createdAt" DESC, e.id DESC
+        ) people ORDER BY name, email`);
+    }, { isolationLevel: 'RepeatableRead' });
+  }
   list(user, {
     view = 'current',
     page = 1,
     limit = 12,
     assigneeId,
+    reviewerEmail,
     ...filters
   } = {}) {
     return this.db.$transaction(async tx => {
       const actor = await this.actor(tx, user);
       if (!actor.isReviewer && !['current', 'previous'].includes(view)) fail(403, 'FIELD_REVIEW_FORBIDDEN', 'This queue is reviewer-only.');
+      if (!actor.isReviewer && reviewerEmail) fail(403, 'FIELD_REVIEW_FORBIDDEN', 'The admin filter is reviewer-only.');
       const scope = actor.isReviewer ? assigneeId ? {
         assigneeId
       } : {} : {
@@ -1144,21 +1170,30 @@ class FieldReviewService {
         all: {}
       };
       if (!states[view]) fail(400, 'INVALID_QUEUE', 'Unknown queue segment.');
+      const reviewerWhere = stage => {
+        if (!reviewerEmail) return {};
+        const email = insensitiveExact(reviewerEmail);
+        if (stage === 'all') return { events: { some: { action: { in: REVIEW_ACTIONS }, actorEmail: email } } };
+        if (stage === 'previous') return { flags: { some: { status: { in: ['VERIFIED', 'CANCELLED'] }, decidedBy: email } } };
+        const status = stage === 'verify' ? 'AWAITING_ADMIN'
+          : stage === 'employee' ? { in: ['NEEDS_RESPONSE', 'CHANGES_REQUESTED'] } : active;
+        // A review can contain fields from several flaggers. Match the relevant
+        // active field, not a closed field or an unrelated historical action.
+        return { OR: [
+          { flags: { some: { status, createdBy: email } } },
+          { createdBy: email, flags: { some: { status, createdBy: null } } }
+        ] };
+      };
+      const whereFor = stage => ({ AND: [base, states[stage], reviewerWhere(stage)] });
       const counts = {};
       for (const key of actor.isReviewer ? Object.keys(states) : ['current', 'previous']) {
         counts[key] = (await tx.warehouseFieldReview.groupBy({
           by: ['warehouseId'],
-          where: {
-            ...base,
-            ...states[key]
-          }
+          where: whereFor(key)
         })).length;
       }
       const reviews = await tx.warehouseFieldReview.findMany({
-        where: {
-          ...base,
-          ...states[view]
-        },
+        where: whereFor(view),
         distinct: ['warehouseId'],
         orderBy: {
           createdAt: 'desc'

@@ -13,6 +13,7 @@ const methods = [
   'status',
   'processRun',
   'list',
+  'reviewers',
   'detail',
   'export',
   'mutate'
@@ -49,6 +50,23 @@ test('previous evaluations use the same authenticated paginated queue contract',
     .query({ stage: 'SUPERSEDED' })
     .expect(200);
   expect(service.list).toHaveBeenCalledWith('inbox', { page: 1, limit: 20, stage: 'SUPERSEDED', search: '' });
+});
+test('AI queue and summary validate the admin identity and suggestions require fresh admin access', async () => {
+  const reviewerEmail = 'other@wareongo.com';
+  await auth(request(app).get(root + '/runs/inbox/warehouses')).query({ stage: 'DISMISSED', reviewerEmail: ` ${reviewerEmail} ` }).expect(200);
+  expect(service.list).toHaveBeenCalledWith('inbox', { page: 1, limit: 20, stage: 'DISMISSED', search: '', reviewerEmail });
+  await auth(request(app).get(root + '/summary')).query({ reviewerEmail }).expect(200);
+  expect(service.summary).toHaveBeenCalledWith({ reviewerEmail });
+  for (const path of ['/runs/inbox/warehouses', '/summary']) {
+    await auth(request(app).get(root + path)).query({ reviewerEmail: 'invalid' }).expect(400);
+    await auth(request(app).get(root + path)).query({ reviewerEmail: [reviewerEmail, 'b@wareongo.com'] }).expect(400);
+  }
+  await request(app).get(root + '/runs/inbox/reviewers').expect(401);
+  await auth(request(app).get(root + '/runs/inbox/reviewers')).expect(200);
+  expect(service.reviewers).toHaveBeenCalledWith('inbox');
+  prisma.verifiedNumber.findFirst.mockResolvedValue(active({ adminAccess: false, reviewerAccess: true }));
+  await auth(request(app).get(root + '/runs/inbox/reviewers')).expect(403);
+  expect(service.reviewers).toHaveBeenCalledTimes(1);
 });
 test('cron token only authorizes the cron endpoint', async () => {
   const body = { request_id: randomUUID(), warehouse_ids: [1] };

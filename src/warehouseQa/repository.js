@@ -3,6 +3,7 @@ const { Prisma } = require('@prisma/client');
 const { fail } = require('./common');
 const { scope, allowedTypes, trimCharacters } = require('./eligibility');
 const json = JSON.stringify;
+const REVIEW_ACTIONS = ['DECISION', 'ADMIN_FLAGS', 'REMOVE_ADMIN_FLAG', 'REVIEW_CLEAN', 'CONFIRM'];
 function eligibleSnapshot(snapshot = Prisma.sql`snapshot`) {
   const text = (field) =>
     Prisma.sql`coalesce(lower(btrim(${snapshot}->'fields'->>${field}, ${trimCharacters})), '')`;
@@ -73,11 +74,22 @@ class QaRepository {
     return this.db.$queryRaw`SELECT * FROM "WarehouseQaItem" WHERE result IS NOT NULL
       AND ${eligibleSnapshot()} AND result->>'stage'='AI_REVIEW' ORDER BY "createdAt" DESC,"warehouseId" LIMIT 1000`;
   }
-  reviewWhere({ runId = 'inbox', stage = 'AI_REVIEW', search = '', scopeOnly = true } = {}) {
+  reviewWhere({ runId = 'inbox', stage = 'AI_REVIEW', search = '', scopeOnly = true, reviewerEmail } = {}) {
     const conditions = [Prisma.sql`result IS NOT NULL`];
     if (scopeOnly) conditions.push(eligibleSnapshot());
     if (runId !== 'inbox') conditions.push(Prisma.sql`"runId"=${runId}`);
     if (stage !== 'all') conditions.push(Prisma.sql`result->>'stage'=${stage}`);
+    if (reviewerEmail) {
+      const confirmedStage = ['ASSIGNED_LOCAL', 'ASSIGNED', 'DISMISSED', 'STALE'].includes(stage);
+      conditions.push(Prisma.sql`EXISTS (
+        SELECT 1 FROM "WarehouseQaEvent" e
+        WHERE e."runId" = "WarehouseQaItem"."runId" AND e."warehouseId" = "WarehouseQaItem"."warehouseId"
+          AND lower(btrim(e.actor->>'email')) = ${reviewerEmail.trim().toLowerCase()}
+          AND ${confirmedStage
+            ? Prisma.sql`e.action = 'CONFIRM' AND e.response->>'stage' = ${stage}`
+            : Prisma.sql`e.action IN (${Prisma.join(REVIEW_ACTIONS)})`}
+      )`);
+    }
     if (search) {
       const pattern = '%' + search.replace(/[\\%_]/g, '\\$&') + '%';
       conditions.push(
@@ -85,6 +97,20 @@ class QaRepository {
       );
     }
     return Prisma.join(conditions, ' AND ');
+  }
+  async reviewers({ runId = 'inbox' } = {}) {
+    return this.db.$queryRaw(Prisma.sql`
+      SELECT email, name FROM (
+        SELECT DISTINCT ON (lower(btrim(e.actor->>'email')))
+          lower(btrim(e.actor->>'email')) AS email,
+          coalesce(nullif(e.actor->>'name', ''), e.actor->>'email') AS name
+        FROM "WarehouseQaEvent" e
+        JOIN "WarehouseQaItem" i ON i."runId" = e."runId" AND i."warehouseId" = e."warehouseId"
+        WHERE i.result IS NOT NULL AND ${eligibleSnapshot(Prisma.sql`i.snapshot`)}
+          AND e.action IN (${Prisma.join(REVIEW_ACTIONS)}) AND coalesce(btrim(e.actor->>'email'), '') <> ''
+          ${runId !== 'inbox' ? Prisma.sql`AND i."runId" = ${runId}` : Prisma.empty}
+        ORDER BY lower(btrim(e.actor->>'email')), e."createdAt" DESC, e.id DESC
+      ) people ORDER BY name, email`);
   }
   async reviewPage(options = {}) {
     const { page = 1, limit = 20 } = options;

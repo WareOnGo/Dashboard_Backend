@@ -61,6 +61,71 @@ async function seedLegacyDuplicate() {
   return repository.transaction((repo) => service.enqueue(repo, body, actor, [row(1)]));
 }
 
+test.each(['ASSIGNED_LOCAL', 'DISMISSED'])('admin filtering attributes %s to its confirmer, independently of earlier reviewers', async (stage) => {
+  const run = await seedCompleted();
+  expect(await service.reviewers('inbox')).toEqual([]); // Enqueuing a run is not a review action.
+  let review = await service.detail(run.id, 1);
+  review = await service.mutate(run.id, 1, 'decision', {
+    request_id: randomUUID(), expected_version: review.version,
+    field_key: review.candidates[0].field_key, decision: 'APPROVED', note: 'Check with the owner.'
+  }, actor);
+  const closer = { id: 'closer', name: actor.name, email: 'closer@wareongo.com' };
+  await service.mutate(run.id, 1, 'confirm', {
+    request_id: randomUUID(), expected_version: review.version, assignee_id: 1,
+    review: { machine: review.candidates.map(candidate => ({ field_key: candidate.field_key,
+      decision: stage === 'DISMISSED' ? 'REJECTED' : 'APPROVED',
+      reason: stage === 'DISMISSED' ? 'INCORRECT' : null, note: 'Owner confirmed the values.' })), human: [] }
+  }, closer);
+  const selected = await service.list('inbox', { stage, reviewerEmail: closer.email.toUpperCase() });
+  expect(selected.total).toBe(1);
+  expect(selected.warehouses.map(item => item.warehouse_id)).toEqual([1]);
+  expect((await service.list('inbox', { stage, reviewerEmail: actor.email })).total).toBe(0);
+  expect((await service.list('inbox', { stage: 'all', reviewerEmail: actor.email })).total).toBe(1);
+  expect(await service.reviewers(run.id)).toEqual([
+    { email: closer.email, name: actor.name }, { email: actor.email, name: actor.name }
+  ]);
+});
+
+test('admin filtering precedes AI pagination and metrics and cannot match events from another batch', async () => {
+  const run = await service.create(batch([1, 2, 3]), actor);
+  for (let n = 0; n < 3; n++) {
+    const item = await repository.claim();
+    await repository.finish(item, { result: result(item.snapshot) });
+  }
+  for (const id of [1, 2]) {
+    const review = await service.detail(run.id, id);
+    await service.mutate(run.id, id, 'decision', { request_id: randomUUID(), expected_version: 0,
+      field_key: review.candidates[0].field_key, decision: 'APPROVED', note: 'Check with owner.' }, actor);
+  }
+  const duplicate = await seedLegacyDuplicate();
+  const item = await repository.claim();
+  await repository.finish(item, { result: result(item.snapshot) });
+  const query = { reviewerEmail: actor.email, limit: 1 };
+  const first = await service.list('inbox', query);
+  const second = await service.list('inbox', { ...query, page: 2 });
+  expect(first.total).toBe(2);
+  expect(new Set([...first.warehouses, ...second.warehouses].map(item => item.warehouse_id))).toEqual(new Set([1, 2]));
+  expect(first.metrics.accepted).toBe(2);
+  expect(first.metrics.machine_columns).toBe(result(row()).candidates.length * 2);
+  expect(await service.summary({ reviewerEmail: actor.email })).toMatchObject({ pending_warehouses: 2, pending_reviews: 2 });
+  expect((await service.list('inbox', { ...query, search: '2' })).total).toBe(1);
+  expect((await service.list(duplicate.id, query)).total).toBe(0);
+  expect(await service.reviewers(duplicate.id)).toEqual([]);
+  expect(await service.reviewers(run.id)).toEqual([{ email: actor.email, name: actor.name }]);
+  await expect(service.reviewers('missing-run')).rejects.toMatchObject({ status: 404 });
+});
+
+test('AI admin suggestions exclude out-of-scope records and deduplicate case variants in SQL', async () => {
+  const run = await seedCompleted();
+  for (const email of [actor.email, actor.email.toUpperCase()]) {
+    await repository.event({ runId: run.id, warehouseId: 1, actor: { ...actor, email }, action: 'REVIEW_CLEAN', payload: {} });
+  }
+  expect(await service.reviewers('inbox')).toEqual([{ email: actor.email, name: actor.name }]);
+  await db.$executeRaw`UPDATE "WarehouseQaItem" SET snapshot=jsonb_set(snapshot,'{fields,warehouseType}','"Land"'::jsonb) WHERE "runId"=${run.id}`;
+  expect(await service.reviewers('inbox')).toEqual([]);
+  expect((await service.list('inbox', { reviewerEmail: actor.email })).total).toBe(0);
+});
+
 test('batch retries and concurrent callers enqueue exactly once', async () => {
   const body = batch([1, 2]);
   await Promise.all([service.create(body, actor), service.create(body, actor)]);

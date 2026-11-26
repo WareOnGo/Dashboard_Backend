@@ -16,7 +16,8 @@ const listQuery = z
     stage: z
       .enum(['AI_REVIEW', 'ASSIGNED_LOCAL', 'ASSIGNED', 'STALE', 'DISMISSED', 'SUPERSEDED', 'all'])
       .default('AI_REVIEW'),
-    search: z.string().trim().max(100).default('')
+    search: z.string().trim().max(100).default(''),
+    reviewerEmail: z.string().trim().email().max(254).optional()
   })
   .strict();
 
@@ -111,7 +112,7 @@ function createRouter({
   );
   router.get(
     '/summary',
-    route((service) => service.summary())
+    route((service, req) => service.summary(listQuery.pick({ reviewerEmail: true }).parse(req.query)))
   );
   router.get(
     '/runs',
@@ -131,6 +132,10 @@ function createRouter({
       z.object({}).strict().parse(req.body);
       return service.processRun(runId.parse(req.params.id));
     })
+  );
+  router.get(
+    '/runs/:id/reviewers',
+    route((service, req) => service.reviewers(runId.parse(req.params.id)))
   );
   router.get(
     '/runs/:id/warehouses',

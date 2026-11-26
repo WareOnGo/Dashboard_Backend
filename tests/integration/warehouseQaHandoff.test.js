@@ -132,6 +132,8 @@ test('approved AI/human flags enter the ordinary employee workflow atomically an
   });
   const saved = await confirm(run, body);
   expect(saved.stage).toBe('ASSIGNED');
+  expect((await service.list('inbox', { stage: 'ASSIGNED', reviewerEmail: admin.email })).total).toBe(1);
+  expect((await service.list('inbox', { stage: 'ASSIGNED', reviewerEmail: employee.email })).total).toBe(0);
   expect(saved.handoff.review_id).toBeTruthy();
   const assigned = await fieldReviews.detail(saved.handoff.review_id, employee);
   expect(assigned.canRespond).toBe(true);
@@ -213,6 +215,8 @@ test.each(['power value', 'power revision', 'cross-field dependency', 'RCC', 'BT
     expect(await db.warehouseFieldReview.count()).toBe(0);
     const saved = await repository.item(run.id, whid);
     expect(saved.result.stage).toBe('STALE');
+    expect((await service.list('inbox', { stage: 'STALE', reviewerEmail: admin.email })).total).toBe(1);
+    expect((await service.list('inbox', { stage: 'STALE', reviewerEmail: employee.email })).total).toBe(0);
     expect(saved.result.handoff).toBeNull();
     expect(saved.snapshot).toEqual(expect.objectContaining({ snapshot_id: review.snapshot_id }));
     const events = (await repository.events(run.id, whid)).filter((event) => event.action === 'CONFIRM');
